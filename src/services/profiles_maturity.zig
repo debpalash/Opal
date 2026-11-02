@@ -29,7 +29,7 @@ const Entry = struct {
 };
 
 var mutex: sync.Mutex = .{};
-var cache: [CACHE_LEN]Entry = [_]Entry{.{}} ** CACHE_LEN;
+var cache: [CACHE_LEN]Entry = @as([CACHE_LEN]Entry, @splat(.{}));
 var next_slot: usize = 0;
 
 fn findLocked(id: i32, tv: bool) ?*Entry {

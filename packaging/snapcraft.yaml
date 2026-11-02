@@ -84,7 +84,7 @@ parts:
   opal:
     # plugin: nil because there is no zig plugin in snapcraft and zig is not
     # in the Ubuntu 24.04 archive (and even if it were, we need exactly
-    # 0.16.x). We download the official toolchain tarball ourselves.
+    # 0.17.x). We download the official toolchain tarball ourselves.
     plugin: nil
     source: .
     build-packages:
@@ -112,12 +112,12 @@ parts:
     override-build: |
       set -eu
 
-      # ── 1. Fetch the Zig 0.16.0 toolchain ────────────────────────────────
+      # ── 1. Fetch the Zig 0.17.0 toolchain ────────────────────────────────
       # VERIFY: exact tarball name/URL at https://ziglang.org/download/
       # (naming convention is arch-first since 0.14.1: zig-<arch>-<os>-<ver>).
       # Consider pinning the tarball's sha256 here once verified — snap
       # builds should not trust the network blindly.
-      ZIG_VERSION="0.16.0"
+      ZIG_VERSION="0.17.0"
       ZIG_DIST="zig-x86_64-linux-${ZIG_VERSION}"
       if [ ! -d "${ZIG_DIST}" ]; then
         curl -fL -o zig.tar.xz "https://ziglang.org/download/${ZIG_VERSION}/${ZIG_DIST}.tar.xz"
@@ -137,7 +137,7 @@ parts:
       # VERIFY: the PKGBUILD notes LLD can emit a cosmetic "error: warning(link)"
       # while still producing a binary; if that bites here, mirror its
       # `|| true` + explicit artifact check.
-      zig build -Doptimize=ReleaseFast -fsys=sdl2 -Dcpu=x86_64_v2
+      zig build -Doptimize=fast -fsys=sdl2 -Dcpu=x86_64_v2
       test -f zig-out/bin/opal
 
       # ── 4. Version from git ───────────────────────────────────────────────

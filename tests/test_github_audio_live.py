@@ -77,7 +77,13 @@ class GitHubAudioLiveTest(unittest.TestCase):
             else:
                 self.assertIn('01%20Fixture%20music.mp3',row['url'])
     def test_universal_independent_audio_and_radio_browse(self):
-        before=self.api('music')
+        # GET /music starts the selected catalog's initial load. Seed and
+        # settle an owned provider before taking the no-mutation snapshot.
+        self.api('music/source?id=5','POST')
+        self.api('music/search?q=Fixture','POST')
+        before=self.until('music',lambda d:not d['loading'])
+        self.assertEqual(len(before['songs']),1)
+        self.assertEqual(before['songs'][0]['url'],self.fixture.base+'/silence.wav')
         self.api('unified_search?q=Fixture')
         data=self.until('unified_search',lambda d:not d['loading'])
         rows={row['provider']:row for row in data['results'] if row.get('provider') in ('openverse','netlabels','somafm')}

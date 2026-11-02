@@ -60,8 +60,8 @@ pub fn donateButton() void {
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .min_size_content = .{ .w = 0, .h = 24 },
         .background = true,
-        .color_fill = if (player_overlay) theme.transparent else theme.colors.bg_elevated,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .color_fill = @import("color_compat.zig").wrap(if (player_overlay) theme.transparent else theme.colors.bg_elevated),
+        .corners = dvui.CornerRect.all(theme.radius.md),
         .padding = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 2 },
         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         // Cross-axis only: the nav is a horizontal box, so gravity_x here would
@@ -72,17 +72,17 @@ pub fn donateButton() void {
 
     var hovered = false;
     const activated = dvui.clicked(row.data(), .{ .hovered = &hovered });
-    if (hovered) row.data().options.color_fill = if (player_overlay) theme.playerGlass(42) else theme.colors.bg_hover;
+    if (hovered) row.data().options.color_fill = @import("color_compat.zig").wrap(if (player_overlay) theme.playerGlass(42) else theme.colors.bg_hover);
     row.drawBackground();
 
     dvui.icon(@src(), "Donate", icons.tvg.lucide.heart, .{}, .{
-        .color_text = theme.colors.danger,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.danger),
         .min_size_content = theme.iconSize(.sm),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
     });
     _ = dvui.label(@src(), "Donate", .{}, .{
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .gravity_y = 0.5,
     });
 
@@ -153,8 +153,8 @@ pub fn renderHeader() void {
     var header_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_app,
-        .color_border = theme.colors.border_subtle,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
         .min_size_content = .{ .w = 0, .h = 38 },
@@ -266,7 +266,7 @@ pub fn renderHeader() void {
             const hw_val = if (state.app.hwdec_enabled) "auto" else "no";
             for (state.app.players.items) |p| {
                 var hw_cmd: [64]u8 = undefined;
-                if (std.fmt.bufPrintZ(&hw_cmd, "set hwdec {s}", .{hw_val})) |cmd| {
+                if (@import("opal-fmt").bufPrintZ(&hw_cmd, "set hwdec {s}", .{hw_val})) |cmd| {
                     _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
                 } else |_| {}
             }
@@ -407,7 +407,7 @@ fn renderTitleLabel() void {
     if (clean_len == 0) {
         _ = dvui.label(@src(), "Opal", .{}, .{
             .gravity_y = 0.5,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         });
         return;
     }
@@ -425,7 +425,7 @@ fn renderTitleLabel() void {
         (std.fmt.bufPrint(&name_buf, "{s}", .{display_slice}) catch display_slice);
     _ = dvui.label(@src(), "{s}", .{written}, .{
         .gravity_y = 0.5,
-        .color_text = if (media_loaded) theme.colors.text_primary else theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(if (media_loaded) theme.colors.text_primary else theme.colors.text_secondary),
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     });
 }
@@ -523,8 +523,8 @@ fn renderStreamKeyPopover() void {
         .open_flag = &HeaderState.stream_key_open,
     }, .{
         .min_size_content = dialog_size,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(theme.radius.lg),
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .corners = dvui.CornerRect.all(theme.radius.lg),
     });
     defer win.deinit();
 
@@ -546,14 +546,14 @@ fn renderStreamKeyPopover() void {
             .padding = dvui.Rect.all(0),
         });
         tl.addText("Per-stream auth token for this player's local HTTP proxy. Treat it like a password — anyone with this key can read the active stream.", .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         });
         tl.deinit();
     }
 
     const token_slice = activeStreamToken() orelse {
         _ = dvui.label(@src(), "No active stream.", .{}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         });
         return;
     };
@@ -562,15 +562,15 @@ fn renderStreamKeyPopover() void {
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_elevated,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .corners = dvui.CornerRect.all(theme.radius.md),
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
     });
     defer row.deinit();
 
     _ = dvui.label(@src(), "{s}", .{token_slice}, .{
         .gravity_y = 0.5,
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
     });
     {
         var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
@@ -603,10 +603,10 @@ pub fn renderUrlInput(is_large: bool) void {
 
     var box_opts = dvui.Options{
         .background = true,
-        .color_fill = theme.colors.bg_elevated,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .corners = dvui.CornerRect.all(theme.radius.md),
         .border = dvui.Rect.all(1),
-        .color_border = if (has_focus) theme.colors.accent else theme.colors.border_subtle,
+        .color_border = @import("color_compat.zig").wrap(if (has_focus) theme.colors.accent else theme.colors.border_subtle),
         .padding = .{ .x = 2, .y = 1, .w = 2, .h = 1 },
         .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
     };
@@ -626,13 +626,13 @@ pub fn renderUrlInput(is_large: bool) void {
 
     var te_opts = dvui.Options{
         .expand = .both,
-        .color_fill = transparent,
-        .color_border = transparent,
-        .color_text = theme.colors.text_primary,
-        .color_text_press = theme.colors.text_primary,
+        .color_fill = @import("color_compat.zig").wrap(transparent),
+        .color_border = @import("color_compat.zig").wrap(transparent),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
+        .color_text_press = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .background = false,
         .border = dvui.Rect.all(0),
-        .corner_radius = dvui.Rect.all(0),
+        .corners = dvui.CornerRect.all(0),
         .padding = if (is_large) .{ .x = 10, .y = 12, .w = 6, .h = 12 } else .{ .x = 6, .y = 3, .w = 4, .h = 3 },
         .gravity_y = 0.5,
     };
@@ -659,10 +659,10 @@ pub fn renderUrlInput(is_large: bool) void {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.brain, .{}, .{}, .{
             .data_out = &mem_wd,
             .gravity_y = 0.5,
-            .color_text = if (mem_on) theme.colors.accent else theme.colors.text_tertiary,
-            .color_fill = transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
+            .color_text = @import("color_compat.zig").wrap(if (mem_on) theme.colors.accent else theme.colors.text_tertiary),
+            .color_fill = @import("color_compat.zig").wrap(transparent),
+            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
             .border = dvui.Rect.all(0),
             .padding = dvui.Rect.all(theme.spacing.xs),
             .min_size_content = .{ .w = 18, .h = 18 },
@@ -677,10 +677,10 @@ pub fn renderUrlInput(is_large: bool) void {
     const clicked_load = dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
         .data_out = &play_wd,
         .gravity_y = 0.5,
-        .color_text = theme.colors.accent,
-        .color_fill = transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_fill_press = theme.colors.bg_elevated,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
+        .color_fill = @import("color_compat.zig").wrap(transparent),
+        .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+        .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
         .border = dvui.Rect.all(0),
         .padding = dvui.Rect.all(theme.spacing.xs),
     });
@@ -691,10 +691,10 @@ pub fn renderUrlInput(is_large: bool) void {
     if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"clipboard-paste", .{}, .{}, .{
         .data_out = &paste_wd,
         .gravity_y = 0.5,
-        .color_text = theme.colors.text_tertiary,
-        .color_fill = transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_fill_press = theme.colors.bg_elevated,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
+        .color_fill = @import("color_compat.zig").wrap(transparent),
+        .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+        .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
         .border = dvui.Rect.all(0),
         .padding = dvui.Rect.all(theme.spacing.xs),
     })) {
@@ -714,10 +714,10 @@ pub fn renderUrlInput(is_large: bool) void {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.mic, .{}, .{}, .{
             .data_out = &mic_wd,
             .gravity_y = 0.5,
-            .color_text = mic_color,
-            .color_fill = transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
+            .color_text = @import("color_compat.zig").wrap(mic_color),
+            .color_fill = @import("color_compat.zig").wrap(transparent),
+            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
             .border = dvui.Rect.all(0),
             .padding = dvui.Rect.all(theme.spacing.xs),
             .min_size_content = .{ .w = 18, .h = 18 },
@@ -734,10 +734,10 @@ pub fn renderUrlInput(is_large: bool) void {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.square, .{}, .{}, .{
                 .data_out = &stop_wd,
                 .gravity_y = 0.5,
-                .color_text = theme.colors.danger,
-                .color_fill = transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.danger),
+                .color_fill = @import("color_compat.zig").wrap(transparent),
+                .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+                .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
                 .border = dvui.Rect.all(0),
                 .padding = dvui.Rect.all(theme.spacing.xs),
             })) {
@@ -849,8 +849,8 @@ pub fn renderTabBar() void {
     var tab_bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_app,
-        .color_border = theme.colors.border_subtle,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = 0 },
     });
@@ -902,13 +902,13 @@ pub fn renderTabBar() void {
         const transparent = theme.transparent;
         if (dvui.button(@src(), tab_label, .{}, .{
             .id_extra = i,
-            .color_fill = transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = if (is_active) theme.colors.accent else theme.colors.text_tertiary,
-            .color_border = transparent,
+            .color_fill = @import("color_compat.zig").wrap(transparent),
+            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("color_compat.zig").wrap(if (is_active) theme.colors.accent else theme.colors.text_tertiary),
+            .color_border = @import("color_compat.zig").wrap(transparent),
             .border = dvui.Rect.all(0),
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .corners = dvui.CornerRect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
         })) {

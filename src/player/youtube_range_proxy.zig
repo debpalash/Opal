@@ -47,7 +47,7 @@ pub const Handle = struct {
 
 pub const invalid_handle: Handle = .{};
 
-var slots: [MAX_STREAMS]Slot = [_]Slot{.{}} ** MAX_STREAMS;
+var slots: [MAX_STREAMS]Slot = @as([MAX_STREAMS]Slot, @splat(.{}));
 var mutex = sync.Mutex{};
 var next_id: u32 = 1;
 var port_cursor: u16 = PORT_START;

@@ -30,7 +30,7 @@ const Bucket = struct {
     last_refill_ms: i64 = 0,
 };
 
-var buckets: [MAX_BUCKETS]Bucket = [_]Bucket{.{}} ** MAX_BUCKETS;
+var buckets: [MAX_BUCKETS]Bucket = @as([MAX_BUCKETS]Bucket, @splat(.{}));
 var mutex = sync.Mutex{};
 
 fn now() i64 {

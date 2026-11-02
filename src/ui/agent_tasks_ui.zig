@@ -173,8 +173,8 @@ pub fn compactSegment(src: std.builtin.SourceLocation, options: []const []const 
     var clicked_index: ?usize = null;
     var bar = dvui.box(src, .{ .dir = .horizontal }, .{
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .corners = theme.dims.rad_sm,
         .padding = dvui.Rect.all(2),
         // No gravity_y: in a vertical parent it floats to the middle of the panel.
     });
@@ -185,19 +185,19 @@ pub fn compactSegment(src: std.builtin.SourceLocation, options: []const []const 
         var seg = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i,
             .background = true,
-            .color_fill = if (active) theme.colors.bg_elevated else theme.transparent,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("color_compat.zig").wrap(if (active) theme.colors.bg_elevated else theme.transparent),
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
             .margin = dvui.Rect.all(1),
         });
         defer seg.deinit();
         if (dvui.clicked(seg.data(), .{ .hovered = &hovered })) clicked_index = i;
-        if (hovered and !active) seg.data().options.color_fill = theme.colors.bg_hover;
+        if (hovered and !active) seg.data().options.color_fill = @import("color_compat.zig").wrap(theme.colors.bg_hover);
         seg.drawBackground();
         _ = dvui.label(@src(), "{s}", .{opt}, .{
             .id_extra = i,
             .gravity_y = 0.5,
-            .color_text = if (active) theme.colors.text_primary else theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(if (active) theme.colors.text_primary else theme.colors.text_secondary),
         });
     }
     return clicked_index;
@@ -226,11 +226,11 @@ fn entry(src: std.builtin.SourceLocation, buf: []u8, placeholder: []const u8, wi
     var te = dvui.textEntry(src, .{ .text = .{ .buffer = buf }, .placeholder = placeholder }, .{
         .min_size_content = .{ .w = width, .h = components.TOOLBAR_INPUT_H },
         .max_size_content = .{ .w = width, .h = components.TOOLBAR_INPUT_H },
-        .color_fill = theme.colors.bg_elevated,
-        .color_border = theme.colors.border_subtle,
-        .color_text = theme.colors.text_primary,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .border = dvui.Rect.all(1),
-        .corner_radius = theme.dims.rad_sm,
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
         .gravity_y = 0.5,
     });
@@ -239,7 +239,7 @@ fn entry(src: std.builtin.SourceLocation, buf: []u8, placeholder: []const u8, wi
 
 fn fieldLabel(src: std.builtin.SourceLocation, text: []const u8) void {
     _ = dvui.label(src, "{s}", .{text}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .min_size_content = .{ .w = 150, .h = 0 },
         .gravity_y = 0.5,
     });
@@ -250,17 +250,17 @@ fn renderBanner() void {
     var banner = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
         .border = dvui.Rect.all(1),
-        .color_border = theme.colors.warning,
-        .corner_radius = theme.dims.rad_sm,
+        .color_border = @import("color_compat.zig").wrap(theme.colors.warning),
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 12 },
     });
     defer banner.deinit();
-    _ = dvui.label(@src(), "Scheduled tasks are switched off", .{}, .{ .color_text = theme.colors.text_primary });
+    _ = dvui.label(@src(), "Scheduled tasks are switched off", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary) });
     _ = dvui.label(@src(), "Tasks never run until you turn this on. Each run starts a coding agent that uses your own subscription or API credit, within the daily limit and budget of the task. You can change this any time in Settings > Agent Access.", .{}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .expand = .horizontal,
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 8 },
     });
@@ -289,15 +289,15 @@ fn renderEmpty() void {
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 14, .y = 12, .w = 14, .h = 12 },
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 12 },
     });
     defer box.deinit();
-    _ = dvui.label(@src(), "No scheduled tasks yet", .{}, .{ .color_text = theme.colors.text_primary });
+    _ = dvui.label(@src(), "No scheduled tasks yet", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary) });
     _ = dvui.label(@src(), "A task is a prompt a coding agent runs by itself on a timer, with the opal tools connected. Start from an example and adjust it, or write your own.", .{}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .expand = .horizontal,
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 8 },
     });
@@ -313,16 +313,16 @@ fn renderForm() void {
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
         .border = dvui.Rect.all(1),
-        .color_border = theme.colors.border_subtle,
-        .corner_radius = theme.dims.rad_sm,
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 14, .y = 12, .w = 14, .h = 12 },
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 12 },
     });
     defer card.deinit();
 
-    _ = dvui.label(@src(), "New task", .{}, .{ .color_text = theme.colors.text_primary, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 } });
+    _ = dvui.label(@src(), "New task", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary), .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 } });
 
     {
         var r = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 } });
@@ -334,7 +334,7 @@ fn renderForm() void {
         var r = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 } });
         defer r.deinit();
         _ = dvui.label(@src(), "What should the agent do? Nobody can answer questions during a run, so be specific.", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .expand = .horizontal,
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 3 },
         });
@@ -347,11 +347,11 @@ fn renderForm() void {
             .expand = .horizontal,
             .min_size_content = .{ .w = 0, .h = 96 },
             .max_size_content = .{ .w = 100000, .h = 160 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_border = theme.colors.border_subtle,
-            .color_text = theme.colors.text_primary,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
         });
         te.deinit();
@@ -376,7 +376,7 @@ fn renderForm() void {
         var text_buf: [40]u8 = undefined;
         const current = view.parseCount(std.mem.sliceTo(&interval_buf, 0));
         const shown: []const u8 = if (current) |m| view.intervalText(&text_buf, m) else "";
-        _ = dvui.label(@src(), "{s}", .{shown}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5, .margin = .{ .x = 8, .y = 0, .w = 12, .h = 0 } });
+        _ = dvui.label(@src(), "{s}", .{shown}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .gravity_y = 0.5, .margin = .{ .x = 8, .y = 0, .w = 12, .h = 0 } });
         for (view.interval_presets, 0..) |p, i| {
             if (components.actionButton(@src(), p.label, .secondary, 9730 + i)) setNumber(&interval_buf, p.minutes);
         }
@@ -386,19 +386,19 @@ fn renderForm() void {
         defer r.deinit();
         fieldLabel(@src(), "Max runs per day");
         entry(@src(), &runs_buf, "2", 80);
-        _ = dvui.label(@src(), "1 to 24. Every run counts, including Run now.", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5, .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 } });
+        _ = dvui.label(@src(), "1 to 24. Every run counts, including Run now.", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .gravity_y = 0.5, .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 } });
     }
     {
         var r = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 } });
         defer r.deinit();
         fieldLabel(@src(), "Budget (cents)");
         entry(@src(), &budget_buf, "50", 80);
-        _ = dvui.label(@src(), "5 to 1000 per run. A hard spending cap for Claude Code; Codex runs in a read-only sandbox.", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5, .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 } });
+        _ = dvui.label(@src(), "5 to 1000 per run. A hard spending cap for Claude Code; Codex runs in a read-only sandbox.", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .gravity_y = 0.5, .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 } });
     }
 
     if (message_len > 0) {
         _ = dvui.label(@src(), "{s}", .{message_buf[0..message_len]}, .{
-            .color_text = theme.colors.danger,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.danger),
             .expand = .horizontal,
             .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 },
         });
@@ -422,8 +422,8 @@ fn renderRow(i: usize, now: i64) void {
         .id_extra = i,
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 14, .y = 10, .w = 14, .h = 10 },
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
     });
@@ -435,11 +435,11 @@ fn renderRow(i: usize, now: i64) void {
         defer line.deinit();
         var shown_name: [48]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{view.summaryLine(&shown_name, r.name[0..@min(r.name_len, r.name.len)], 44)}, .{
-            .color_text = if (r.enabled) theme.colors.text_primary else theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(if (r.enabled) theme.colors.text_primary else theme.colors.text_secondary),
             .gravity_y = 0.5,
         });
         _ = dvui.label(@src(), "{s}", .{agent_labels[if (r.agent == .codex) 1 else 0]}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_y = 0.5,
             .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
         });
@@ -481,7 +481,7 @@ fn renderRow(i: usize, now: i64) void {
             view.lastRunText(&f, r.last_run_ms, now),
         }) catch "";
         _ = dvui.label(@src(), "{s}", .{text}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .expand = .horizontal,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
         });
@@ -496,9 +496,9 @@ fn renderRow(i: usize, now: i64) void {
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
         });
         defer tl.deinit();
-        tl.addText("Prompt: ", .{ .color_text = theme.colors.text_secondary });
+        tl.addText("Prompt: ", .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary) });
         var shown_prompt: [tasks.Row.prompt_capacity + 8]u8 = undefined;
-        tl.addText(@import("../core/text.zig").safeUtf8Buf(r.prompt[0..@min(r.prompt_len, r.prompt.len)], &shown_prompt), .{ .color_text = theme.colors.text_primary });
+        tl.addText(@import("../core/text.zig").safeUtf8Buf(r.prompt[0..@min(r.prompt_len, r.prompt.len)], &shown_prompt), .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary) });
     }
 
     // Line 4: the last outcome, coloured, and the agent's closing line.
@@ -508,10 +508,10 @@ fn renderRow(i: usize, now: i64) void {
         const summary = view.summaryLine(&sbuf, r.summary[0..@min(r.summary_len, r.summary.len)], SUMMARY_SHOWN);
         var line = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 } });
         defer line.deinit();
-        _ = dvui.label(@src(), "{s}", .{outcome.label()}, .{ .color_text = toneColor(outcome.tone()), .gravity_y = 0.0 });
+        _ = dvui.label(@src(), "{s}", .{outcome.label()}, .{ .color_text = @import("color_compat.zig").wrap(toneColor(outcome.tone())), .gravity_y = 0.0 });
         if (summary.len > 0) {
             _ = dvui.label(@src(), "{s}", .{summary}, .{
-                .color_text = theme.colors.text_primary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .expand = .horizontal,
                 .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
             });

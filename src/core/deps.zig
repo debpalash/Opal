@@ -86,7 +86,7 @@ fn realCheck() Status {
     var home_buf: [512]u8 = undefined;
     var __cfg_buf_1: [512]u8 = undefined;
     const home = @import("paths.zig").configDir(&__cfg_buf_1);
-    if (std.fmt.bufPrintZ(&home_buf, "{s}/models/ggml-tiny.en.bin", .{home})) |model_path| {
+    if (@import("opal-fmt").bufPrintZ(&home_buf, "{s}/models/ggml-tiny.en.bin", .{home})) |model_path| {
         // Avoid hashing 75 MiB on every settings-frame TTL refresh; exact byte
         // length catches interrupted legacy downloads. Fresh installs are also
         // SHA-256 verified before publication below.
@@ -503,12 +503,12 @@ pub fn fetchWhisperModelAsync() void {
             var home_buf: [512]u8 = undefined;
             var __cfg_buf_7: [512]u8 = undefined;
             const home = @import("paths.zig").configDir(&__cfg_buf_7);
-            const dir = std.fmt.bufPrintZ(&home_buf, "{s}/models", .{home}) catch return;
+            const dir = @import("opal-fmt").bufPrintZ(&home_buf, "{s}/models", .{home}) catch return;
 
             // mkpath + check if already present
             io_global.makeDirAbsolute(dir) catch {};
             var path_buf: [512]u8 = undefined;
-            const model_path = std.fmt.bufPrintZ(&path_buf, "{s}/ggml-tiny.en.bin", .{dir}) catch return;
+            const model_path = @import("opal-fmt").bufPrintZ(&path_buf, "{s}/ggml-tiny.en.bin", .{dir}) catch return;
             if (downloadedFileMatches(model_path, 77_704_715, null)) return;
 
             logs.pushLog("info", "deps", "Fetching Whisper tiny.en (75MB)…", false);
@@ -556,14 +556,14 @@ fn mlxWhisperModelCached(home: []const u8) bool {
     const cache_base = if (std.c.getenv("HF_HUB_CACHE")) |c|
         std.mem.span(c)
     else if (std.c.getenv("HF_HOME")) |h| blk: {
-        break :blk std.fmt.bufPrintZ(&cache_buf, "{s}/hub", .{std.mem.span(h)}) catch home;
+        break :blk @import("opal-fmt").bufPrintZ(&cache_buf, "{s}/hub", .{std.mem.span(h)}) catch home;
     } else blk: {
-        break :blk std.fmt.bufPrintZ(&cache_buf, "{s}/.cache/huggingface/hub", .{home}) catch home;
+        break :blk @import("opal-fmt").bufPrintZ(&cache_buf, "{s}/.cache/huggingface/hub", .{home}) catch home;
     };
 
     // Check for snapshots dir
     var snap_buf: [512]u8 = undefined;
-    const snap_dir = std.fmt.bufPrintZ(&snap_buf, "{s}/{s}/snapshots", .{ cache_base, MLX_WHISPER_CACHE_DIR }) catch return false;
+    const snap_dir = @import("opal-fmt").bufPrintZ(&snap_buf, "{s}/{s}/snapshots", .{ cache_base, MLX_WHISPER_CACHE_DIR }) catch return false;
 
     // Open snapshots dir and iterate to find any hash dir with weights.safetensors
     var dir = io_global.openDirAbsolute(snap_dir, .{ .iterate = true }) catch return false;
@@ -574,7 +574,7 @@ fn mlxWhisperModelCached(home: []const u8) bool {
         if (entry.kind != .directory) continue;
         // Check for weights.safetensors inside this snapshot
         var weights_buf: [768]u8 = undefined;
-        const weights_path = std.fmt.bufPrintZ(&weights_buf, "{s}/{s}/weights.safetensors", .{ snap_dir, entry.name }) catch continue;
+        const weights_path = @import("opal-fmt").bufPrintZ(&weights_buf, "{s}/{s}/weights.safetensors", .{ snap_dir, entry.name }) catch continue;
         if (io_global.cwdAccess(weights_path, .{})) |_| return true else |_| {}
     }
     return false;
@@ -584,11 +584,11 @@ fn mlxWhisperModelCached(home: []const u8) bool {
 /// using `uv` (astral.sh) — never touches the user's system Python.
 /// Flow: ensure uv → uv venv → uv pip install → huggingface-cli download.
 pub var mlx_whisper_downloading: bool = false;
-pub var mlx_whisper_status: [128]u8 = [_]u8{0} ** 128;
+pub var mlx_whisper_status: [128]u8 = @as([128]u8, @splat(0));
 pub var mlx_whisper_step: u8 = 0; // 0=idle, 1=uv, 2=venv, 3=pip, 4=model, 5=done
 
 fn setStatus(comptime fmt: []const u8, args: anytype) void {
-    const s = std.fmt.bufPrintZ(&mlx_whisper_status, fmt, args) catch return;
+    const s = @import("opal-fmt").bufPrintZ(&mlx_whisper_status, fmt, args) catch return;
     _ = s;
 }
 
@@ -598,7 +598,7 @@ pub fn mlxWhisperBinPath(buf: []u8) ?[]const u8 {
     var __cfg_buf_8: [512]u8 = undefined;
     const home = @import("paths.zig").configDir(&__cfg_buf_8);
     // Check managed venv first
-    const venv_bin = std.fmt.bufPrintZ(buf, "{s}/mlx-venv/bin/mlx_whisper", .{home}) catch return null;
+    const venv_bin = @import("opal-fmt").bufPrintZ(buf, "{s}/mlx-venv/bin/mlx_whisper", .{home}) catch return null;
     if (io_global.cwdAccess(venv_bin, .{})) |_| return venv_bin else |_| {}
     // Check system-wide
     if (io_global.cwdAccess("/opt/homebrew/bin/mlx_whisper", .{})) |_| return "/opt/homebrew/bin/mlx_whisper" else |_| {}
@@ -610,7 +610,7 @@ pub fn mlxWhisperBinPath(buf: []u8) ?[]const u8 {
 fn findUv(buf: []u8) ?[]const u8 {
     const home = @import("paths.zig").homeDir();
     // uv official installer puts it here
-    const cargo_uv = std.fmt.bufPrintZ(buf, "{s}/.local/bin/uv", .{home}) catch return null;
+    const cargo_uv = @import("opal-fmt").bufPrintZ(buf, "{s}/.local/bin/uv", .{home}) catch return null;
     if (io_global.cwdAccess(cargo_uv, .{})) |_| return cargo_uv else |_| {}
     // Homebrew / system
     if (io_global.cwdAccess("/opt/homebrew/bin/uv", .{})) |_| return "/opt/homebrew/bin/uv" else |_| {}
@@ -664,10 +664,10 @@ pub fn fetchMlxWhisperModelAsync() void {
 
             // ── Step 2: Create venv with uv (downloads its own Python) ──
             var venv_buf: [512]u8 = undefined;
-            const venv_dir = std.fmt.bufPrintZ(&venv_buf, "{s}/mlx-venv", .{home}) catch return;
+            const venv_dir = @import("opal-fmt").bufPrintZ(&venv_buf, "{s}/mlx-venv", .{home}) catch return;
 
             var pip_check_buf: [512]u8 = undefined;
-            const venv_python = std.fmt.bufPrintZ(&pip_check_buf, "{s}/bin/python", .{venv_dir}) catch return;
+            const venv_python = @import("opal-fmt").bufPrintZ(&pip_check_buf, "{s}/bin/python", .{venv_dir}) catch return;
 
             if (io_global.cwdAccess(venv_python, .{})) |_| {
                 // venv already exists
@@ -728,7 +728,7 @@ pub fn fetchMlxWhisperModelAsync() void {
 
             // Use the venv's huggingface-cli (installed as mlx-whisper dependency)
             var hf_cli_buf: [512]u8 = undefined;
-            const venv_hf = std.fmt.bufPrintZ(&hf_cli_buf, "{s}/bin/huggingface-cli", .{venv_dir}) catch return;
+            const venv_hf = @import("opal-fmt").bufPrintZ(&hf_cli_buf, "{s}/bin/huggingface-cli", .{venv_dir}) catch return;
             logs.pushLog("info", "deps", "Command: huggingface-cli download mlx-community/whisper-large-v3-turbo", false);
 
             var hf_cli = io_global.Child.init(&.{
@@ -746,7 +746,7 @@ pub fn fetchMlxWhisperModelAsync() void {
             logs.pushLog("info", "deps", "Fallback: direct HTTPS download of config.json and weights.safetensors from Hugging Face", false);
             // Fallback: direct download through the reliable-fetch seam
             var model_dir_buf: [512]u8 = undefined;
-            const model_dir = std.fmt.bufPrintZ(&model_dir_buf, "{s}/.cache/huggingface/hub/{s}/snapshots/main", .{ home, MLX_WHISPER_CACHE_DIR }) catch return;
+            const model_dir = @import("opal-fmt").bufPrintZ(&model_dir_buf, "{s}/.cache/huggingface/hub/{s}/snapshots/main", .{ home, MLX_WHISPER_CACHE_DIR }) catch return;
             var mkp = io_global.Child.init(&.{ "mkdir", "-p", model_dir }, alloc);
             mkp.stdout_behavior = .Ignore;
             mkp.stderr_behavior = .Ignore;
@@ -754,7 +754,7 @@ pub fn fetchMlxWhisperModelAsync() void {
 
             // config.json
             var cfg_buf: [768]u8 = undefined;
-            const cfg_path = std.fmt.bufPrintZ(&cfg_buf, "{s}/config.json", .{model_dir}) catch return;
+            const cfg_path = @import("opal-fmt").bufPrintZ(&cfg_buf, "{s}/config.json", .{model_dir}) catch return;
             if (!fetchDownload("https://huggingface.co/mlx-community/whisper-large-v3-turbo/resolve/main/config.json", cfg_path).ok()) {
                 logs.pushLog("error", "deps", "Failed to download MLX Whisper config", true);
                 return;
@@ -762,7 +762,7 @@ pub fn fetchMlxWhisperModelAsync() void {
 
             // weights.safetensors (~1.6GB)
             var wt_buf: [768]u8 = undefined;
-            const wt_path = std.fmt.bufPrintZ(&wt_buf, "{s}/weights.safetensors", .{model_dir}) catch return;
+            const wt_path = @import("opal-fmt").bufPrintZ(&wt_buf, "{s}/weights.safetensors", .{model_dir}) catch return;
             if (!fetchDownload("https://huggingface.co/mlx-community/whisper-large-v3-turbo/resolve/main/weights.safetensors", wt_path).ok() or !mlxWhisperModelCached(home)) {
                 logs.pushLog("error", "deps", "MLX Whisper weights download failed validation", true);
                 return;

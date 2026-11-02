@@ -313,8 +313,8 @@ test "manifest and executable are required for a trust identity" {
 }
 
 test "approval digest is bound to plugin identity and content" {
-    const tree_a = [_]u8{0x31} ** 32;
-    const tree_b = [_]u8{0x32} ** 32;
+    const tree_a = @as([32]u8, @splat(0x31));
+    const tree_b = @as([32]u8, @splat(0x32));
     var left: [32]u8 = undefined;
     var other_id: [32]u8 = undefined;
     var other_tree: [32]u8 = undefined;

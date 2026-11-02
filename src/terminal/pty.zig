@@ -211,7 +211,7 @@ fn spawnPosix(
     const c_argv = try arena.allocSentinel(?[*:0]const u8, argv.len, null);
     for (argv, 0..) |arg, i| {
         if (std.mem.indexOfScalar(u8, arg, 0) != null) return error.BadArgument;
-        c_argv[i] = (try arena.dupeZ(u8, arg)).ptr;
+        c_argv[i] = (try arena.dupeSentinel(u8, arg, 0)).ptr;
     }
 
     var env: std.ArrayList(?[*:0]const u8) = .empty;
@@ -226,7 +226,7 @@ fn spawnPosix(
         }
         if (!replaced) try env.append(arena, entry);
     }
-    for (extra_env) |extra| try env.append(arena, (try arena.dupeZ(u8, extra)).ptr);
+    for (extra_env) |extra| try env.append(arena, (try arena.dupeSentinel(u8, extra, 0)).ptr);
     try env.append(arena, null);
     const c_env: [*:null]const ?[*:0]const u8 = @ptrCast(env.items.ptr);
 

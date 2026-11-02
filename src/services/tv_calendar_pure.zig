@@ -283,14 +283,14 @@ test "eztvEpisodeSeeds: string season/episode match, max seeds, absent episode" 
 
 pub const CalendarEntry = struct {
     tmdb_id: i32 = 0,
-    name: [128]u8 = .{0} ** 128,
+    name: [128]u8 = @splat(0),
     name_len: usize = 0,
-    poster_path: [256]u8 = .{0} ** 256,
+    poster_path: [256]u8 = @splat(0),
     poster_path_len: usize = 0,
     next_season: i32 = 0,
     next_episode: i32 = 0,
     next_air_epoch: i64 = 0,
-    next_name: [64]u8 = .{0} ** 64,
+    next_name: [64]u8 = @splat(0),
     next_name_len: usize = 0,
     last_season: i32 = 0,
     last_episode: i32 = 0,

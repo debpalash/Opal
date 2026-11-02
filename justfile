@@ -24,14 +24,14 @@ ui-debug:
 stop:
     ./scripts/stop-dev.sh
 
-# Native zig 0.16 HMR — millisecond rebuilds on .zig edits.
+# Native zig 0.17 HMR — millisecond rebuilds on .zig edits.
 # Bails on C/build.zig changes; use `just run` for those.
 hot:
     {{zig}} build run --watch -fincremental --error-style minimal_clear
 
 # Release build (stripped, optimized)
 release:
-    {{zig}} build -Doptimize=ReleaseFast
+    {{zig}} build -Doptimize=fast
 
 # Unit tests (m3u, paths)
 test:

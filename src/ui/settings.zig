@@ -136,7 +136,7 @@ pub fn renderSettingsContent() void {
     var outer = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_deep,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_deep),
     });
     defer outer.deinit();
 
@@ -167,8 +167,8 @@ fn renderLeftNav(compact: bool) void {
         .max_size_content = .{ .w = if (compact) 56 else 152, .h = std.math.floatMax(f32) },
         .expand = .vertical,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_subtle,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
         .border = .{ .x = 0, .y = 0, .w = 1, .h = 0 },
         .padding = .{
             .x = if (compact) theme.spacing.xs else theme.spacing.sm,
@@ -225,7 +225,7 @@ fn renderLeftNav(compact: bool) void {
 
     if (!any_match) {
         _ = dvui.label(@src(), "No matches", .{}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .padding = .{
                 .x = theme.spacing.md,
                 .y = theme.spacing.sm,
@@ -234,11 +234,11 @@ fn renderLeftNav(compact: bool) void {
             },
         });
         if (dvui.button(@src(), "Clear search", .{}, .{
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_text = theme.colors.accent,
+            .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
             .border = dvui.Rect.all(0),
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .corners = dvui.CornerRect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
         })) {
             @memset(&search_buf, 0);
@@ -281,10 +281,10 @@ fn navTabRow(tab: state.SettingsTab, label: []const u8, icon: []const u8, id_ext
         .expand = .horizontal,
         .min_size_content = .{ .w = 0, .h = if (compact) 40 else 34 },
         .background = true,
-        .color_fill = if (is_active) theme.colors.bg_elevated else theme.transparent,
-        .color_border = if (is_active) theme.colors.accent else theme.transparent,
+        .color_fill = @import("color_compat.zig").wrap(if (is_active) theme.colors.bg_elevated else theme.transparent),
+        .color_border = @import("color_compat.zig").wrap(if (is_active) theme.colors.accent else theme.transparent),
         .border = if (is_active and !compact) .{ .x = 2, .y = 0, .w = 0, .h = 0 } else dvui.Rect.all(0),
-        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .corners = dvui.CornerRect.all(theme.radius.sm),
         .padding = .{
             .x = if (compact) theme.spacing.xs else theme.spacing.sm,
             .y = theme.spacing.xs,
@@ -298,7 +298,7 @@ fn navTabRow(tab: state.SettingsTab, label: []const u8, icon: []const u8, id_ext
 
     // Whole-row click target. Keyboard: tab stop + Enter/Space activates.
     const rid = row.data().id;
-    dvui.tabIndexSet(rid, null);
+    dvui.tabIndexSet(rid, null, null);
     const row_focused = dvui.focusedWidgetId() == rid;
     if (row_focused) {
         for (dvui.events()) |*e| {
@@ -315,7 +315,7 @@ fn navTabRow(tab: state.SettingsTab, label: []const u8, icon: []const u8, id_ext
     // Hover lift — must be applied AFTER hover is known; the ternary that
     // referenced `hovered` at box creation was provably dead code (boxes draw
     // their background inside dvui.box()).
-    if (hovered and !is_active) row.data().options.color_fill = theme.colors.bg_hover;
+    if (hovered and !is_active) row.data().options.color_fill = @import("color_compat.zig").wrap(theme.colors.bg_hover);
     row.drawBackground();
     if (row_focused) row.data().focusBorder();
 
@@ -324,7 +324,7 @@ fn navTabRow(tab: state.SettingsTab, label: []const u8, icon: []const u8, id_ext
     dvui.icon(@src(), label, icon, .{}, .{
         .id_extra = id_extra,
         .gravity_y = 0.5,
-        .color_text = fg,
+        .color_text = @import("color_compat.zig").wrap(fg),
         .min_size_content = theme.iconSize(.sm),
         .max_size_content = .{ .w = 16, .h = 16 },
     });
@@ -338,7 +338,7 @@ fn navTabRow(tab: state.SettingsTab, label: []const u8, icon: []const u8, id_ext
         _ = dvui.label(@src(), "  {s}", .{label}, .{
             .id_extra = id_extra,
             .gravity_y = 0.5,
-            .color_text = fg,
+            .color_text = @import("color_compat.zig").wrap(fg),
         });
     }
 }
@@ -349,7 +349,7 @@ fn renderRightPane(compact: bool) void {
     var pane = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_deep,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_deep),
     });
     defer pane.deinit();
 
@@ -434,7 +434,7 @@ fn renderRightPane(compact: bool) void {
             sp.deinit();
         }
         _ = dvui.label(@src(), "Changes saved automatically.", .{}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .gravity_y = 0.5,
         });
     }
@@ -447,7 +447,7 @@ fn bigTitle(title: []const u8) void {
     // settings pane and clipped ("General Setti…"); 17 fits and reads cleaner.
     f.size = theme.font_size.title;
     _ = dvui.label(@src(), "{s}", .{title}, .{
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .font = f,
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.md },
     });
@@ -461,7 +461,7 @@ pub fn renderAIContent() void {
         .expand = .both,
         .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
     });
     defer scroll.deinit();
 
@@ -504,11 +504,11 @@ fn renderAIContentBody() void {
                 if (dvui.button(@src(), name, .{}, .{
                     .id_extra = 4000 + i,
                     .data_out = &wd,
-                    .color_fill = if (kind == vb.active_kind) theme.colors.bg_elevated else theme.transparent,
-                    .color_text = if (kind == vb.active_kind) theme.colors.accent else theme.colors.text_secondary,
+                    .color_fill = @import("color_compat.zig").wrap(if (kind == vb.active_kind) theme.colors.bg_elevated else theme.transparent),
+                    .color_text = @import("color_compat.zig").wrap(if (kind == vb.active_kind) theme.colors.accent else theme.colors.text_secondary),
                     .padding = dvui.Rect.all(8),
                     .margin = dvui.Rect.all(2),
-                    .corner_radius = theme.dims.rad_sm,
+                    .corners = theme.dims.rad_sm,
                 })) {
                     vb.active_kind = kind;
                     vb.voice_backend_explicit = true;
@@ -540,17 +540,17 @@ fn renderAIContentBody() void {
                 var status_snap: [128]u8 = undefined;
                 const status_txt = if (status_len > 0) @import("../core/text.zig").safeUtf8Buf(deps.mlx_whisper_status[0..status_len], &status_snap) else "Setting up…";
                 _ = dvui.label(@src(), "{s}", .{status_txt}, .{
-                    .color_text = theme.colors.warning,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.warning),
                     .gravity_y = 0.5,
                 });
                 components.pollRefresh(100_000);
             } else {
                 if (dvui.button(@src(), "Set up (~1.6GB)", .{}, .{
-                    .color_fill = theme.colors.accent,
-                    .color_text = theme.colors.text_on_accent,
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
                     .border = dvui.Rect.all(0),
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-                    .corner_radius = theme.dims.rad_md,
+                    .corners = theme.dims.rad_md,
                 })) {
                     deps.fetchMlxWhisperModelAsync();
                     state.showToast("Setting up MLX Whisper (venv + model)…");
@@ -576,17 +576,17 @@ fn renderAIContentBody() void {
             var label_buf: [32]u8 = undefined;
             const lbl = std.fmt.bufPrint(&label_buf, "sid = {d}", .{vb.kokoro_sid}) catch "sid = ?";
             _ = dvui.label(@src(), "{s}", .{lbl}, .{
-                .color_text = theme.colors.text_primary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .min_size_content = .{ .w = 80, .h = 0 },
                 .gravity_y = 0.5,
             });
 
             if (dvui.button(@src(), "−", .{}, .{
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.text_secondary,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
                 .margin = .{ .w = theme.spacing.xs },
                 .gravity_y = 0.5,
             })) {
@@ -596,11 +596,11 @@ fn renderAIContentBody() void {
                 }
             }
             if (dvui.button(@src(), "+", .{}, .{
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.text_secondary,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
                 .margin = .{ .w = theme.spacing.xs },
                 .gravity_y = 0.5,
             })) {
@@ -614,11 +614,11 @@ fn renderAIContentBody() void {
                 sp.deinit();
             }
             if (dvui.button(@src(), "Preview", .{}, .{
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.text_on_accent,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.xs, .w = theme.spacing.lg, .h = theme.spacing.xs },
-                .corner_radius = theme.dims.rad_md,
+                .corners = theme.dims.rad_md,
                 .gravity_y = 0.5,
             })) {
                 const b = vb.active();
@@ -639,7 +639,7 @@ fn renderAIContentBody() void {
 
     _ = dvui.label(@src(), "AI comments on what you missed when you pause or rewind (voice mode)", .{}, .{
         .id_extra = 651,
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
     });
     {
@@ -664,7 +664,7 @@ fn renderAIContentBody() void {
 
     // Pointer to the single home of the language-learning controls.
     _ = dvui.label(@src(), "Subtitle translation, ASR, dubbing, and TTS voice live in Settings › Language.", .{}, .{
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
     });
 
@@ -673,9 +673,9 @@ fn renderAIContentBody() void {
     // Opens the "Setup" checklist modal on demand. This used to auto-pop at
     // first run; it now lives here so it never nags at startup.
     if (dvui.button(@src(), "Open setup checklist…", .{}, .{
-        .color_fill = theme.colors.bg_elevated,
-        .color_text = theme.colors.text_secondary,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 },
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
     })) {
@@ -717,13 +717,13 @@ fn renderAIContentBody() void {
 
             dvui.icon(@src(), "", icons.tvg.lucide.cpu, .{}, .{
                 .id_extra = 5015,
-                .color_text = if (mlx_installed) theme.colors.accent else mutedText(),
+                .color_text = @import("color_compat.zig").wrap(if (mlx_installed) theme.colors.accent else mutedText()),
                 .gravity_y = 0.5,
                 .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
             });
             _ = dvui.label(@src(), "MLX Whisper (1.6GB)", .{}, .{
                 .id_extra = 5025,
-                .color_text = labelText(),
+                .color_text = @import("color_compat.zig").wrap(labelText()),
                 .gravity_y = 0.5,
             });
             {
@@ -737,7 +737,7 @@ fn renderAIContentBody() void {
                 const stxt = if (slen > 0) @import("../core/text.zig").safeUtf8Buf(deps.mlx_whisper_status[0..slen], &ssnap) else "Setting up…";
                 _ = dvui.label(@src(), "{s}", .{stxt}, .{
                     .id_extra = 5045,
-                    .color_text = theme.colors.warning,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.warning),
                     .gravity_y = 0.5,
                 });
                 components.pollRefresh(100_000);
@@ -754,7 +754,7 @@ fn renderAIContentBody() void {
         parakeetModelRow("Parakeet TDT 0.6B v2 · English (480MB)", ds.parakeet_v2_model, deps.parakeet_v2_downloading.load(.acquire), false, 5006);
         parakeetModelRow("Parakeet TDT 0.6B v3 · 25 languages (490MB)", ds.parakeet_v3_model, deps.parakeet_v3_downloading.load(.acquire), true, 5007);
     }
-    _ = dvui.label(@src(), "Model operation: HTTPS curl › verify staged download › extract (archive models). MLX Whisper also installs uv, a Python venv, and mlx-whisper.", .{}, .{ .color_text = theme.colors.text_tertiary });
+    _ = dvui.label(@src(), "Model operation: HTTPS curl › verify staged download › extract (archive models). MLX Whisper also installs uv, a Python venv, and mlx-whisper.", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary) });
 }
 
 /// One NVIDIA Parakeet model row: name + Installed pill / live download
@@ -771,14 +771,14 @@ fn parakeetModelRow(comptime name: []const u8, installed: bool, downloading: boo
 
     dvui.icon(@src(), "", icons.tvg.lucide.@"audio-waveform", .{}, .{
         .id_extra = id_extra + 10,
-        .color_text = if (installed) theme.colors.accent else theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(if (installed) theme.colors.accent else theme.colors.text_secondary),
         .min_size_content = theme.iconSize(.sm),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
     });
     _ = dvui.label(@src(), name, .{}, .{
         .id_extra = id_extra + 20,
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .gravity_y = 0.5,
     });
     {
@@ -788,14 +788,14 @@ fn parakeetModelRow(comptime name: []const u8, installed: bool, downloading: boo
     if (downloading) {
         dvui.spinner(@src(), .{
             .id_extra = id_extra + 40,
-            .color_text = theme.colors.warning,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.warning),
             .min_size_content = theme.iconSize(.sm),
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
         _ = dvui.label(@src(), "Downloading…", .{}, .{
             .id_extra = id_extra + 50,
-            .color_text = theme.colors.warning,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.warning),
             .gravity_y = 0.5,
         });
     } else if (installed) {
@@ -803,10 +803,10 @@ fn parakeetModelRow(comptime name: []const u8, installed: bool, downloading: boo
     } else {
         if (dvui.button(@src(), "Download", .{}, .{
             .id_extra = id_extra + 60,
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
             .border = dvui.Rect.all(0),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .gravity_y = 0.5,
         })) {
@@ -886,8 +886,8 @@ fn aboutLink(id: usize, icon: []const u8, label: []const u8, url: []const u8, ic
     var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = id,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(theme.radius.pill),
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .corners = dvui.CornerRect.all(theme.radius.pill),
         .padding = .{ .x = theme.spacing.md, .y = 4, .w = theme.spacing.md, .h = 4 },
         .margin = .{ .x = 0, .y = 2, .w = theme.spacing.sm, .h = 2 },
         .gravity_y = 0.5,
@@ -895,19 +895,19 @@ fn aboutLink(id: usize, icon: []const u8, label: []const u8, url: []const u8, ic
     defer chip.deinit();
     var hovered = false;
     const clicked = dvui.clicked(chip.data(), .{ .hovered = &hovered });
-    if (hovered) chip.data().options.color_fill = theme.colors.bg_hover;
+    if (hovered) chip.data().options.color_fill = @import("color_compat.zig").wrap(theme.colors.bg_hover);
     chip.drawBackground();
 
     dvui.icon(@src(), "about-link", icon, .{}, .{
         .id_extra = id,
-        .color_text = icon_color,
+        .color_text = @import("color_compat.zig").wrap(icon_color),
         .min_size_content = .{ .w = 13, .h = 13 },
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
     });
     _ = dvui.label(@src(), "{s}", .{label}, .{
         .id_extra = id,
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .gravity_y = 0.5,
     });
 
@@ -919,7 +919,7 @@ fn sectionHeader(comptime title: []const u8, comptime subtitle: []const u8, id_e
     defer wrap.deinit();
     if (state.app.settings_tab == .About) {
         components.sectionHeader(title);
-        if (subtitle.len > 0) dvui.labelNoFmt(@src(), subtitle, .{}, .{ .color_text = theme.colors.text_tertiary, .margin = .{ .h = theme.spacing.sm } });
+        if (subtitle.len > 0) dvui.labelNoFmt(@src(), subtitle, .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary), .margin = .{ .h = theme.spacing.sm } });
         return;
     }
     const glyph = if (std.mem.indexOf(u8, title, "Audio") != null) icons.tvg.lucide.volume else if (std.mem.indexOf(u8, title, "Video") != null) icons.tvg.lucide.film else if (std.mem.indexOf(u8, title, "Plugins") != null) icons.tvg.lucide.puzzle else if (std.mem.indexOf(u8, title, "Interface") != null) icons.tvg.lucide.palette else if (std.mem.indexOf(u8, title, "Streaming") != null) icons.tvg.lucide.wifi else if (std.mem.indexOf(u8, title, "Shortcuts") != null) icons.tvg.lucide.keyboard else if (std.mem.indexOf(u8, title, "Capture") != null) icons.tvg.lucide.camera else icons.tvg.lucide.@"sliders-horizontal";
@@ -932,7 +932,7 @@ fn sectionHeader(comptime title: []const u8, comptime subtitle: []const u8, id_e
 fn settingRow(comptime label_text_str: []const u8, id_extra: usize, src: std.builtin.SourceLocation) void {
     _ = dvui.label(src, label_text_str, .{}, .{
         .id_extra = id_extra,
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.xs },
     });
 }
@@ -952,24 +952,24 @@ fn modelRow(comptime name: []const u8, icon_data: anytype, installed: bool, down
         .padding = dvui.Rect.all(10),
         .margin = .{ .y = 3, .h = 3 },
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
         .border = dvui.Rect.all(1),
-        .color_border = theme.colors.border_subtle,
-        .corner_radius = dvui.Rect.all(8),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+        .corners = dvui.CornerRect.all(8),
     });
     defer row.deinit();
 
     // Icon
     dvui.icon(src, "", icon_data, .{}, .{
         .id_extra = id_extra + 10,
-        .color_text = if (installed) theme.colors.accent else mutedText(),
+        .color_text = @import("color_compat.zig").wrap(if (installed) theme.colors.accent else mutedText()),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
     });
     // Name
     _ = dvui.label(src, name, .{}, .{
         .id_extra = id_extra + 20,
-        .color_text = labelText(),
+        .color_text = @import("color_compat.zig").wrap(labelText()),
         .gravity_y = 0.5,
     });
     // Spacer
@@ -985,10 +985,10 @@ fn modelRow(comptime name: []const u8, icon_data: anytype, installed: bool, down
     } else {
         return dvui.button(src, "Download", .{}, .{
             .id_extra = id_extra + 60,
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
             .border = dvui.Rect.all(0),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .gravity_y = 0.5,
         });
@@ -1070,8 +1070,8 @@ fn renderInstallActivity(compact: bool) void {
     var activity = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .corners = theme.dims.rad_sm,
         .padding = dvui.Rect.all(theme.spacing.sm),
     });
     defer activity.deinit();
@@ -1220,11 +1220,11 @@ fn renderGeneralTab() void {
         components.toggleRow(@src(), "Personalized suggestions (local-only)", "Learn from your activity on this device to improve the For You row", &state.app.taste_enabled);
         if (state.app.taste_enabled != before) state.markConfigDirty();
         if (dvui.button(@src(), "Clear taste data", .{}, .{
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_text = theme.colors.accent,
+            .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
             .border = dvui.Rect.all(0),
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .corners = dvui.CornerRect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
         })) {
             @import("../services/activity.zig").clearTasteData();
@@ -1241,11 +1241,11 @@ fn renderGeneralTab() void {
             .id_extra = 142,
             .expand = .horizontal,
             .min_size_content = .{ .w = 300, .h = 20 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_border = theme.colors.border_subtle,
-            .color_text = theme.colors.text_primary,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
         });
         const tmdb_changed = te.text_changed;
         te.deinit();
@@ -1262,7 +1262,7 @@ fn renderGeneralTab() void {
         else
             "Advanced, optional. Only adds richer metadata (cast, extra artwork, trailers). Everything works without it."}, .{
             .id_extra = 143,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
         });
     }
@@ -1279,11 +1279,11 @@ fn renderGeneralTab() void {
             .id_extra = 152,
             .expand = .horizontal,
             .min_size_content = .{ .w = 300, .h = 20 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_border = theme.colors.border_subtle,
-            .color_text = theme.colors.text_primary,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
         });
         const omdb_changed = te.text_changed;
         te.deinit();
@@ -1299,7 +1299,7 @@ fn renderGeneralTab() void {
         else
             "Free key (1,000/day) from omdbapi.com/apikey.aspx — leave blank to disable."}, .{
             .id_extra = 153,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
         });
     }
@@ -1358,13 +1358,13 @@ fn renderAboutTab() void {
             var wmf = dvui.themeGet().font_body;
             wmf.size = theme.font_size.display;
             _ = dvui.label(@src(), "Opal", .{}, .{
-                .color_text = theme.colors.text_primary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .font = wmf,
                 .gravity_y = 0.5,
             });
             // Tagline.
             _ = dvui.label(@src(), "Play everything", .{}, .{
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                 .gravity_y = 0.5,
                 .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
             });
@@ -1373,12 +1373,12 @@ fn renderAboutTab() void {
         // Positioning line + the short pitch (mirrors the README hero).
         _ = dvui.label(@src(), "The evolved media player for the next decades of entertainment.", .{}, .{
             .id_extra = 2505,
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
         });
         _ = dvui.label(@src(), "Local-first, an mpv heart, and an AI that never leaves your machine.\nNo accounts · no telemetry · no cloud — your history is a SQLite file you own.", .{}, .{
             .id_extra = 2506,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
         });
 
@@ -1386,22 +1386,22 @@ fn renderAboutTab() void {
         {
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
             defer row.deinit();
-            _ = dvui.label(@src(), "Version", .{}, .{ .color_text = labelText(), .gravity_y = 0.5 });
-            _ = dvui.label(@src(), "  v{s}", .{updater.APP_VERSION}, .{ .id_extra = 2510, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+            _ = dvui.label(@src(), "Version", .{}, .{ .color_text = @import("color_compat.zig").wrap(labelText()), .gravity_y = 0.5 });
+            _ = dvui.label(@src(), "  v{s}", .{updater.APP_VERSION}, .{ .id_extra = 2510, .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .gravity_y = 0.5 });
             {
                 var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
                 spacer.deinit();
             }
             if (update.is_checking) {
-                _ = dvui.label(@src(), "Checking…", .{}, .{ .id_extra = 2511, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+                _ = dvui.label(@src(), "Checking…", .{}, .{ .id_extra = 2511, .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .gravity_y = 0.5 });
                 components.pollRefresh(100_000);
             } else if (dvui.button(@src(), "Check for Updates", .{}, .{
                 .id_extra = 2512,
-                .color_fill = btn_inactive,
-                .color_text = theme.colors.text_primary,
+                .color_fill = @import("color_compat.zig").wrap(btn_inactive),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-                .corner_radius = theme.dims.rad_md,
+                .corners = theme.dims.rad_md,
             })) {
                 updater.checkAsync();
             }
@@ -1411,18 +1411,18 @@ fn renderAboutTab() void {
         {
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 2520, .expand = .horizontal });
             defer row.deinit();
-            _ = dvui.label(@src(), "Welcome guide", .{}, .{ .id_extra = 2521, .color_text = labelText(), .gravity_y = 0.5 });
+            _ = dvui.label(@src(), "Welcome guide", .{}, .{ .id_extra = 2521, .color_text = @import("color_compat.zig").wrap(labelText()), .gravity_y = 0.5 });
             {
                 var spacer = dvui.box(@src(), .{}, .{ .id_extra = 2522, .expand = .horizontal });
                 spacer.deinit();
             }
             if (dvui.button(@src(), "Replay Guide", .{}, .{
                 .id_extra = 2523,
-                .color_fill = btn_inactive,
-                .color_text = theme.colors.text_primary,
+                .color_fill = @import("color_compat.zig").wrap(btn_inactive),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-                .corner_radius = theme.dims.rad_md,
+                .corners = theme.dims.rad_md,
             })) {
                 @import("onboarding.zig").replay();
             }
@@ -1431,7 +1431,7 @@ fn renderAboutTab() void {
         // Credits line — who built it, under what terms.
         _ = dvui.label(@src(), "Crafted by Palash Deb (@debpalash) · free and open source, GPL-3.0", .{}, .{
             .id_extra = 2530,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
         });
 
@@ -1453,7 +1453,7 @@ fn renderAboutTab() void {
         // upsell. Donations above are the whole business model.
         _ = dvui.label(@src(), "Sponsors keep Opal independent — every Ko-fi and PayPal donation funds development directly.", .{}, .{
             .id_extra = 2545,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
         });
 
@@ -1461,11 +1461,11 @@ fn renderAboutTab() void {
         components.divider();
         _ = dvui.label(@src(), "Built with Zig · dvui · mpv · SDL2 · libtorrent · SQLite + sqlite-vec · ONNX Runtime · whisper.cpp", .{}, .{
             .id_extra = 2546,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         });
         _ = dvui.label(@src(), "Catalog feeds from Cinemeta. Optional metadata from TMDB — this product uses the TMDB API but is not endorsed or certified by TMDB.", .{}, .{
             .id_extra = 2547,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.xs },
         });
 
@@ -1474,41 +1474,41 @@ fn renderAboutTab() void {
             components.divider();
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
             defer row.deinit();
-            _ = dvui.label(@src(), "Latest", .{}, .{ .color_text = labelText(), .gravity_y = 0.5 });
-            _ = dvui.label(@src(), "  v{s}", .{update.latestTag()}, .{ .id_extra = 2520, .color_text = theme.colors.success, .gravity_y = 0.5 });
+            _ = dvui.label(@src(), "Latest", .{}, .{ .color_text = @import("color_compat.zig").wrap(labelText()), .gravity_y = 0.5 });
+            _ = dvui.label(@src(), "  v{s}", .{update.latestTag()}, .{ .id_extra = 2520, .color_text = @import("color_compat.zig").wrap(theme.colors.success), .gravity_y = 0.5 });
             {
                 var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
                 spacer.deinit();
             }
             if (update.is_downloading) {
                 components.pollRefresh(100_000);
-                _ = dvui.label(@src(), "Downloading…", .{}, .{ .id_extra = 2521, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+                _ = dvui.label(@src(), "Downloading…", .{}, .{ .id_extra = 2521, .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .gravity_y = 0.5 });
             } else if (@import("builtin").os.tag != .macos) {
-                _ = dvui.label(@src(), "Update using your package manager or the release download", .{}, .{ .color_text = theme.colors.text_secondary });
+                _ = dvui.label(@src(), "Update using your package manager or the release download", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary) });
             } else if (update.dl_url_len > 0) {
                 if (dvui.button(@src(), "Download & Open Installer", .{}, .{
                     .id_extra = 2522,
-                    .color_fill = btn_active,
-                    .color_text = btn_text_active,
+                    .color_fill = @import("color_compat.zig").wrap(btn_active),
+                    .color_text = @import("color_compat.zig").wrap(btn_text_active),
                     .border = dvui.Rect.all(0),
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-                    .corner_radius = theme.dims.rad_md,
+                    .corners = theme.dims.rad_md,
                 })) {
                     updater.downloadAndOpenAsync();
                 }
             } else {
-                _ = dvui.label(@src(), "No .dmg asset on release", .{}, .{ .id_extra = 2523, .color_text = theme.colors.warning, .gravity_y = 0.5 });
+                _ = dvui.label(@src(), "No .dmg asset on release", .{}, .{ .id_extra = 2523, .color_text = @import("color_compat.zig").wrap(theme.colors.warning), .gravity_y = 0.5 });
             }
         } else if (update.last_check_ts > 0 and !update.is_checking) {
             components.divider();
-            _ = dvui.label(@src(), "Up to date", .{}, .{ .id_extra = 2530, .color_text = theme.colors.success });
+            _ = dvui.label(@src(), "Up to date", .{}, .{ .id_extra = 2530, .color_text = @import("color_compat.zig").wrap(theme.colors.success) });
         }
 
         if (update.last_error_len > 0) {
-            _ = dvui.label(@src(), "  {s}", .{update.lastError()}, .{ .id_extra = 2540, .color_text = theme.colors.warning, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
+            _ = dvui.label(@src(), "  {s}", .{update.lastError()}, .{ .id_extra = 2540, .color_text = @import("color_compat.zig").wrap(theme.colors.warning), .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
         }
         if (@import("builtin").os.tag == .macos and update.has_update) {
-            _ = dvui.label(@src(), "Update operation: curl -L --fail to a temporary DMG › SHA-256 verification › open in Finder.", .{}, .{ .color_text = theme.colors.text_tertiary });
+            _ = dvui.label(@src(), "Update operation: curl -L --fail to a temporary DMG › SHA-256 verification › open in Finder.", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary) });
         }
     }
 }
@@ -1623,7 +1623,7 @@ fn renderPlaybackTab() void {
             state.app.eq_preset = clicked;
             // Same spec that player.zig replays at init (shared av_pure mapping).
             var eq_buf: [96]u8 = undefined;
-            const eq_cmd = std.fmt.bufPrintZ(&eq_buf, "af set \"{s}\"", .{av_pure.eqFilterSpec(clicked)}) catch "af set \"\"";
+            const eq_cmd = @import("opal-fmt").bufPrintZ(&eq_buf, "af set \"{s}\"", .{av_pure.eqFilterSpec(clicked)}) catch "af set \"\"";
             for (state.app.players.items) |p| {
                 _ = c.mpv.mpv_command_string(p.mpv_ctx, eq_cmd.ptr);
             }
@@ -1698,12 +1698,12 @@ fn renderPlaybackTab() void {
                 if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(d.label()), .{}, .{
                     .id_extra = di + 3300,
                     .expand = .horizontal,
-                    .color_fill = if (is_cur) btn_inactive else theme.transparent,
-                    .color_text = if (is_cur) theme.colors.accent else labelText(),
-                    .color_fill_hover = theme.colors.bg_hover,
-                    .color_fill_press = theme.colors.bg_elevated,
+                    .color_fill = @import("color_compat.zig").wrap(if (is_cur) btn_inactive else theme.transparent),
+                    .color_text = @import("color_compat.zig").wrap(if (is_cur) theme.colors.accent else labelText()),
+                    .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+                    .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
                     .border = dvui.Rect.all(0),
-                    .corner_radius = theme.dims.rad_sm,
+                    .corners = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
                     .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
                 })) {
@@ -1725,10 +1725,10 @@ fn renderPlaybackTab() void {
                 }
             }
             if (Cache.count == 0) {
-                _ = dvui.label(@src(), "No output devices reported yet.", .{}, .{ .id_extra = 3390, .color_text = mutedText() });
+                _ = dvui.label(@src(), "No output devices reported yet.", .{}, .{ .id_extra = 3390, .color_text = @import("color_compat.zig").wrap(mutedText()) });
             }
         } else {
-            _ = dvui.label(@src(), "Open a player to pick an output device.", .{}, .{ .id_extra = 3391, .color_text = mutedText() });
+            _ = dvui.label(@src(), "Open a player to pick an output device.", .{}, .{ .id_extra = 3391, .color_text = @import("color_compat.zig").wrap(mutedText()) });
         }
     }
 
@@ -1751,17 +1751,17 @@ fn renderPlaybackTab() void {
     {
         const ytdlp = @import("../services/ytdlp.zig");
         ytdlp.ensureVersion(); // kick a one-shot background `--version` query
-        const btn_opts = dvui.Options{ .color_fill = btn_inactive, .color_text = theme.colors.accent, .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md };
+        const btn_opts = dvui.Options{ .color_fill = @import("color_compat.zig").wrap(btn_inactive), .color_text = @import("color_compat.zig").wrap(theme.colors.accent), .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corners = theme.dims.rad_md };
 
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer row.deinit();
-        _ = dvui.label(@src(), "yt-dlp", .{}, .{ .color_text = labelText(), .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "yt-dlp", .{}, .{ .color_text = @import("color_compat.zig").wrap(labelText()), .gravity_y = 0.5 });
 
         // Version (when resolved).
         if (ytdlp.versionReady() and ytdlp.versionString().len > 0) {
             var vb: [40]u8 = undefined;
             const v = std.fmt.bufPrint(&vb, "v{s}", .{ytdlp.versionString()}) catch "";
-            _ = dvui.label(@src(), "{s}", .{v}, .{ .id_extra = 2903, .color_text = theme.colors.text_tertiary, .gravity_y = 0.5, .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 } });
+            _ = dvui.label(@src(), "{s}", .{v}, .{ .id_extra = 2903, .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary), .gravity_y = 0.5, .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 } });
         }
 
         {
@@ -1787,7 +1787,7 @@ fn renderPlaybackTab() void {
             }
         } else {
             components.statusPill("Not installed", .warn);
-            if (dvui.button(@src(), "Download", .{}, .{ .id_extra = 2902, .color_fill = btn_active, .color_text = btn_text_active, .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md })) {
+            if (dvui.button(@src(), "Download", .{}, .{ .id_extra = 2902, .color_fill = @import("color_compat.zig").wrap(btn_active), .color_text = @import("color_compat.zig").wrap(btn_text_active), .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corners = theme.dims.rad_md })) {
                 ytdlp.ensureAvailable();
             }
         }
@@ -1797,19 +1797,19 @@ fn renderPlaybackTab() void {
         const ytdlp = @import("../services/ytdlp.zig");
         _ = dvui.label(@src(), "{s}", .{ytdlp.binary()}, .{
             .id_extra = 2910,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
     }
-    _ = dvui.label(@src(), "Install operation: HTTPS curl to staged file › SHA-256 verification › --version probe › publish.", .{}, .{ .color_text = theme.colors.text_tertiary });
+    _ = dvui.label(@src(), "Install operation: HTTPS curl to staged file › SHA-256 verification › --version probe › publish.", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary) });
 
     // ── Keyboard Shortcuts ── (quiet text, no card chrome)
     sectionHeader("Keyboard Shortcuts", "", 21, @src());
     {
-        _ = dvui.label(@src(), "Space=Pause  Arrows=Seek  Up/Down=Vol  M=Mute", .{}, .{ .id_extra = 2100, .color_text = mutedText() });
-        _ = dvui.label(@src(), "+/-=Zoom  0=Reset  Shift+Arrows=Pan", .{}, .{ .id_extra = 2101, .color_text = mutedText() });
-        _ = dvui.label(@src(), "V=Subs  K=SubDelay  Ctrl+=/-=AudioDelay  []=Speed  L=Loop  R=Rotate  T=Flip", .{}, .{ .id_extra = 2102, .color_text = mutedText() });
-        _ = dvui.label(@src(), "A=AI  D=Drawer/Library  Shift+I=Shortcuts  Ctrl+I=Info  Ctrl+O=Open  Ctrl+Q=Quit", .{}, .{ .id_extra = 2103, .color_text = mutedText() });
+        _ = dvui.label(@src(), "Space=Pause  Arrows=Seek  Up/Down=Vol  M=Mute", .{}, .{ .id_extra = 2100, .color_text = @import("color_compat.zig").wrap(mutedText()) });
+        _ = dvui.label(@src(), "+/-=Zoom  0=Reset  Shift+Arrows=Pan", .{}, .{ .id_extra = 2101, .color_text = @import("color_compat.zig").wrap(mutedText()) });
+        _ = dvui.label(@src(), "V=Subs  K=SubDelay  Ctrl+=/-=AudioDelay  []=Speed  L=Loop  R=Rotate  T=Flip", .{}, .{ .id_extra = 2102, .color_text = @import("color_compat.zig").wrap(mutedText()) });
+        _ = dvui.label(@src(), "A=AI  D=Drawer/Library  Shift+I=Shortcuts  Ctrl+I=Info  Ctrl+O=Open  Ctrl+Q=Quit", .{}, .{ .id_extra = 2103, .color_text = @import("color_compat.zig").wrap(mutedText()) });
     }
 
     // ── Video Filters ── (no card chrome)
@@ -1854,7 +1854,7 @@ fn renderPlaybackTab() void {
 
             _ = dvui.label(@src(), "{s}", .{f.name}, .{
                 .id_extra = f.idx + 3010,
-                .color_text = labelText(),
+                .color_text = @import("color_compat.zig").wrap(labelText()),
                 .min_size_content = .{ .w = 90, .h = 0 },
                 .gravity_y = 0.5,
             });
@@ -1862,17 +1862,17 @@ fn renderPlaybackTab() void {
             // "−" button
             if (dvui.button(@src(), "−", .{}, .{
                 .id_extra = f.idx + 3020,
-                .color_fill = btn_inactive,
-                .color_text = mutedText(),
+                .color_fill = @import("color_compat.zig").wrap(btn_inactive),
+                .color_text = @import("color_compat.zig").wrap(mutedText()),
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
                 .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 2, .h = 0 },
             })) {
                 const fld = VF.field(f.idx);
                 fld.* = av_pure.clampVideoFilter(fld.* - 5);
                 var cmd_buf: [64]u8 = undefined;
-                if (std.fmt.bufPrintZ(&cmd_buf, "set {s} {d}", .{ f.prop, fld.* })) |cmd| {
+                if (@import("opal-fmt").bufPrintZ(&cmd_buf, "set {s} {d}", .{ f.prop, fld.* })) |cmd| {
                     if (state.app.active_player_idx < state.app.players.items.len) {
                         _ = c.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, cmd.ptr);
                     }
@@ -1901,10 +1901,10 @@ fn renderPlaybackTab() void {
                 }
                 const val = FilterCache.vals[f.idx];
                 var val_buf: [12]u8 = undefined;
-                const val_str = std.fmt.bufPrintZ(&val_buf, "{d}", .{val}) catch "0";
+                const val_str = @import("opal-fmt").bufPrintZ(&val_buf, "{d}", .{val}) catch "0";
                 _ = dvui.label(@src(), "{s}", .{val_str}, .{
                     .id_extra = f.idx + 3030,
-                    .color_text = theme.colors.text_primary,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                     .min_size_content = .{ .w = 30, .h = 0 },
                     .gravity_x = 0.5,
                     .gravity_y = 0.5,
@@ -1914,17 +1914,17 @@ fn renderPlaybackTab() void {
             // "+" button
             if (dvui.button(@src(), "+", .{}, .{
                 .id_extra = f.idx + 3040,
-                .color_fill = btn_inactive,
-                .color_text = mutedText(),
+                .color_fill = @import("color_compat.zig").wrap(btn_inactive),
+                .color_text = @import("color_compat.zig").wrap(mutedText()),
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
                 .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
             })) {
                 const fld = VF.field(f.idx);
                 fld.* = av_pure.clampVideoFilter(fld.* + 5);
                 var cmd_buf: [64]u8 = undefined;
-                if (std.fmt.bufPrintZ(&cmd_buf, "set {s} {d}", .{ f.prop, fld.* })) |cmd| {
+                if (@import("opal-fmt").bufPrintZ(&cmd_buf, "set {s} {d}", .{ f.prop, fld.* })) |cmd| {
                     if (state.app.active_player_idx < state.app.players.items.len) {
                         _ = c.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, cmd.ptr);
                     }
@@ -1937,11 +1937,11 @@ fn renderPlaybackTab() void {
         components.divider();
         if (dvui.button(@src(), "Reset All Filters", .{}, .{
             .id_extra = 3099,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.danger,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.danger),
             .border = dvui.Rect.all(0),
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-            .corner_radius = theme.dims.rad_md,
+            .corners = theme.dims.rad_md,
         })) {
             state.app.vf_brightness = 0;
             state.app.vf_contrast = 0;
@@ -1970,11 +1970,11 @@ fn renderPlaybackTab() void {
         // Screenshot button — the single primary action.
         if (dvui.button(@src(), "Screenshot (P)", .{}, .{
             .id_extra = 3200,
-            .color_fill = btn_active,
-            .color_text = btn_text_active,
+            .color_fill = @import("color_compat.zig").wrap(btn_active),
+            .color_text = @import("color_compat.zig").wrap(btn_text_active),
             .border = dvui.Rect.all(0),
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
-            .corner_radius = theme.dims.rad_md,
+            .corners = theme.dims.rad_md,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         })) {
             if (state.app.active_player_idx < state.app.players.items.len) {
@@ -1986,11 +1986,11 @@ fn renderPlaybackTab() void {
         // Screenshot without subs
         if (dvui.button(@src(), "Screenshot (no subs)", .{}, .{
             .id_extra = 3201,
-            .color_fill = btn_inactive,
-            .color_text = mutedText(),
+            .color_fill = @import("color_compat.zig").wrap(btn_inactive),
+            .color_text = @import("color_compat.zig").wrap(mutedText()),
             .border = dvui.Rect.all(0),
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
-            .corner_radius = theme.dims.rad_md,
+            .corners = theme.dims.rad_md,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         })) {
             if (state.app.active_player_idx < state.app.players.items.len) {
@@ -2009,11 +2009,11 @@ fn renderPlaybackTab() void {
             const clip_label = if (has_loop) "Export Clip" else "Clip (L › set loop)";
             if (dvui.button(@src(), clip_label, .{}, .{
                 .id_extra = 3202,
-                .color_fill = if (has_loop) btn_active else btn_inactive,
-                .color_text = if (has_loop) btn_text_active else mutedText(),
+                .color_fill = @import("color_compat.zig").wrap(if (has_loop) btn_active else btn_inactive),
+                .color_text = @import("color_compat.zig").wrap(if (has_loop) btn_text_active else mutedText()),
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
-                .corner_radius = theme.dims.rad_md,
+                .corners = theme.dims.rad_md,
             })) {
                 if (state.app.active_player_idx < state.app.players.items.len) {
                     state.app.players.items[state.app.active_player_idx].exportClip();
@@ -2045,7 +2045,7 @@ fn renderNetworkTab() void {
                 state.applyTorrentStorageIfReady();
                 state.markConfigDirty();
             }
-            _ = dvui.label(@src(), "Older data is discarded. Seeking back may buffer again. Player memory is additional; the OS may swap RAM to disk.", .{}, .{ .color_text = theme.colors.text_tertiary });
+            _ = dvui.label(@src(), "Older data is discarded. Seeking back may buffer again. Player memory is additional; the OS may swap RAM to disk.", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary) });
         }
     }
 
@@ -2096,16 +2096,16 @@ fn renderNetworkTab() void {
             dvui.labelNoFmt(@src(), if (browser.engineReady(browser.active_engine)) "Installed" else "Not installed", .{}, .{
                 .id_extra = 3302,
                 .expand = .horizontal,
-                .color_text = if (browser.engineReady(browser.active_engine)) theme.colors.accent else theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(if (browser.engineReady(browser.active_engine)) theme.colors.accent else theme.colors.text_secondary),
                 .gravity_y = 0.5,
             });
             if (!browser.engineReady(browser.active_engine)) {
                 if (dvui.button(@src(), "Install", .{}, .{
                     .id_extra = 3303,
                     .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
-                    .color_fill = theme.colors.accent,
-                    .color_text = theme.colors.text_on_accent,
-                    .corner_radius = theme.dims.rad_sm,
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
+                    .corners = theme.dims.rad_sm,
                     .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
                 })) {
                     browser.installEngine();
@@ -2119,7 +2119,7 @@ fn renderNetworkTab() void {
                 .failed => "Failed · see Logs",
                 .done => "Completed",
                 .idle => unreachable,
-            }}, .{ .color_text = if (install_state == .failed) theme.colors.danger else theme.colors.text_secondary });
+            }}, .{ .color_text = @import("color_compat.zig").wrap(if (install_state == .failed) theme.colors.danger else theme.colors.text_secondary) });
             if (install_state == .running) components.pollRefresh(100_000);
         }
     }
@@ -2136,11 +2136,11 @@ fn renderNetworkTab() void {
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.proxy_url } }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 250, .h = 20 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_border = theme.colors.border_subtle,
-            .color_text = theme.colors.text_primary,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
         });
         const proxy_changed = te.text_changed;
         te.deinit();
@@ -2199,11 +2199,11 @@ fn renderNetworkTab() void {
             "Stopped";
         _ = dvui.label(@src(), "{s}", .{status}, .{
             .id_extra = 3400,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         });
         _ = dvui.label(@src(), "Efficacy depends on your ISP's DPI. If one mode does not unblock a site, try the other.", .{}, .{
             .id_extra = 3401,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         });
     }
 
@@ -2213,22 +2213,22 @@ fn renderNetworkTab() void {
     settingRow("Reading server (OPDS)", 34, @src());
     _ = dvui.label(@src(), "Komga · Kavita · Calibre-Web · LANraragi — manga, comics & ebooks", .{}, .{
         .id_extra = 3400,
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
     });
     {
         const opds = @import("../services/opds.zig");
         // Catalog URL
-        _ = dvui.label(@src(), "Catalog URL", .{}, .{ .id_extra = 3401, .color_text = theme.colors.text_secondary });
+        _ = dvui.label(@src(), "Catalog URL", .{}, .{ .id_extra = 3401, .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary) });
         {
             var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.opds.server_url } }, .{
                 .id_extra = 3402,
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 250, .h = 20 },
-                .color_fill = theme.colors.bg_elevated,
-                .color_border = theme.colors.border_subtle,
-                .color_text = theme.colors.text_primary,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .border = dvui.Rect.all(1),
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
             });
             const changed = te.text_changed;
             te.deinit();
@@ -2243,11 +2243,11 @@ fn renderNetworkTab() void {
                 .id_extra = 3404,
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 120, .h = 20 },
-                .color_fill = theme.colors.bg_elevated,
-                .color_border = theme.colors.border_subtle,
-                .color_text = theme.colors.text_primary,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .border = dvui.Rect.all(1),
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
             });
             const uchanged = ute.text_changed;
             ute.deinit();
@@ -2255,11 +2255,11 @@ fn renderNetworkTab() void {
                 .id_extra = 3405,
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 120, .h = 20 },
-                .color_fill = theme.colors.bg_elevated,
-                .color_border = theme.colors.border_subtle,
-                .color_text = theme.colors.text_primary,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .border = dvui.Rect.all(1),
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
                 .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
             });
             const pchanged = pte.text_changed;
@@ -2273,9 +2273,9 @@ fn renderNetworkTab() void {
             const busy = state.app.opds.is_loading.load(.acquire);
             if (dvui.button(@src(), if (busy) "Connecting…" else "Test Connection", .{}, .{
                 .id_extra = 3407,
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.text_on_accent,
-                .corner_radius = theme.dims.rad_sm,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
+                .corners = theme.dims.rad_sm,
                 .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
             }) and !busy) {
                 state.markConfigDirty();
@@ -2289,7 +2289,7 @@ fn renderNetworkTab() void {
                 "Not connected";
             _ = dvui.label(@src(), "{s}", .{status}, .{
                 .id_extra = 3408,
-                .color_text = if (state.app.opds.fetch_error) theme.colors.danger else theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(if (state.app.opds.fetch_error) theme.colors.danger else theme.colors.text_secondary),
                 .gravity_y = 0.5,
                 .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
             });
@@ -2333,7 +2333,7 @@ fn renderAudiobookshelfSection() void {
     settingRow("Audiobookshelf Server", 40, @src());
     _ = dvui.label(@src(), "Self-hosted audiobooks/podcasts — streams straight into the player.", .{}, .{
         .id_extra = 4000,
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
     });
 
     if (state.app.abs.connected) {
@@ -2341,15 +2341,15 @@ fn renderAudiobookshelfSection() void {
         defer row.deinit();
         _ = dvui.label(@src(), "Connected: {s}", .{state.app.abs.server_url[0..state.app.abs.server_url_len]}, .{
             .id_extra = 4002,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_y = 0.5,
         });
         if (dvui.button(@src(), "Disconnect", .{}, .{
             .id_extra = 4003,
             .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
         })) abs.disconnect();
         return;
@@ -2363,17 +2363,17 @@ fn renderAudiobookshelfSection() void {
     if (state.app.abs.login_error_len > 0) {
         _ = dvui.label(@src(), "{s}", .{state.app.abs.login_error[0..state.app.abs.login_error_len]}, .{
             .id_extra = 4013,
-            .color_text = theme.colors.danger,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.danger),
         });
     }
 
     if (state.app.abs.is_loading.load(.acquire)) {
-        _ = dvui.label(@src(), "Connecting…", .{}, .{ .id_extra = 4014, .color_text = theme.colors.text_secondary });
+        _ = dvui.label(@src(), "Connecting…", .{}, .{ .id_extra = 4014, .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary) });
     } else if (dvui.button(@src(), "Test Connection", .{}, .{
         .id_extra = 4015,
-        .color_fill = theme.colors.accent,
-        .color_text = theme.colors.text_on_accent,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
         .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
     })) {
@@ -2384,7 +2384,7 @@ fn renderAudiobookshelfSection() void {
 fn absField(label: []const u8, buf: []u8, password: bool, id: usize) void {
     _ = dvui.label(@src(), "{s}", .{label}, .{
         .id_extra = id,
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .padding = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
     });
     var te = dvui.textEntry(@src(), .{
@@ -2394,11 +2394,11 @@ fn absField(label: []const u8, buf: []u8, password: bool, id: usize) void {
         .id_extra = id,
         .expand = .horizontal,
         .min_size_content = .{ .w = 250, .h = 20 },
-        .color_fill = theme.colors.bg_elevated,
-        .color_border = theme.colors.border_subtle,
-        .color_text = theme.colors.text_primary,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .border = dvui.Rect.all(1),
-        .corner_radius = theme.dims.rad_sm,
+        .corners = theme.dims.rad_sm,
     });
     te.deinit();
 }
@@ -2430,11 +2430,11 @@ fn renderSubtitlesTab() void {
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.opensub_api_key }, .placeholder = "Optional — paste API key from opensubtitles.com", .password_char = "•" }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 250, .h = 20 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_border = theme.colors.border_subtle,
-            .color_text = theme.colors.text_primary,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
         });
         const opensub_changed = te.text_changed;
         te.deinit();
@@ -2447,7 +2447,7 @@ fn renderSubtitlesTab() void {
     else
         "Add an OpenSubtitles.com key for more results (opensubtitles.com › Profile › API Consumers)."}, .{
         .id_extra = 4200,
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 8 },
     });
 
@@ -2464,11 +2464,11 @@ fn renderSubtitlesTab() void {
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.subdl_api_key }, .placeholder = "Optional — free key from subdl.com/panel/api", .password_char = "•" }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 250, .h = 20 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_border = theme.colors.border_subtle,
-            .color_text = theme.colors.text_primary,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
         });
         const subdl_changed = te.text_changed;
         te.deinit();
@@ -2480,7 +2480,7 @@ fn renderSubtitlesTab() void {
     else
         "Add a free Subdl key for a large legal DB (subdl.com › panel › API)."}, .{
         .id_extra = 4210,
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 8 },
     });
 
@@ -2522,11 +2522,11 @@ fn renderSubtitlesTab() void {
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.sub_search_buf }, .placeholder = "Movie/show name…" }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 200, .h = 20 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_border = theme.colors.border_subtle,
-            .color_text = theme.colors.text_primary,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
         });
         const enter = te.enter_pressed;
         te.deinit();
@@ -2534,25 +2534,25 @@ fn renderSubtitlesTab() void {
         // Search button — primary affordance.
         const search_clicked = dvui.button(@src(), if (engine_busy) "..." else "Search", .{}, .{
             .id_extra = 4301,
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
             .border = dvui.Rect.all(0),
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 2, .h = 0 },
-            .corner_radius = theme.dims.rad_md,
+            .corners = theme.dims.rad_md,
         });
 
         // Auto-detect from player — secondary (text-only).
         if (dvui.button(@src(), "Auto", .{}, .{
             .id_extra = 4302,
-            .color_fill = theme.transparent,
-            .color_text = theme.colors.text_secondary,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
+            .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
+            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
             .border = dvui.Rect.all(0),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
-            .corner_radius = theme.dims.rad_md,
+            .corners = theme.dims.rad_md,
         })) {
             engine_mod.searchFromActivePlayer(engine);
             if (has_key and !subs.is_searching.load(.acquire)) subs.autoSearchFromPlayer(false);
@@ -2589,7 +2589,7 @@ fn renderSubtitlesTab() void {
             });
             defer lrow.deinit();
             dvui.spinner(@src(), .{
-                .color_text = theme.colors.accent,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
                 .min_size_content = .{ .w = 12, .h = 12 },
                 .gravity_y = 0.5,
                 .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -2599,7 +2599,7 @@ fn renderSubtitlesTab() void {
                 .downloading => "Downloading subtitle…",
                 else => "Checking opensubtitles.com…",
             }}, .{
-                .color_text = theme.colors.text_tertiary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                 .gravity_y = 0.5,
             });
             components.pollRefresh(100_000);
@@ -2608,10 +2608,10 @@ fn renderSubtitlesTab() void {
         // Keyless rows — source-tagged; no key required.
         if (engine.result_count > 0) {
             var count_buf: [48]u8 = undefined;
-            const count_str = std.fmt.bufPrintZ(&count_buf, "{d} results \xC2\xB7 open providers", .{engine.result_count}) catch "results";
+            const count_str = @import("opal-fmt").bufPrintZ(&count_buf, "{d} results \xC2\xB7 open providers", .{engine.result_count}) catch "results";
             _ = dvui.label(@src(), "{s}", .{count_str}, .{
                 .id_extra = 4402,
-                .color_text = theme.colors.text_tertiary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                 .margin = .{ .x = 0, .y = 6, .w = 0, .h = 2 },
             });
 
@@ -2621,8 +2621,8 @@ fn renderSubtitlesTab() void {
                     .id_extra = ri + 4500,
                     .expand = .horizontal,
                     .background = true,
-                    .color_fill = theme.colors.bg_surface,
-                    .corner_radius = theme.dims.rad_sm,
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+                    .corners = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
                     .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
                 });
@@ -2633,7 +2633,7 @@ fn renderSubtitlesTab() void {
                 var nm_buf: [128]u8 = undefined;
                 _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(r.movie_name[0..@min(r.movie_name_len, 90)], &nm_buf)}, .{
                     .id_extra = ri + 4600,
-                    .color_text = theme.colors.text_primary,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                     .gravity_y = 0.5,
                     .expand = .horizontal,
                 });
@@ -2643,14 +2643,14 @@ fn renderSubtitlesTab() void {
                     var lb: [16]u8 = undefined;
                     _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(r.lang[0..r.lang_len], &lb)}, .{
                         .id_extra = ri + 4700,
-                        .color_text = theme.colors.text_secondary,
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                         .gravity_y = 0.5,
                         .margin = .{ .x = 6, .y = 0, .w = 4, .h = 0 },
                     });
                 }
                 _ = dvui.label(@src(), "{s}", .{engine_mod.sourceName(r.source)}, .{
                     .id_extra = ri + 4800,
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                     .gravity_y = 0.5,
                     .margin = .{ .x = 2, .y = 0, .w = 6, .h = 0 },
                 });
@@ -2658,20 +2658,20 @@ fn renderSubtitlesTab() void {
                 if (engine.loaded_idx == @as(i32, @intCast(ri))) {
                     _ = dvui.icon(@src(), "sub-loaded", icons.tvg.lucide.check, .{}, .{
                         .id_extra = ri + 4950,
-                        .color_text = theme.colors.success,
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.success),
                         .min_size_content = theme.iconSize(.xs),
                         .gravity_y = 0.5,
                         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
                     });
                     _ = dvui.label(@src(), "Loaded", .{}, .{
                         .id_extra = ri + 4900,
-                        .color_text = theme.colors.success,
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.success),
                         .gravity_y = 0.5,
                     });
                 } else if (engine.state == .downloading and engine.selected_idx == ri) {
                     dvui.spinner(@src(), .{
                         .id_extra = ri + 4900,
-                        .color_text = theme.colors.accent,
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
                         .min_size_content = .{ .w = 12, .h = 12 },
                         .gravity_y = 0.5,
                     });
@@ -2679,11 +2679,11 @@ fn renderSubtitlesTab() void {
                     // Download — accent, the single primary action per row.
                     if (dvui.button(@src(), "Get", .{}, .{
                         .id_extra = ri + 5000,
-                        .color_fill = theme.colors.accent,
-                        .color_text = theme.colors.text_on_accent,
+                        .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
                         .border = dvui.Rect.all(0),
                         .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-                        .corner_radius = theme.dims.rad_sm,
+                        .corners = theme.dims.rad_sm,
                         .gravity_y = 0.5,
                     })) {
                         engine_mod.downloadIndex(engine, ri);
@@ -2693,7 +2693,7 @@ fn renderSubtitlesTab() void {
         } else if (engine.state == .failed) {
             _ = dvui.label(@src(), "Nothing surfaced from the open providers — try a shorter title or another language.", .{}, .{
                 .id_extra = 4403,
-                .color_text = theme.colors.text_tertiary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                 .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
             });
         }
@@ -2707,7 +2707,7 @@ fn renderSubtitlesTab() void {
                 const safe_err = text_mod.safeUtf8Buf(subs.search_error[0..subs.search_error_len], &err_buf);
                 _ = dvui.label(@src(), "{s}", .{safe_err}, .{
                     .id_extra = 4400,
-                    .color_text = theme.colors.warning,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.warning),
                     .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
                 });
             }
@@ -2720,8 +2720,8 @@ fn renderSubtitlesTab() void {
                     .id_extra = ri + 5500,
                     .expand = .horizontal,
                     .background = true,
-                    .color_fill = theme.colors.bg_surface,
-                    .corner_radius = theme.dims.rad_sm,
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+                    .corners = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
                     .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
                 });
@@ -2732,7 +2732,7 @@ fn renderSubtitlesTab() void {
                     var lb: [16]u8 = undefined;
                     _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(r.language[0..r.lang_len], &lb)}, .{
                         .id_extra = ri + 5600,
-                        .color_text = theme.colors.text_secondary,
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                         .gravity_y = 0.5,
                         .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
                     });
@@ -2744,7 +2744,7 @@ fn renderSubtitlesTab() void {
                     var rel_buf: [96]u8 = undefined;
                     _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(r.release[0..show_len], &rel_buf)}, .{
                         .id_extra = ri + 5700,
-                        .color_text = theme.colors.text_primary,
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                         .gravity_y = 0.5,
                     });
                 }
@@ -2757,10 +2757,10 @@ fn renderSubtitlesTab() void {
                 // Download count — quiet metadata, no glyph.
                 if (r.download_count > 0) {
                     var dc_buf: [16]u8 = undefined;
-                    const dc_str = std.fmt.bufPrintZ(&dc_buf, "{d}", .{r.download_count}) catch "";
+                    const dc_str = @import("opal-fmt").bufPrintZ(&dc_buf, "{d}", .{r.download_count}) catch "";
                     _ = dvui.label(@src(), "{s}", .{dc_str}, .{
                         .id_extra = ri + 5800,
-                        .color_text = theme.colors.text_tertiary,
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                         .gravity_y = 0.5,
                         .margin = .{ .x = 6, .y = 0, .w = 4, .h = 0 },
                     });
@@ -2770,7 +2770,7 @@ fn renderSubtitlesTab() void {
                 if (r.hearing_impaired) {
                     _ = dvui.label(@src(), "CC", .{}, .{
                         .id_extra = ri + 5900,
-                        .color_text = theme.colors.text_tertiary,
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                         .gravity_y = 0.5,
                         .margin = .{ .x = 2, .y = 0, .w = 4, .h = 0 },
                     });
@@ -2779,11 +2779,11 @@ fn renderSubtitlesTab() void {
                 // Download button — accent, the single primary action per row.
                 if (dvui.button(@src(), if (subs.is_downloading.load(.acquire)) "..." else "Get", .{}, .{
                     .id_extra = ri + 6000,
-                    .color_fill = theme.colors.accent,
-                    .color_text = theme.colors.text_on_accent,
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
                     .border = dvui.Rect.all(0),
                     .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-                    .corner_radius = theme.dims.rad_sm,
+                    .corners = theme.dims.rad_sm,
                     .gravity_y = 0.5,
                 })) {
                     if (!subs.is_downloading.load(.acquire) and r.file_id > 0) {
@@ -2802,7 +2802,7 @@ fn renderSubtitlesTab() void {
                 const safe_err = text_mod.safeUtf8Buf(subs.subdl_error[0..subs.subdl_error_len], &err_buf);
                 _ = dvui.label(@src(), "{s}", .{safe_err}, .{
                     .id_extra = 7100,
-                    .color_text = theme.colors.warning,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.warning),
                     .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
                 });
             }
@@ -2813,8 +2813,8 @@ fn renderSubtitlesTab() void {
                     .id_extra = ri + 7200,
                     .expand = .horizontal,
                     .background = true,
-                    .color_fill = theme.colors.bg_surface,
-                    .corner_radius = theme.dims.rad_sm,
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+                    .corners = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
                     .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
                 });
@@ -2825,7 +2825,7 @@ fn renderSubtitlesTab() void {
                     var lb: [16]u8 = undefined;
                     _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(r.lang[0..r.lang_len], &lb)}, .{
                         .id_extra = ri + 7300,
-                        .color_text = theme.colors.text_secondary,
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                         .gravity_y = 0.5,
                         .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
                     });
@@ -2837,7 +2837,7 @@ fn renderSubtitlesTab() void {
                     var rel_buf: [96]u8 = undefined;
                     _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(r.release[0..show_len], &rel_buf)}, .{
                         .id_extra = ri + 7400,
-                        .color_text = theme.colors.text_primary,
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                         .gravity_y = 0.5,
                         .expand = .horizontal,
                     });
@@ -2851,11 +2851,11 @@ fn renderSubtitlesTab() void {
                 // Download button — accent, the single primary action per row.
                 if (dvui.button(@src(), if (subs.subdl_is_downloading.load(.acquire)) "..." else "Get", .{}, .{
                     .id_extra = ri + 7500,
-                    .color_fill = theme.colors.accent,
-                    .color_text = theme.colors.text_on_accent,
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
                     .border = dvui.Rect.all(0),
                     .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-                    .corner_radius = theme.dims.rad_sm,
+                    .corners = theme.dims.rad_sm,
                     .gravity_y = 0.5,
                 })) {
                     if (!subs.subdl_is_downloading.load(.acquire)) {
@@ -2878,13 +2878,13 @@ fn renderSubtitlesTab() void {
             .failed => "Not found",
         };
         _ = dvui.label(@src(), "{s}", .{status_text}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         });
     }
 
     _ = dvui.label(@src(), "Shift+J = Search subs for current video | J = Cycle tracks", .{}, .{
         .id_extra = 4201,
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         .margin = .{ .x = 0, .y = 8, .w = 0, .h = 0 },
     });
 }
@@ -2896,7 +2896,7 @@ fn renderStorageTab() void {
     {
         const path = state.app.save_path_buf[0..state.app.save_path_len];
         _ = dvui.label(@src(), "{s}", .{path}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
         });
 
@@ -2939,9 +2939,9 @@ fn renderStorageTab() void {
     {
         const watch = @import("../player/watch_history.zig");
         var count_buf: [48]u8 = undefined;
-        const count_str = std.fmt.bufPrintZ(&count_buf, "{d} entries saved", .{watch.getCount()}) catch "?";
+        const count_str = @import("opal-fmt").bufPrintZ(&count_buf, "{d} entries saved", .{watch.getCount()}) catch "?";
         _ = dvui.label(@src(), "{s}", .{count_str}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         });
 
         // Two-step confirm — a single stray click used to run DELETE FROM
@@ -2963,10 +2963,10 @@ fn renderStorageTab() void {
         // One-level undo: clearAll() snapshots into watch_history_backup.
         if (watch.backup_available) {
             if (dvui.button(@src(), "Restore last cleared history", .{}, .{
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.text_primary,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .border = dvui.Rect.all(0),
-                .corner_radius = theme.dims.rad_md,
+                .corners = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                 .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
             })) {
@@ -3021,7 +3021,7 @@ fn renderDiskUsageSection() void {
                 upure.formatBytes(usage.total_bytes, &size_buf),
             }) catch "?";
         _ = dvui.label(@src(), "{s}", .{total_str}, .{
-            .color_text = if (busy) theme.colors.warning else theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(if (busy) theme.colors.warning else theme.colors.text_primary),
             .gravity_y = 0.5,
         });
         if (busy) components.pollRefresh(100_000);
@@ -3030,10 +3030,10 @@ fn renderDiskUsageSection() void {
             sp.deinit();
         }
         if (!busy and dvui.button(@src(), "Rescan", .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .border = dvui.Rect.all(0),
-            .corner_radius = theme.dims.rad_md,
+            .corners = theme.dims.rad_md,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .gravity_y = 0.5,
         })) usage.scanAsync();
@@ -3046,7 +3046,7 @@ fn renderDiskUsageSection() void {
         _ = dvui.label(@src(), "{s}", .{if (usage.scanning.load(.acquire))
             "Measuring…"
         else
-            "Nothing stored yet"}, .{ .color_text = theme.colors.text_tertiary });
+            "Nothing stored yet"}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary) });
         return;
     }
 
@@ -3064,11 +3064,11 @@ fn renderDiskUsageSection() void {
             defer col.deinit();
             _ = dvui.label(@src(), "{s}", .{e.labelStr()}, .{
                 .id_extra = i,
-                .color_text = theme.colors.text_primary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             });
             _ = dvui.label(@src(), "{s}", .{e.noteStr()}, .{
                 .id_extra = i,
-                .color_text = theme.colors.text_tertiary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             });
         }
         {
@@ -3086,7 +3086,7 @@ fn renderDiskUsageSection() void {
             }) catch "?";
             _ = dvui.label(@src(), "{s}", .{s}, .{
                 .id_extra = i,
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                 .gravity_y = 0.5,
                 .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
             });
@@ -3103,10 +3103,10 @@ fn renderDiskUsageSection() void {
                 }
             } else if (dvui.button(@src(), "Clear", .{}, .{
                 .id_extra = i,
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.text_primary,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .border = dvui.Rect.all(0),
-                .corner_radius = theme.dims.rad_md,
+                .corners = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                 .gravity_y = 0.5,
             })) {
@@ -3120,7 +3120,7 @@ fn renderDiskUsageSection() void {
     {
         var cfg_buf: [512]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{paths.configDir(&cfg_buf)}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
         });
     }
@@ -3152,7 +3152,7 @@ fn renderCacheSection() void {
         const mb = @as(f64, @floatFromInt(bytes)) / (1024.0 * 1024.0);
         const size_str = std.fmt.bufPrint(&size_buf, "{d:.1} MB cached on disk", .{mb}) catch "?";
         _ = dvui.label(@src(), "{s}", .{size_str}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
         });
     }
@@ -3200,7 +3200,7 @@ fn renderLiveTvTab() void {
         var count_buf: [64]u8 = undefined;
         const count_str = std.fmt.bufPrint(&count_buf, "{d} channels in your catalog", .{iptv.catalogTotal()}) catch "channels";
         _ = dvui.label(@src(), "{s}", .{count_str}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_y = 0.5,
         });
         {
@@ -3209,17 +3209,17 @@ fn renderLiveTvTab() void {
         }
         if (iptv.isIngesting()) {
             _ = dvui.label(@src(), "Updating…", .{}, .{
-                .color_text = theme.colors.warning,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.warning),
                 .gravity_y = 0.5,
                 .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
             });
             components.pollRefresh(100_000);
         }
         if (dvui.button(@src(), "Refresh now", .{}, .{
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
             .border = dvui.Rect.all(0),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
             .gravity_y = 0.5,
         })) {
@@ -3230,7 +3230,7 @@ fn renderLiveTvTab() void {
 
     // Hard product invariant — surfaced, never a toggle.
     _ = dvui.label(@src(), "Adult channels are always filtered out.", .{}, .{
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
     });
 
@@ -3255,7 +3255,7 @@ fn renderLiveTvTab() void {
 
             _ = dvui.label(@src(), "{s}", .{s.name}, .{
                 .id_extra = id_base + 2,
-                .color_text = theme.colors.text_primary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             });
 
             var cbuf: [40]u8 = undefined;
@@ -3278,7 +3278,7 @@ fn renderLiveTvTab() void {
             };
             _ = dvui.label(@src(), "{s}", .{meta}, .{
                 .id_extra = id_base + 3,
-                .color_text = theme.colors.text_tertiary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                 .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
             });
         }
@@ -3291,10 +3291,10 @@ fn renderLiveTvTab() void {
         // Right: install toggle. Accent fill = installed; neutral = off.
         if (dvui.button(@src(), if (installed) "On" else "Off", .{}, .{
             .id_extra = id_base + 5,
-            .color_fill = if (installed) theme.colors.accent else theme.colors.bg_elevated,
-            .color_text = if (installed) theme.colors.text_on_accent else theme.colors.text_secondary,
+            .color_fill = @import("color_compat.zig").wrap(if (installed) theme.colors.accent else theme.colors.bg_elevated),
+            .color_text = @import("color_compat.zig").wrap(if (installed) theme.colors.text_on_accent else theme.colors.text_secondary),
             .border = dvui.Rect.all(0),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 14, .y = 5, .w = 14, .h = 5 },
             .gravity_y = 0.5,
         })) {
@@ -3327,9 +3327,9 @@ fn renderLiveTvTab() void {
             _ = dvui.label(@src(), "{s} · {d} channels", .{ saved_name, iptv.sourceChannelCount(id) }, .{
                 .id_extra = 420 + slot,
                 .expand = .horizontal,
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             });
-            if (dvui.button(@src(), "Edit", .{}, .{ .id_extra = 440 + slot, .color_fill = theme.colors.bg_elevated })) {
+            if (dvui.button(@src(), "Edit", .{}, .{ .id_extra = 440 + slot, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated) })) {
                 @memset(&livetv_name_buf, 0);
                 @memset(&livetv_url_buf, 0);
                 @memcpy(livetv_name_buf[0..@min(saved_name.len, livetv_name_buf.len - 1)], saved_name[0..@min(saved_name.len, livetv_name_buf.len - 1)]);
@@ -3338,7 +3338,7 @@ fn renderLiveTvTab() void {
                 livetv_edit_slot = slot;
                 livetv_migrate_legacy = false;
             }
-            if (dvui.button(@src(), "Remove", .{}, .{ .id_extra = 460 + slot, .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.danger })) {
+            if (dvui.button(@src(), "Remove", .{}, .{ .id_extra = 460 + slot, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated), .color_text = @import("color_compat.zig").wrap(theme.colors.danger) })) {
                 _ = iptv.removeCustomSource(slot);
                 if (livetv_edit_slot == slot) livetv_edit_slot = null;
                 state.showToast("Removed custom playlist");
@@ -3362,9 +3362,9 @@ fn renderLiveTvTab() void {
         var name_entry = dvui.textEntry(@src(), .{ .text = .{ .buffer = &livetv_name_buf }, .placeholder = "Playlist name" }, .{
             .id_extra = 299,
             .expand = .horizontal,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
+            .corners = theme.dims.rad_sm,
         });
         name_entry.deinit();
 
@@ -3373,11 +3373,11 @@ fn renderLiveTvTab() void {
                 .id_extra = 300,
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 250, .h = 20 },
-                .color_fill = theme.colors.bg_elevated,
-                .color_border = theme.colors.border_subtle,
-                .color_text = theme.colors.text_primary,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .border = dvui.Rect.all(1),
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
             });
             te.deinit();
         }
@@ -3399,10 +3399,10 @@ fn renderLiveTvTab() void {
 
         if (dvui.button(@src(), if (livetv_edit_slot != null) "Save changes" else "Add playlist", .{}, .{
             .id_extra = 302,
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
             .border = dvui.Rect.all(0),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
         })) {
             const raw = livetv_url_buf[0 .. std.mem.indexOfScalar(u8, &livetv_url_buf, 0) orelse livetv_url_buf.len];
@@ -3423,10 +3423,10 @@ fn renderLiveTvTab() void {
         }
         if (dvui.button(@src(), "Cancel", .{}, .{
             .id_extra = 303,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .border = dvui.Rect.all(0),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
             .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
         })) {
@@ -3475,7 +3475,7 @@ fn renderLangLearnTab() void {
                     _ = c.mpv.mpv_command_string(p.mpv_ctx, "set sid no");
                     state.app.subtitles_enabled = false;
                 } else {
-                    if (std.fmt.bufPrintZ(&cmd_buf, "set sid {d}", .{clicked})) |cmd| {
+                    if (@import("opal-fmt").bufPrintZ(&cmd_buf, "set sid {d}", .{clicked})) |cmd| {
                         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
                     } else |_| {}
                     _ = c.mpv.mpv_command_string(p.mpv_ctx, "set sub-visibility yes");
@@ -3484,7 +3484,7 @@ fn renderLangLearnTab() void {
                 state.markConfigDirty();
             }
         } else {
-            _ = dvui.label(@src(), "No active player", .{}, .{ .color_text = theme.colors.text_tertiary });
+            _ = dvui.label(@src(), "No active player", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary) });
         }
     }
 
@@ -3536,20 +3536,20 @@ fn renderLangLearnTab() void {
         const lang_learn = @import("../services/lang_learn.zig");
         if (!state.app.tts_server_ok) {
             if (dvui.button(@src(), "Start Server", .{}, .{
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.text_on_accent,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
                 .border = dvui.Rect.all(0),
-                .corner_radius = theme.dims.rad_md,
+                .corners = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             })) {
                 lang_learn.startServer();
             }
         } else {
             if (dvui.button(@src(), "Stop Server", .{}, .{
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.danger,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.danger),
                 .border = dvui.Rect.all(0),
-                .corner_radius = theme.dims.rad_md,
+                .corners = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             })) {
                 lang_learn.stopServer();
@@ -3557,7 +3557,7 @@ fn renderLangLearnTab() void {
         }
     }
     _ = dvui.label(@src(), "KittenTTS (80MB) | Cohere ASR (2B) | Google Translate", .{}, .{
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
     });
 }
 
@@ -3628,7 +3628,7 @@ fn renderScriptsTab() void {
         const ai_server = @import("../services/ai_server.zig");
         if (ai_server.backend_kind == .cloud) {
             _ = dvui.label(@src(), "Provider — key from .env", .{}, .{
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                 .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.xs },
             });
             for (ai_server.CLOUD_PROVIDERS, 0..) |p, i| {
@@ -3639,8 +3639,8 @@ fn renderScriptsTab() void {
                     .id_extra = i + 400,
                     .expand = .horizontal,
                     .background = true,
-                    .color_fill = if (sel) theme.colors.bg_elevated else theme.transparent,
-                    .corner_radius = theme.dims.rad_md,
+                    .color_fill = @import("color_compat.zig").wrap(if (sel) theme.colors.bg_elevated else theme.transparent),
+                    .corners = theme.dims.rad_md,
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                     .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
                 });
@@ -3648,12 +3648,12 @@ fn renderScriptsTab() void {
 
                 var hovered = false;
                 const clicked_row = dvui.clicked(prow.data(), .{ .hovered = &hovered });
-                if (hovered and !sel) prow.data().options.color_fill = theme.colors.bg_hover;
+                if (hovered and !sel) prow.data().options.color_fill = @import("color_compat.zig").wrap(theme.colors.bg_hover);
                 prow.drawBackground();
 
                 dvui.icon(@src(), "cloud-sel", if (sel) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, .{}, .{
                     .id_extra = i + 400,
-                    .color_text = if (sel) theme.colors.accent else theme.colors.text_tertiary,
+                    .color_text = @import("color_compat.zig").wrap(if (sel) theme.colors.accent else theme.colors.text_tertiary),
                     .min_size_content = theme.iconSize(.sm),
                     .gravity_y = 0.5,
                     .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -3662,7 +3662,7 @@ fn renderScriptsTab() void {
                 const pname = std.fmt.bufPrint(&pname_buf, "{s}  ·  {s}", .{ p.name, if (sel) ai_server.cloudModel() else p.default_model }) catch p.name;
                 _ = dvui.label(@src(), "{s}", .{pname}, .{
                     .id_extra = i + 400,
-                    .color_text = if (sel) theme.colors.text_primary else theme.colors.text_secondary,
+                    .color_text = @import("color_compat.zig").wrap(if (sel) theme.colors.text_primary else theme.colors.text_secondary),
                     .gravity_y = 0.5,
                     .expand = .horizontal,
                 });
@@ -3691,7 +3691,7 @@ fn renderScriptsTab() void {
         const ai_server = @import("../services/ai_server.zig");
         if (ai_server.backend_kind == .gemma_llama) {
             _ = dvui.label(@src(), "Model — Hugging Face GGUF", .{}, .{
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                 .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.xs },
             });
             // Rows with a leading check glyph + trailing status pill — the old
@@ -3705,8 +3705,8 @@ fn renderScriptsTab() void {
                     .id_extra = i,
                     .expand = .horizontal,
                     .background = true,
-                    .color_fill = if (sel) theme.colors.bg_elevated else theme.transparent,
-                    .corner_radius = theme.dims.rad_md,
+                    .color_fill = @import("color_compat.zig").wrap(if (sel) theme.colors.bg_elevated else theme.transparent),
+                    .corners = theme.dims.rad_md,
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                     .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
                 });
@@ -3714,12 +3714,12 @@ fn renderScriptsTab() void {
 
                 var hovered = false;
                 const clicked_row = dvui.clicked(mrow.data(), .{ .hovered = &hovered });
-                if (hovered and !sel) mrow.data().options.color_fill = theme.colors.bg_hover;
+                if (hovered and !sel) mrow.data().options.color_fill = @import("color_compat.zig").wrap(theme.colors.bg_hover);
                 mrow.drawBackground();
 
                 dvui.icon(@src(), "model-sel", if (sel) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, .{}, .{
                     .id_extra = i,
-                    .color_text = if (sel) theme.colors.accent else theme.colors.text_tertiary,
+                    .color_text = @import("color_compat.zig").wrap(if (sel) theme.colors.accent else theme.colors.text_tertiary),
                     .min_size_content = theme.iconSize(.sm),
                     .gravity_y = 0.5,
                     .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -3728,7 +3728,7 @@ fn renderScriptsTab() void {
                 const name_line = std.fmt.bufPrint(&name_buf, "{s}  ·  {s}  ·  {s}", .{ m.name, m.size_label, m.note }) catch m.name;
                 _ = dvui.label(@src(), "{s}", .{name_line}, .{
                     .id_extra = i,
-                    .color_text = if (sel) theme.colors.text_primary else theme.colors.text_secondary,
+                    .color_text = @import("color_compat.zig").wrap(if (sel) theme.colors.text_primary else theme.colors.text_secondary),
                     .gravity_y = 0.5,
                     .expand = .horizontal,
                 });
@@ -3756,11 +3756,11 @@ fn renderScriptsTab() void {
         var status_buf: [64]u8 = undefined;
         const status = party.statusText(&status_buf);
         _ = dvui.label(@src(), "{s}", .{status}, .{
-            .color_text = switch (party.role) {
+            .color_text = @import("color_compat.zig").wrap(switch (party.role) {
                 .none => theme.colors.text_tertiary,
                 .host => theme.colors.accent,
                 .client => theme.colors.text_secondary,
-            },
+            }),
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
         });
 
@@ -3772,10 +3772,10 @@ fn renderScriptsTab() void {
         if (party.role == .none) {
             // Host button — primary accent action.
             if (dvui.button(@src(), "Host Party", .{}, .{
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.text_on_accent,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
                 .border = dvui.Rect.all(0),
-                .corner_radius = theme.dims.rad_md,
+                .corners = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                 .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
             })) {
@@ -3784,17 +3784,17 @@ fn renderScriptsTab() void {
 
             // Join input + button
             _ = dvui.label(@src(), "Join:", .{}, .{
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = 2, .h = theme.spacing.xs },
             });
             var host_ip_input = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.party_host_ip_buf }, .placeholder = "192.168.x.x" }, .{
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 120, .h = 20 },
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-                .color_fill = theme.colors.bg_elevated,
-                .color_border = theme.colors.border_subtle,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
                 .border = dvui.Rect.all(1),
-                .corner_radius = theme.dims.rad_md,
+                .corners = theme.dims.rad_md,
             });
             const ip_enter = host_ip_input.enter_pressed;
             host_ip_input.deinit();
@@ -3804,10 +3804,10 @@ fn renderScriptsTab() void {
             // the first keystroke, right where the user was typing.
             const join_ready = ip_len > 0;
             const clicked_join = dvui.button(@src(), "Join", .{}, .{
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = if (join_ready) theme.colors.text_primary else theme.colors.text_tertiary,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("color_compat.zig").wrap(if (join_ready) theme.colors.text_primary else theme.colors.text_tertiary),
                 .border = dvui.Rect.all(0),
-                .corner_radius = theme.dims.rad_md,
+                .corners = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                 .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
             });
@@ -3817,10 +3817,10 @@ fn renderScriptsTab() void {
         } else {
             // Leave button — danger as TEXT on a quiet fill (not a red box).
             if (dvui.button(@src(), "Leave Party", .{}, .{
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.danger,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.danger),
                 .border = dvui.Rect.all(0),
-                .corner_radius = theme.dims.rad_md,
+                .corners = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             })) {
                 party.leaveParty();
@@ -3834,7 +3834,7 @@ fn renderScriptsTab() void {
 
             _ = dvui.label(@src(), "Chat", .{}, .{
                 .id_extra = 7400,
-                .color_text = labelText(),
+                .color_text = @import("color_compat.zig").wrap(labelText()),
                 .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
             });
 
@@ -3844,8 +3844,8 @@ fn renderScriptsTab() void {
                     .id_extra = 7500,
                     .expand = .horizontal,
                     .background = true,
-                    .color_fill = theme.colors.bg_elevated,
-                    .corner_radius = theme.dims.rad_sm,
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                    .corners = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
                     .min_size_content = .{ .w = 0, .h = 80 },
                     .max_size_content = .{ .w = std.math.floatMax(f32), .h = 100 },
@@ -3861,7 +3861,7 @@ fn renderScriptsTab() void {
                     var chat_buf: [128]u8 = undefined;
                     _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(msg, &chat_buf)}, .{
                         .id_extra = ci + 7600,
-                        .color_text = if (is_sys) theme.colors.text_tertiary else theme.colors.text_primary,
+                        .color_text = @import("color_compat.zig").wrap(if (is_sys) theme.colors.text_tertiary else theme.colors.text_primary),
                     });
                 }
             }
@@ -3878,22 +3878,22 @@ fn renderScriptsTab() void {
                 var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &party.chat_input } }, .{
                     .expand = .horizontal,
                     .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-                    .color_fill = theme.colors.bg_elevated,
-                    .color_border = theme.colors.border_subtle,
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                    .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
                     .border = dvui.Rect.all(1),
-                    .corner_radius = theme.dims.rad_sm,
+                    .corners = theme.dims.rad_sm,
                 });
                 const chat_enter = te.enter_pressed;
                 te.deinit();
 
                 const clicked_send = dvui.button(@src(), "Send", .{}, .{
                     .id_extra = 7710,
-                    .color_fill = theme.colors.accent,
-                    .color_text = theme.colors.text_on_accent,
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
                     .border = dvui.Rect.all(0),
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                     .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
-                    .corner_radius = theme.dims.rad_sm,
+                    .corners = theme.dims.rad_sm,
                 });
                 if (clicked_send or chat_enter) {
                     party.sendChat();
@@ -3904,12 +3904,12 @@ fn renderScriptsTab() void {
             if (party.role == .host) {
                 if (dvui.button(@src(), "Sync Current Video to All", .{}, .{
                     .id_extra = 7720,
-                    .color_fill = theme.colors.bg_elevated,
-                    .color_text = theme.colors.text_primary,
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                     .border = dvui.Rect.all(0),
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                     .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
-                    .corner_radius = theme.dims.rad_md,
+                    .corners = theme.dims.rad_md,
                 })) {
                     if (state.app.active_player_idx < state.app.players.items.len) {
                         const p = state.app.players.items[state.app.active_player_idx];
@@ -3927,7 +3927,7 @@ fn renderScriptsTab() void {
 
     if (state.app.script_count == 0) {
         _ = dvui.label(@src(), "No scripts found in the mpv or Opal scripts folder", .{}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
         });
     } else {
@@ -3955,11 +3955,11 @@ fn renderScriptsTab() void {
             const toggle_label = if (enabled) "On" else "Off";
             if (dvui.button(@src(), toggle_label, .{}, .{
                 .id_extra = i + 7000,
-                .color_fill = if (enabled) theme.colors.bg_elevated else theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_text = if (enabled) theme.colors.accent else theme.colors.text_tertiary,
+                .color_fill = @import("color_compat.zig").wrap(if (enabled) theme.colors.bg_elevated else theme.transparent),
+                .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+                .color_text = @import("color_compat.zig").wrap(if (enabled) theme.colors.accent else theme.colors.text_tertiary),
                 .border = dvui.Rect.all(0),
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
                 .min_size_content = .{ .w = 32, .h = 0 },
                 .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
                 .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -3971,7 +3971,7 @@ fn renderScriptsTab() void {
             // Script name
             _ = dvui.labelNoFmt(@src(), name, .{}, .{
                 .id_extra = i + 7100,
-                .color_text = if (enabled) theme.colors.text_primary else theme.colors.text_tertiary,
+                .color_text = @import("color_compat.zig").wrap(if (enabled) theme.colors.text_primary else theme.colors.text_tertiary),
             });
         }
     }
@@ -3979,7 +3979,7 @@ fn renderScriptsTab() void {
     // ── Recommended Scripts ──
     settingRow("Recommended Scripts", 72, @src());
     _ = dvui.label(@src(), "One-click install popular mpv scripts", .{}, .{
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
     });
 
@@ -4013,10 +4013,10 @@ fn renderScriptsTab() void {
         if (!installed and install_state != .downloading) {
             if (dvui.button(@src(), if (install_state == .failed) "Retry" else "Install", .{}, .{
                 .id_extra = i + 8100,
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.text_on_accent,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
                 .border = dvui.Rect.all(0),
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
                 .padding = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 2 },
                 .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
             })) {
@@ -4026,24 +4026,24 @@ fn renderScriptsTab() void {
 
         _ = dvui.label(@src(), "{s}", .{rec.name}, .{
             .id_extra = i + 8200,
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
 
         _ = dvui.label(@src(), "{s}", .{rec.description}, .{
             .id_extra = i + 8300,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         });
     }
-    _ = dvui.label(@src(), "Install procedure: curl -fLsS --max-time 15 -o <Opal scripts>/<filename> <curated HTTPS URL>; failed downloads are removed. No shell or private credentials.", .{}, .{ .color_text = theme.colors.text_tertiary });
-    if (dvui.button(@src(), "View script installation logs", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.accent })) {
+    _ = dvui.label(@src(), "Install procedure: curl -fLsS --max-time 15 -o <Opal scripts>/<filename> <curated HTTPS URL>; failed downloads are removed. No shell or private credentials.", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary) });
+    if (dvui.button(@src(), "View script installation logs", .{}, .{ .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated), .color_text = @import("color_compat.zig").wrap(theme.colors.accent) })) {
         state.navigateToTab(.Logs);
     }
 
     // Info footer
     _ = dvui.label(@src(), "Scripts load on next player creation. Restart app to apply changes.", .{}, .{
         .id_extra = 8999,
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         .margin = .{ .x = 0, .y = 12, .w = 0, .h = 0 },
     });
 }
@@ -4062,8 +4062,8 @@ pub fn renderCheatSheet() void {
         .open_flag = &state.app.cheatsheet_open,
     }, .{
         .min_size_content = dialog_size,
-        .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_subtle,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
     });
     defer win.deinit();
 
@@ -4141,19 +4141,19 @@ pub fn renderCheatSheet() void {
         // Key label (fixed width feel via padding)
         _ = dvui.label(@src(), "{s}", .{sc[0]}, .{
             .id_extra = idx,
-            .color_text = theme.colors.accent,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
             .min_size_content = .{ .w = 140, .h = 0 },
         });
 
         _ = dvui.label(@src(), "{s}", .{sc[1]}, .{
             .id_extra = idx + 1000,
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         });
     }
 
     // ── AI chat keyword shortcuts ──
     _ = dvui.label(@src(), "AI Keywords (type in input)", .{}, .{
-        .color_text = theme.colors.accent,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
         .margin = .{ .y = 16 },
     });
 
@@ -4184,12 +4184,12 @@ pub fn renderCheatSheet() void {
         defer row.deinit();
         _ = dvui.label(@src(), "{s}", .{k[0]}, .{
             .id_extra = idx,
-            .color_text = theme.colors.accent,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
             .min_size_content = .{ .w = 180, .h = 0 },
         });
         _ = dvui.label(@src(), "{s}", .{k[1]}, .{
             .id_extra = idx + 6000,
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         });
     }
 }
@@ -4226,9 +4226,9 @@ pub fn renderDepsModal() void {
         .open_flag = &state.app.deps_modal_open,
     }, .{
         .min_size_content = dialog_size,
-        .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.accent,
-        .corner_radius = theme.dims.rad_xl,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.accent),
+        .corners = theme.dims.rad_xl,
     });
     defer win.deinit();
 
@@ -4250,7 +4250,7 @@ pub fn renderDepsModal() void {
     defer pad.deinit();
 
     _ = dvui.label(@src(), "Opal works best with these installed:", .{}, .{
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .margin = .{ .y = 4 },
     });
 
@@ -4294,7 +4294,7 @@ pub fn renderDepsModal() void {
         if (r.pending) {
             dvui.spinner(@src(), .{
                 .id_extra = i,
-                .color_text = theme.colors.warning,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.warning),
                 .min_size_content = .{ .w = 18, .h = 18 },
                 .gravity_y = 0.5,
                 .margin = .{ .w = 10 },
@@ -4306,7 +4306,7 @@ pub fn renderDepsModal() void {
                 icons.tvg.lucide.@"circle-x";
             _ = dvui.icon(@src(), "", icon_data, .{}, .{
                 .id_extra = i,
-                .color_text = if (r.ok) theme.colors.success else theme.colors.danger,
+                .color_text = @import("color_compat.zig").wrap(if (r.ok) theme.colors.success else theme.colors.danger),
                 .min_size_content = .{ .w = 18, .h = 18 },
                 .gravity_y = 0.5,
                 .margin = .{ .w = 10 },
@@ -4314,13 +4314,13 @@ pub fn renderDepsModal() void {
         }
         _ = dvui.label(@src(), "{s}", .{r.name}, .{
             .id_extra = i + 1000,
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .min_size_content = .{ .w = 140, .h = 0 },
             .gravity_y = 0.5,
         });
         _ = dvui.label(@src(), "{s}", .{if (r.pending) "Downloading…" else r.desc}, .{
             .id_extra = i + 2000,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_y = 0.5,
             .expand = .horizontal,
         });
@@ -4330,10 +4330,10 @@ pub fn renderDepsModal() void {
             if (std.mem.eql(u8, r.name, "sherpa STT model")) {
                 if (dvui.button(@src(), "Download", .{}, .{
                     .id_extra = i,
-                    .color_fill = theme.colors.accent,
-                    .color_text = theme.colors.text_on_accent,
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
                     .border = dvui.Rect.all(0),
-                    .corner_radius = theme.dims.rad_sm,
+                    .corners = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                     .gravity_y = 0.5,
                 })) {
@@ -4343,10 +4343,10 @@ pub fn renderDepsModal() void {
             } else if (std.mem.eql(u8, r.name, "sherpa TTS model")) {
                 if (dvui.button(@src(), "Download", .{}, .{
                     .id_extra = i,
-                    .color_fill = theme.colors.accent,
-                    .color_text = theme.colors.text_on_accent,
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
                     .border = dvui.Rect.all(0),
-                    .corner_radius = theme.dims.rad_sm,
+                    .corners = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                     .gravity_y = 0.5,
                 })) {
@@ -4356,10 +4356,10 @@ pub fn renderDepsModal() void {
             } else if (std.mem.eql(u8, r.name, "sherpa streaming")) {
                 if (dvui.button(@src(), "Download", .{}, .{
                     .id_extra = i,
-                    .color_fill = theme.colors.accent,
-                    .color_text = theme.colors.text_on_accent,
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
                     .border = dvui.Rect.all(0),
-                    .corner_radius = theme.dims.rad_sm,
+                    .corners = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                     .gravity_y = 0.5,
                 })) {
@@ -4369,10 +4369,10 @@ pub fn renderDepsModal() void {
             } else if (std.mem.eql(u8, r.name, "sherpa Kokoro")) {
                 if (dvui.button(@src(), "Download", .{}, .{
                     .id_extra = i,
-                    .color_fill = theme.colors.accent,
-                    .color_text = theme.colors.text_on_accent,
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
                     .border = dvui.Rect.all(0),
-                    .corner_radius = theme.dims.rad_sm,
+                    .corners = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                     .gravity_y = 0.5,
                 })) {
@@ -4448,20 +4448,20 @@ pub fn renderDepsModal() void {
 
                 _ = dvui.icon(@src(), "", icon_data, .{}, .{
                     .id_extra = 9000 + gi,
-                    .color_text = icon_color,
+                    .color_text = @import("color_compat.zig").wrap(icon_color),
                     .min_size_content = .{ .w = 18, .h = 18 },
                     .gravity_y = 0.5,
                     .margin = .{ .w = 10 },
                 });
                 _ = dvui.label(@src(), "{s}", .{r.name}, .{
                     .id_extra = 9100 + gi,
-                    .color_text = theme.colors.text_primary,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                     .min_size_content = .{ .w = 140, .h = 0 },
                     .gravity_y = 0.5,
                 });
                 _ = dvui.label(@src(), "{s}", .{r.desc}, .{
                     .id_extra = 9200 + gi,
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                     .gravity_y = 0.5,
                     .expand = .horizontal,
                 });
@@ -4473,10 +4473,10 @@ pub fn renderDepsModal() void {
                     };
                     if (dvui.button(@src(), btn_label, .{}, .{
                         .id_extra = 9300 + gi,
-                        .color_fill = theme.colors.accent,
-                        .color_text = theme.colors.text_on_accent,
+                        .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
                         .border = dvui.Rect.all(0),
-                        .corner_radius = theme.dims.rad_sm,
+                        .corners = theme.dims.rad_sm,
                         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                         .gravity_y = 0.5,
                     })) {
@@ -4498,10 +4498,10 @@ pub fn renderDepsModal() void {
                 const running = ai_server.server_running;
                 const btn = if (running) "Stop Gemma Server" else "Start Gemma Server";
                 if (dvui.button(@src(), btn, .{}, .{
-                    .color_fill = if (running) theme.colors.bg_elevated else theme.colors.accent,
-                    .color_text = if (running) theme.colors.danger else theme.colors.text_on_accent,
+                    .color_fill = @import("color_compat.zig").wrap(if (running) theme.colors.bg_elevated else theme.colors.accent),
+                    .color_text = @import("color_compat.zig").wrap(if (running) theme.colors.danger else theme.colors.text_on_accent),
                     .border = dvui.Rect.all(0),
-                    .corner_radius = theme.dims.rad_md,
+                    .corners = theme.dims.rad_md,
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                 })) {
                     if (running) ai_server.stopServer() else ai_server.startServer();
@@ -4515,32 +4515,32 @@ pub fn renderDepsModal() void {
     const cmd = deps.installCmd(&cmd_buf, s);
     if (cmd.len > 0 and @import("builtin").os.tag == .macos) {
         _ = dvui.label(@src(), "Install missing with Homebrew:", .{}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .margin = .{ .y = 14 },
         });
         // Code block — a single fill tier delimits it (no border).
         var code_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = theme.dims.rad_md,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .corners = theme.dims.rad_md,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
             .margin = .{ .y = 4 },
         });
         defer code_row.deinit();
 
         _ = dvui.label(@src(), "{s}", .{cmd}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .expand = .horizontal,
             .gravity_y = 0.5,
         });
 
         // Run in Terminal — launch Terminal.app with AppleScript + pre-fill command
         if (dvui.button(@src(), "Run", .{}, .{
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
             .border = dvui.Rect.all(0),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .margin = .{ .w = 4 },
             .gravity_y = 0.5,
@@ -4564,10 +4564,10 @@ pub fn renderDepsModal() void {
         }
 
         if (dvui.button(@src(), "Copy", .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .border = dvui.Rect.all(0),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .gravity_y = 0.5,
         })) {
@@ -4576,7 +4576,7 @@ pub fn renderDepsModal() void {
         }
     }
     if (@import("builtin").os.tag != .macos and (!s.ffmpeg or !s.whisper)) {
-        _ = dvui.label(@src(), "Install missing ffmpeg / whisper-cpp with your system package manager. No automatic system installer is available here.", .{}, .{ .color_text = theme.colors.text_secondary });
+        _ = dvui.label(@src(), "Install missing ffmpeg / whisper-cpp with your system package manager. No automatic system installer is available here.", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary) });
     }
     const terminal_state = TerminalLauncher.status.load(.acquire);
     if (terminal_state != .idle) {
@@ -4585,11 +4585,11 @@ pub fn renderDepsModal() void {
             .opened => "Sent to Terminal · verify installed rows above",
             .failed => "Terminal launch failed · see Logs",
             .idle => unreachable,
-        }}, .{ .color_text = if (terminal_state == .failed) theme.colors.danger else theme.colors.text_secondary });
+        }}, .{ .color_text = @import("color_compat.zig").wrap(if (terminal_state == .failed) theme.colors.danger else theme.colors.text_secondary) });
         if (terminal_state == .launching) components.pollRefresh(100_000);
     }
-    _ = dvui.label(@src(), "Model downloads: HTTPS curl › verify › extract staged archive (no shell for source plugins).", .{}, .{ .color_text = theme.colors.text_tertiary });
-    if (dvui.button(@src(), "View installation logs", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.accent })) {
+    _ = dvui.label(@src(), "Model downloads: HTTPS curl › verify › extract staged archive (no shell for source plugins).", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary) });
+    if (dvui.button(@src(), "View installation logs", .{}, .{ .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated), .color_text = @import("color_compat.zig").wrap(theme.colors.accent) })) {
         state.app.deps_modal_open = false;
         state.navigateToTab(.Logs);
     }
@@ -4602,7 +4602,7 @@ pub fn renderDepsModal() void {
     defer footer.deinit();
 
     _ = dvui.label(@src(), "Checking continuously — installs show up live.", .{}, .{
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         .gravity_y = 0.5,
     });
     {
@@ -4610,10 +4610,10 @@ pub fn renderDepsModal() void {
         sp.deinit();
     }
     if (dvui.button(@src(), "Skip for now", .{}, .{
-        .color_fill = theme.transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_fill_press = theme.colors.bg_elevated,
-        .color_text = theme.colors.text_secondary,
+        .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+        .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+        .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .border = dvui.Rect.all(0),
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
         .gravity_y = 0.5,
@@ -4637,8 +4637,8 @@ pub fn renderMediaInfo() void {
         .open_flag = &state.app.media_info_open,
     }, .{
         .min_size_content = dialog_size,
-        .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_subtle,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
     });
     defer win.deinit();
 
@@ -4669,7 +4669,7 @@ pub fn renderMediaInfo() void {
     };
     const Snap = struct {
         var bufs: [props.len][96]u8 = undefined;
-        var lens: [props.len]usize = .{0} ** props.len;
+        var lens: [props.len]usize = @splat(0);
         var last_ms: i64 = 0;
         var last_ctx: usize = 0;
     };
@@ -4706,7 +4706,7 @@ pub fn renderMediaInfo() void {
 
         _ = dvui.label(@src(), "{s}", .{prop[1]}, .{
             .id_extra = idx,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .min_size_content = .{ .w = 120, .h = 0 },
         });
 
@@ -4714,12 +4714,12 @@ pub fn renderMediaInfo() void {
             // mpv strings (filename!) are untrusted — trim to valid UTF-8.
             _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(Snap.bufs[idx][0..Snap.lens[idx]])}, .{
                 .id_extra = idx + 500,
-                .color_text = theme.colors.text_primary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             });
         } else {
             _ = dvui.label(@src(), "-", .{}, .{
                 .id_extra = idx + 500,
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             });
         }
     }
@@ -4775,7 +4775,7 @@ fn setWebUiAccountStatus(message: []const u8, ok: bool) void {
 fn webuiAccountField(label: []const u8, buf: []u8, password: bool, id: usize) bool {
     _ = dvui.label(@src(), "{s}", .{label}, .{
         .id_extra = id,
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .padding = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
     });
     var te = dvui.textEntry(@src(), .{
@@ -4785,11 +4785,11 @@ fn webuiAccountField(label: []const u8, buf: []u8, password: bool, id: usize) bo
         .id_extra = id,
         .expand = .horizontal,
         .min_size_content = .{ .w = 250, .h = 20 },
-        .color_fill = theme.colors.bg_elevated,
-        .color_border = theme.colors.border_subtle,
-        .color_text = theme.colors.text_primary,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .border = dvui.Rect.all(1),
-        .corner_radius = theme.dims.rad_sm,
+        .corners = theme.dims.rad_sm,
     });
     const submitted = te.enter_pressed;
     te.deinit();
@@ -4813,7 +4813,7 @@ fn renderPhoneQr() void {
     const remote_url = @import("../services/remote_url_pure.zig");
     const qr = @import("../core/qr_pure.zig");
     const note_opts = dvui.Options{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
     };
 
@@ -4844,7 +4844,7 @@ fn renderPhoneQr() void {
                 const pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(&webui_qr_px)))[0..n];
                 // Nearest: a QR must stay crisp; bilinear smearing between
                 // modules is exactly what makes phone cameras miss the read.
-                webui_qr_tex = dvui.textureCreate(pma, @intCast(edge), @intCast(edge), .nearest, .rgba_32) catch null;
+                webui_qr_tex = dvui.textureCreate(pma, .{ .width = @intCast(edge), .height = @intCast(edge), .interpolation = .nearest, .format = .rgba_32, .wrap_u = .clamp, .wrap_v = .clamp }) catch null;
             }
         } else |_| {}
     }
@@ -4863,7 +4863,7 @@ fn renderPhoneQr() void {
     var plain_buf: [96]u8 = undefined;
     if (remote_url.webUiLanUrl(ip, remote.port, &plain_buf)) |plain| {
         _ = dvui.label(@src(), "{s}", .{plain}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
         });
     }
@@ -4881,7 +4881,7 @@ fn renderAgentAccess() void {
     const io_g = @import("../core/io_global.zig");
 
     _ = dvui.label(@src(), "Let coding agents search, play and manage downloads through Opal. Agents connect with the opal-mcp program; it only talks to this machine unless the Web UI is shared on your network.", .{}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
     });
 
@@ -4997,7 +4997,7 @@ fn renderAgentAccess() void {
 
     if (builtin_os_linux) {
         _ = dvui.label(@src(), "Open an agent in your terminal, already connected to Opal:", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
         });
         var launch_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -5019,7 +5019,7 @@ fn renderAgentAccess() void {
     var audit_buf: [640]u8 = undefined;
     if (setup.auditLogPath(&audit_buf, paths.configDir(&cfg_buf))) |audit| {
         _ = dvui.label(@src(), "Every agent call is logged to {s}", .{audit}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
         });
         if (components.actionButton(@src(), "Copy log path", .secondary, 9304)) {
@@ -5046,12 +5046,12 @@ fn renderBrowserLink() void {
 
     components.sectionHeader("Browser");
     _ = dvui.label(@src(), "Pair your own browser with the Opal Connect extension. It finds the real stream behind a page and plays it here with the right Referer. A paired browser can only send streams to Opal; it cannot change settings, downloads or sources.", .{}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
     });
     if (!state.app.web_remote_enabled) {
         _ = dvui.label(@src(), "The extension reaches Opal through its local API: turn on \"Allow coding agents\" above first.", .{}, .{
-            .color_text = theme.colors.warning,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.warning),
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
         });
     }
@@ -5065,12 +5065,12 @@ fn renderBrowserLink() void {
         var big = dvui.themeGet().font_body;
         big.size = theme.font_size.title * 1.6;
         _ = dvui.label(@src(), "{s}", .{view.code[0..]}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .font = big,
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
         });
         _ = dvui.label(@src(), "Enter this code in the extension's setup page. Expires in {d}:{d:0>2}. Five wrong tries cancel it.", .{ @as(u32, @intCast(@divTrunc(view.remaining, 60))), @as(u32, @intCast(@mod(view.remaining, 60))) }, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
         });
     }
@@ -5114,13 +5114,13 @@ fn renderBrowserLink() void {
     const n = link.list(&rows);
     if (n == 0) {
         _ = dvui.label(@src(), "No paired browsers.", .{}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
         });
         return;
     }
     _ = dvui.label(@src(), "Paired browsers", .{}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
     });
     const now = io_g.timestamp();
@@ -5148,7 +5148,7 @@ fn renderBrowserLink() void {
         }
         _ = dvui.label(@src(), "{s} ({s}), {s}", .{ row.labelSlice(), row.browserSlice(), seen }, .{
             .id_extra = i,
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .gravity_y = 0.5,
             .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
         });
@@ -5226,7 +5226,7 @@ fn renderWebUiTab() void {
                 users, auth_store.liveSessionCount(),
             }) catch "");
         _ = dvui.label(@src(), "{s}", .{status}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
         });
 
@@ -5295,7 +5295,7 @@ fn renderWebUiTab() void {
         if (webui_account_status_len > 0) {
             _ = dvui.label(@src(), "{s}", .{webui_account_status[0..webui_account_status_len]}, .{
                 .id_extra = 9104,
-                .color_text = if (webui_account_status_ok) theme.colors.success else theme.colors.danger,
+                .color_text = @import("color_compat.zig").wrap(if (webui_account_status_ok) theme.colors.success else theme.colors.danger),
                 .margin = .{ .x = 0, .y = 2, .w = 0, .h = 8 },
             });
         }
@@ -5321,14 +5321,14 @@ fn renderWebUiTab() void {
     settingRow("API Token", 92, @src());
     {
         _ = dvui.label(@src(), "For the browser extension and automation. Rotating it breaks anything still using the old token.", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
         });
         var mask_buf: [64]u8 = undefined;
         const tok = remote.tokenHex();
         const shown = if (webui_token_revealed) tok else access.maskToken(tok, &mask_buf);
         _ = dvui.label(@src(), "{s}", .{if (shown.len > 0) shown else "unavailable"}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
         });
 
@@ -5360,7 +5360,7 @@ fn renderWebUiTab() void {
     {
         if (!webui_port_seeded) {
             webui_port_seeded = true;
-            _ = std.fmt.bufPrintZ(&webui_port_buf, "{d}", .{remote.port}) catch {};
+            _ = @import("opal-fmt").bufPrintZ(&webui_port_buf, "{d}", .{remote.port}) catch {};
         }
 
         const lan = remote.bind_mode == .lan;
@@ -5368,7 +5368,7 @@ fn renderWebUiTab() void {
             "LAN — any device on your network can reach Opal (sign-in still required)."
         else
             "This machine only — 127.0.0.1, not reachable from the network."}, .{
-            .color_text = if (lan) theme.colors.warning else theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(if (lan) theme.colors.warning else theme.colors.text_secondary),
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
         });
 
@@ -5423,7 +5423,7 @@ fn renderDeviceSyncSection() void {
     settingRow("Device Sync", 96, @src());
     _ = dvui.label(@src(), "Keep progress, favorites and ratings in step with your other Opals. Use each one's Web UI address and API token.", .{}, .{
         .id_extra = 9400,
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
     });
 
     {
@@ -5440,10 +5440,10 @@ fn renderDeviceSyncSection() void {
             .id_extra = i,
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .color_border = theme.colors.border_subtle,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
             .padding = dvui.Rect.all(theme.spacing.sm),
         });
@@ -5452,7 +5452,7 @@ fn renderDeviceSyncSection() void {
         var title_buf: [48]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{std.fmt.bufPrint(&title_buf, "Device {d}", .{i + 1}) catch "Device"}, .{
             .id_extra = base,
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         });
         const before = std.hash.Wyhash.hash(0, &p.url) ^ std.hash.Wyhash.hash(1, &p.token);
         absField("Address", &p.url, false, base + 1);
@@ -5492,12 +5492,12 @@ fn renderDeviceSyncSection() void {
         };
         _ = dvui.label(@src(), "{s}", .{last_line}, .{
             .id_extra = base + 5,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         });
         if (p.status_len > 0) {
             _ = dvui.label(@src(), "{s}", .{p.status[0..p.status_len]}, .{
                 .id_extra = base + 6,
-                .color_text = theme.colors.text_tertiary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             });
         }
     }
@@ -5526,23 +5526,23 @@ pub fn renderMusicConnection() void {
     settingRow("Music server (Subsonic)", 35, @src());
     _ = dvui.label(@src(), "Navidrome · Airsonic · Gonic · Funkwhale · Ampache — your music library", .{}, .{
         .id_extra = 3500,
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
     });
     {
         const music = @import("../services/music_subsonic.zig");
         music.prefillConfig();
         // Server URL
-        _ = dvui.label(@src(), "Server URL", .{}, .{ .id_extra = 3501, .color_text = theme.colors.text_secondary });
+        _ = dvui.label(@src(), "Server URL", .{}, .{ .id_extra = 3501, .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary) });
         {
             var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_base }, .placeholder = "http://localhost:4533" }, .{
                 .id_extra = 3502,
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 250, .h = 20 },
-                .color_fill = theme.colors.bg_elevated,
-                .color_border = theme.colors.border_subtle,
-                .color_text = theme.colors.text_primary,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .border = dvui.Rect.all(1),
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
             });
             te.deinit();
         }
@@ -5554,31 +5554,31 @@ pub fn renderMusicConnection() void {
                 .id_extra = 3504,
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 120, .h = 20 },
-                .color_fill = theme.colors.bg_elevated,
-                .color_border = theme.colors.border_subtle,
-                .color_text = theme.colors.text_primary,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .border = dvui.Rect.all(1),
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
             });
             ute.deinit();
             var pte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_pass }, .placeholder = "password", .password_char = "•" }, .{
                 .id_extra = 3505,
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 120, .h = 20 },
-                .color_fill = theme.colors.bg_elevated,
-                .color_border = theme.colors.border_subtle,
-                .color_text = theme.colors.text_primary,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .border = dvui.Rect.all(1),
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
                 .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
             });
             pte.deinit();
         }
         if (dvui.button(@src(), "Save", .{}, .{
             .id_extra = 3506,
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
         })) {
             music.saveConfig();

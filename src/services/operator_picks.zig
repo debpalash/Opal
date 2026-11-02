@@ -156,7 +156,7 @@ pub fn handle(key: []const u8, result_json: []const u8) op.Handled {
     var known: usize = 0;
     // A lookup that could not reach the catalogue (a network blip, not "no such
     // title") gets one more try after the others, instead of silently losing a pick.
-    var retry: [MAX_PICKS]bool = [_]bool{false} ** MAX_PICKS;
+    var retry: [MAX_PICKS]bool = @as([MAX_PICKS]bool, @splat(false));
     var pass: usize = 0;
     while (pass < 2) : (pass += 1) {
         if (pass == 1) {
@@ -214,13 +214,13 @@ pub fn handle(key: []const u8, result_json: []const u8) op.Handled {
 /// (The shared catalogue poster drain only knows the Browse lists, so these cards
 /// fetch their own posters.)
 pub const Rail = struct {
-    slots: [MAX_PICKS]state.TmdbItem = [_]state.TmdbItem{.{}} ** MAX_PICKS,
+    slots: [MAX_PICKS]state.TmdbItem = @as([MAX_PICKS]state.TmdbItem, @splat(.{})),
     count: usize = 0,
     imdb: [MAX_PICKS][16]u8 = undefined,
-    imdb_len: [MAX_PICKS]u8 = [_]u8{0} ** MAX_PICKS,
+    imdb_len: [MAX_PICKS]u8 = @as([MAX_PICKS]u8, @splat(0)),
     reasons: [MAX_PICKS][REASON_MAX]u8 = undefined,
-    reason_len: [MAX_PICKS]u8 = [_]u8{0} ** MAX_PICKS,
-    poster_tries: [MAX_PICKS]u8 = [_]u8{0} ** MAX_PICKS,
+    reason_len: [MAX_PICKS]u8 = @as([MAX_PICKS]u8, @splat(0)),
+    poster_tries: [MAX_PICKS]u8 = @as([MAX_PICKS]u8, @splat(0)),
 };
 
 var rail: Rail = .{};

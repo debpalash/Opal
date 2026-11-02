@@ -164,7 +164,7 @@ pub const recommended_scripts = [_]RecommendedScript{
 };
 
 pub const ScriptInstallStatus = enum { idle, downloading, installed, failed };
-var install_status: [recommended_scripts.len]ScriptInstallStatus = [_]ScriptInstallStatus{.idle} ** recommended_scripts.len;
+var install_status: [recommended_scripts.len]ScriptInstallStatus = @as([recommended_scripts.len]ScriptInstallStatus, @splat(.idle));
 var install_mutex: sync.Mutex = .{};
 
 pub fn installStatus(idx: usize) ScriptInstallStatus {

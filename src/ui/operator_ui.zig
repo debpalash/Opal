@@ -126,8 +126,8 @@ fn cardBox(src: std.builtin.SourceLocation, id_extra: usize) *dvui.BoxWidget {
         .id_extra = id_extra,
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 14, .y = 10, .w = 14, .h = 10 },
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
     });
@@ -135,7 +135,7 @@ fn cardBox(src: std.builtin.SourceLocation, id_extra: usize) *dvui.BoxWidget {
 
 fn sectionTitle(src: std.builtin.SourceLocation, text: []const u8) void {
     _ = dvui.label(src, "{s}", .{text}, .{
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .font = dvui.Font.theme(.title),
         .margin = .{ .x = 0, .y = 6, .w = 0, .h = 8 },
     });
@@ -178,9 +178,9 @@ fn renderControls() void {
     {
         var line = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 10, .w = 0, .h = 4 } });
         defer line.deinit();
-        _ = dvui.label(@src(), "Spent", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5, .min_size_content = .{ .w = 80, .h = 0 } });
+        _ = dvui.label(@src(), "Spent", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .gravity_y = 0.5, .min_size_content = .{ .w = 80, .h = 0 } });
         _ = dvui.label(@src(), "{s}", .{view.spendText(&spend_buf, spent_cents, state.app.operator_daily_cents)}, .{
-            .color_text = if (spent_cents >= state.app.operator_daily_cents) theme.colors.warning else theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(if (spent_cents >= state.app.operator_daily_cents) theme.colors.warning else theme.colors.text_primary),
             .gravity_y = 0.5,
         });
     }
@@ -191,15 +191,15 @@ fn renderControls() void {
         .expand = .horizontal,
         .min_size_content = .{ .w = 10, .h = 5 },
         .max_size_content = .{ .w = 100000, .h = 5 },
-        .color_fill = theme.colors.bg_elevated,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .corners = theme.dims.rad_sm,
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 10 },
     });
 
     {
         var line = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer line.deinit();
-        _ = dvui.label(@src(), "Daily limit", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5, .min_size_content = .{ .w = 80, .h = 0 } });
+        _ = dvui.label(@src(), "Daily limit", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .gravity_y = 0.5, .min_size_content = .{ .w = 80, .h = 0 } });
         const sel = view.limitIndex(state.app.operator_daily_cents);
         if (tasks_ui.compactSegment(@src(), &view.limit_labels, sel orelse view.limit_labels.len)) |i| {
             state.app.operator_daily_cents = view.limit_presets[i];
@@ -212,9 +212,9 @@ fn renderControls() void {
 fn renderEmpty() void {
     var card = cardBox(@src(), 0);
     defer card.deinit();
-    _ = dvui.label(@src(), "Nothing to show yet", .{}, .{ .color_text = theme.colors.text_primary });
+    _ = dvui.label(@src(), "Nothing to show yet", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary) });
     _ = dvui.label(@src(), "When the operator helps, it shows up here: the other titles it found for something on your Wanted list, and any source address it proposes that waits for your OK. Jobs and what they cost are kept for review.", .{}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .expand = .horizontal,
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
     });
@@ -223,7 +223,7 @@ fn renderEmpty() void {
     else
         "The operator is off by default. Nothing is sent to an agent until you switch it on above.";
     _ = dvui.label(@src(), "{s}", .{status}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .expand = .horizontal,
     });
 }
@@ -236,11 +236,11 @@ fn renderProposal(i: usize, now: i64) void {
     {
         var line = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer line.deinit();
-        _ = dvui.label(@src(), "{s}", .{r.title()}, .{ .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "{s}", .{r.title()}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary), .gravity_y = 0.5 });
         var agent_buf: [24]u8 = undefined;
         const agent = view.agentLabel(r.agent[0..@min(r.agent_len, r.agent.len)]);
         _ = dvui.label(@src(), "{s}", .{text_view.summaryLine(&agent_buf, agent, 20)}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_y = 0.5,
             .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
         });
@@ -252,7 +252,7 @@ fn renderProposal(i: usize, now: i64) void {
     {
         var sbuf: [SUMMARY_SHOWN]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{text_view.summaryLine(&sbuf, r.summary[0..@min(r.summary_len, r.summary.len)], SUMMARY_SHOWN)}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .expand = .horizontal,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
         });
@@ -260,7 +260,7 @@ fn renderProposal(i: usize, now: i64) void {
     {
         var tbuf: [24]u8 = undefined;
         _ = dvui.label(@src(), "Proposed {s}. Nothing changes until you approve.", .{view.relativeText(&tbuf, r.created_ms, now)}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .font = smallFont(),
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
         });
@@ -271,8 +271,8 @@ fn renderChip(st: @import("../services/operator_pure.zig").State, id_extra: usiz
     var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
         .background = true,
-        .color_fill = theme.colors.bg_elevated,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 1, .w = 8, .h = 1 },
         .gravity_y = 0.5,
         .min_size_content = .{ .w = 76, .h = 0 },
@@ -280,7 +280,7 @@ fn renderChip(st: @import("../services/operator_pure.zig").State, id_extra: usiz
     defer chip.deinit();
     _ = dvui.label(@src(), "{s}", .{view.stateLabel(st)}, .{
         .id_extra = id_extra,
-        .color_text = toneColor(view.stateTone(st)),
+        .color_text = @import("color_compat.zig").wrap(toneColor(view.stateTone(st))),
         .font = smallFont(),
         .gravity_x = 0.5,
     });
@@ -296,7 +296,7 @@ fn renderRecent(i: usize, now: i64) void {
         defer line.deinit();
         renderChip(r.state, i);
         _ = dvui.label(@src(), "{s}", .{r.title()}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .gravity_y = 0.5,
             .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
         });
@@ -315,12 +315,12 @@ fn renderRecent(i: usize, now: i64) void {
             if ((agent.len > 0 or cost.len > 0) and when.len > 0) "  |  " else "",
             when,
         }) catch when;
-        _ = dvui.label(@src(), "{s}", .{text}, .{ .color_text = theme.colors.text_secondary, .font = smallFont(), .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "{s}", .{text}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .font = smallFont(), .gravity_y = 0.5 });
     }
     if (r.summary_len > 0) {
         var sbuf: [SUMMARY_SHOWN]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{text_view.summaryLine(&sbuf, r.summary[0..@min(r.summary_len, r.summary.len)], SUMMARY_SHOWN)}, .{
-            .color_text = if (r.state == .failed) theme.colors.danger else theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(if (r.state == .failed) theme.colors.danger else theme.colors.text_primary),
             .expand = .horizontal,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
         });

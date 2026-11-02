@@ -58,9 +58,9 @@ pub fn setNativeFixtureForTest(enabled: bool) void {
 }
 
 // ── Add URL input state ──
-var add_url_buf: [512]u8 = [_]u8{0} ** 512;
+var add_url_buf: [512]u8 = @as([512]u8, @splat(0));
 var add_url_len: usize = 0;
-var add_name_buf: [64]u8 = [_]u8{0} ** 64;
+var add_name_buf: [64]u8 = @as([64]u8, @splat(0));
 var add_name_len: usize = 0;
 
 fn initDefaults() void {
@@ -265,7 +265,7 @@ fn fetchWorker(idx: usize) void {
 }
 
 fn formatSize(bytes: u64) [12]u8 {
-    var buf: [12]u8 = [_]u8{' '} ** 12;
+    var buf: [12]u8 = @as([12]u8, @splat(' '));
     if (bytes == 0) {
         @memcpy(buf[0..3], "  -");
         return buf;
@@ -273,9 +273,9 @@ fn formatSize(bytes: u64) [12]u8 {
     const mb = @as(f64, @floatFromInt(bytes)) / (1024.0 * 1024.0);
     if (mb >= 1024.0) {
         const gb = mb / 1024.0;
-        _ = std.fmt.bufPrintZ(&buf, "{d:.1} GB", .{gb}) catch {};
+        _ = @import("opal-fmt").bufPrintZ(&buf, "{d:.1} GB", .{gb}) catch {};
     } else {
-        _ = std.fmt.bufPrintZ(&buf, "{d:.0} MB", .{mb}) catch {};
+        _ = @import("opal-fmt").bufPrintZ(&buf, "{d:.0} MB", .{mb}) catch {};
     }
     return buf;
 }
@@ -297,7 +297,7 @@ pub fn renderContent() void {
     {
         var header = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 12, .y = 12, .w = 12, .h = 6 } });
         surfaces.iconTile(@src(), icons.tvg.lucide.rss, theme.colors.warning, 24);
-        dvui.labelNoFmt(@src(), "Your feeds", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = theme.colors.text_primary, .expand = .horizontal, .gravity_y = 0.5, .margin = .{ .x = 8 } });
+        dvui.labelNoFmt(@src(), "Your feeds", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = .{ .color = theme.colors.text_primary }, .expand = .horizontal, .gravity_y = 0.5, .margin = .{ .x = 8 } });
         if (feed_count < MAX_FEEDS and components.actionButton(@src(), "Add feed", .secondary, 39997)) state.app.rss_show_add = !state.app.rss_show_add;
         header.deinit();
     }
@@ -309,7 +309,7 @@ pub fn renderContent() void {
         if (bar.menu(@src(), .{ .items = menu_items[0..feed_count], .selected = active_feed_idx })) |id| fetchFeed(id);
         browse_filters.divider(@src(), 39998);
         if (is_fetching) {
-            dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.sm), .gravity_y = 0.5 });
+            dvui.spinner(@src(), .{ .color_text = .{ .color = theme.colors.accent }, .min_size_content = theme.iconSize(.sm), .gravity_y = 0.5 });
         } else if (browse_filters.item(@src(), .{ .id = 40000, .label = "Refresh feed", .icon = icons.tvg.lucide.@"refresh-cw", .enabled = feed_count > 0 })) fetchFeed(active_feed_idx);
     }
 
@@ -319,21 +319,21 @@ pub fn renderContent() void {
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
             .background = true,
-            .color_fill = theme.colors.bg_surface,
+            .color_fill = .{ .color = theme.colors.bg_surface },
         });
         defer form.deinit();
 
         _ = dvui.label(@src(), "Add RSS Feed", .{}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = .{ .color = theme.colors.text_primary },
         });
 
         // Name input
         var te_name = dvui.textEntry(@src(), .{ .text = .{ .buffer = &add_name_buf }, .placeholder = "Feed name" }, .{
             .expand = .horizontal,
             .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = theme.colors.text_primary },
+            .corners = theme.dims.rad_sm,
         });
         te_name.deinit();
 
@@ -341,9 +341,9 @@ pub fn renderContent() void {
         var te_url = dvui.textEntry(@src(), .{ .text = .{ .buffer = &add_url_buf }, .placeholder = "https://example.com/feed" }, .{
             .expand = .horizontal,
             .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = theme.colors.text_primary },
+            .corners = theme.dims.rad_sm,
         });
         const url_enter = te_url.enter_pressed;
         te_url.deinit();
@@ -355,9 +355,9 @@ pub fn renderContent() void {
         defer btn_row.deinit();
 
         const clicked_add = dvui.button(@src(), "Add", .{}, .{
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.colors.accent },
+            .color_text = .{ .color = theme.colors.text_on_accent },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
         });
         if (clicked_add or url_enter) {
@@ -372,9 +372,9 @@ pub fn renderContent() void {
         }
 
         if (dvui.button(@src(), "Cancel", .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = theme.colors.text_secondary },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
             .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
         })) {
@@ -401,9 +401,9 @@ pub fn renderContent() void {
 
     // Items list
     if (item_count == 0 and !is_fetching and !fetch_error) {
-        var welcome = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = dvui.Rect.all(24), .margin = dvui.Rect.all(12), .background = true, .color_fill = theme.colors.bg_surface, .corner_radius = theme.dims.rad_md });
+        var welcome = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = dvui.Rect.all(24), .margin = dvui.Rect.all(12), .background = true, .color_fill = .{ .color = theme.colors.bg_surface }, .corners = theme.dims.rad_md });
         surfaces.iconTile(@src(), icons.tvg.lucide.rss, theme.colors.warning, 32);
-        dvui.labelNoFmt(@src(), if (feed_count == 0) "Follow what interests you" else "This feed has no entries yet", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = theme.colors.text_primary, .margin = .{ .y = 12 } });
+        dvui.labelNoFmt(@src(), if (feed_count == 0) "Follow what interests you" else "This feed has no entries yet", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = .{ .color = theme.colors.text_primary }, .margin = .{ .y = 12 } });
         components.bodyText(@src(), "Add an RSS feed for news or releases. Open articles or play available torrents.", theme.colors.text_secondary);
         if (feed_count < MAX_FEEDS and components.actionButton(@src(), "Add a feed", .primary, 40001)) state.app.rss_show_add = true;
         welcome.deinit();
@@ -413,7 +413,7 @@ pub fn renderContent() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = .{ .color = theme.colors.bg_surface },
     });
     defer scroll.deinit();
 
@@ -433,10 +433,10 @@ pub fn renderContent() void {
             .id_extra = i,
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .color_border = theme.colors.border_subtle,
+            .color_fill = .{ .color = theme.colors.bg_surface },
+            .color_border = .{ .color = theme.colors.border_subtle },
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_md,
+            .corners = theme.dims.rad_md,
             .margin = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
             .padding = dvui.Rect.all(10),
             .min_size_content = .{ .w = 0, .h = row_h - 28 },
@@ -461,12 +461,12 @@ pub fn renderContent() void {
             _ = dvui.label(@src(), "{s}", .{title}, .{
                 .id_extra = i + 4000,
                 .padding = dvui.Rect.all(0),
-                .color_text = theme.colors.text_primary,
+                .color_text = .{ .color = theme.colors.text_primary },
                 .expand = .horizontal,
             });
 
             if (item.magnet_len == 0) {
-                dvui.labelNoFmt(@src(), if (item.date_len > 0) item.date[0..item.date_len] else "Article", .{}, .{ .padding = .{ .y = 4 }, .color_text = theme.colors.text_secondary, .font = dvui.themeGet().font_body.withSize(12) });
+                dvui.labelNoFmt(@src(), if (item.date_len > 0) item.date[0..item.date_len] else "Article", .{}, .{ .padding = .{ .y = 4 }, .color_text = .{ .color = theme.colors.text_secondary }, .font = dvui.themeGet().font_body.withSize(12) });
             }
             // Torrent availability only applies to playable releases.
             if (item.magnet_len > 0) {
@@ -480,22 +480,22 @@ pub fn renderContent() void {
                 const seed_color = if (item.seeds > 10) theme.colors.success else if (item.seeds > 0) theme.colors.warning else theme.colors.text_secondary;
                 _ = dvui.icon(@src(), "", icons.tvg.lucide.@"monitor-up", .{}, .{
                     .id_extra = i + 8000,
-                    .color_text = seed_color,
+                    .color_text = .{ .color = seed_color },
                     .min_size_content = theme.iconSize(.xs),
                 });
 
                 var seed_buf: [8]u8 = undefined;
-                const seed_str = std.fmt.bufPrintZ(&seed_buf, "{d}", .{item.seeds}) catch "?";
+                const seed_str = @import("opal-fmt").bufPrintZ(&seed_buf, "{d}", .{item.seeds}) catch "?";
                 _ = dvui.label(@src(), "{s}", .{seed_str}, .{
                     .id_extra = i + 2000,
-                    .color_text = seed_color,
+                    .color_text = .{ .color = seed_color },
                     .gravity_y = 0.5,
                     .padding = dvui.Rect.all(0),
                 });
 
                 _ = dvui.label(@src(), " · ", .{}, .{
                     .id_extra = i + 8500,
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = .{ .color = theme.colors.text_secondary },
                     .gravity_y = 0.5,
                     .padding = dvui.Rect.all(0),
                 });
@@ -503,22 +503,22 @@ pub fn renderContent() void {
                 // Peers icon
                 _ = dvui.icon(@src(), "", icons.tvg.lucide.@"monitor-down", .{}, .{
                     .id_extra = i + 9000,
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = .{ .color = theme.colors.text_secondary },
                     .min_size_content = theme.iconSize(.xs),
                 });
 
                 var peer_buf: [8]u8 = undefined;
-                const peer_str = std.fmt.bufPrintZ(&peer_buf, "{d}", .{item.peers}) catch "?";
+                const peer_str = @import("opal-fmt").bufPrintZ(&peer_buf, "{d}", .{item.peers}) catch "?";
                 _ = dvui.label(@src(), "{s}", .{peer_str}, .{
                     .id_extra = i + 9500,
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = .{ .color = theme.colors.text_secondary },
                     .gravity_y = 0.5,
                     .padding = dvui.Rect.all(0),
                 });
 
                 _ = dvui.label(@src(), " · ", .{}, .{
                     .id_extra = i + 9600,
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = .{ .color = theme.colors.text_secondary },
                     .gravity_y = 0.5,
                     .padding = dvui.Rect.all(0),
                 });
@@ -526,7 +526,7 @@ pub fn renderContent() void {
                 // Size
                 _ = dvui.label(@src(), "{s}", .{size_str}, .{
                     .id_extra = i + 5000,
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = .{ .color = theme.colors.text_secondary },
                     .gravity_y = 0.5,
                     .padding = dvui.Rect.all(0),
                 });
@@ -537,8 +537,8 @@ pub fn renderContent() void {
         if (item.magnet_len > 0) {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
                 .id_extra = i + 6000,
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.text_on_accent,
+                .color_fill = .{ .color = theme.colors.accent },
+                .color_text = .{ .color = theme.colors.text_on_accent },
                 .gravity_y = 0.5,
             })) {
                 // Route magnet through torrent engine (not mpv directly!)
@@ -557,8 +557,8 @@ pub fn renderContent() void {
             if (ctext.activePoint()) |cp| {
                 var fw = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(cp) }, .{
                     .id_extra = i + 10000,
-                    .color_fill = theme.colors.bg_surface,
-                    .color_border = theme.colors.border_subtle,
+                    .color_fill = .{ .color = theme.colors.bg_surface },
+                    .color_border = .{ .color = theme.colors.border_subtle },
                 });
                 defer fw.deinit();
 

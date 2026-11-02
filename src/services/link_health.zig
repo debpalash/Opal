@@ -55,7 +55,7 @@ const KindState = struct {
     dirty: bool = true,
 };
 
-var kinds: [MAX_KINDS]KindState = .{KindState{}} ** MAX_KINDS;
+var kinds: [MAX_KINDS]KindState = @splat(KindState{});
 var kind_count: usize = 0;
 /// Guards `kinds` / `kind_count` and every map inside them. Held across map
 /// reads/writes only — never across the curl or a thread spawn.

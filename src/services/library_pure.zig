@@ -24,7 +24,7 @@ pub const ContentKind = enum {
 };
 
 pub fn parseKind(value: []const u8) ContentKind {
-    inline for (std.meta.fields(ContentKind)) |field| {
+    inline for (comptime @import("opal-reflect").fields(ContentKind)) |field| {
         if (std.ascii.eqlIgnoreCase(value, field.name)) return @enumFromInt(field.value);
     }
     return .other;

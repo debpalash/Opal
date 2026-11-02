@@ -1289,7 +1289,7 @@ const CoverSlot = struct {
     failed: bool = false,
     url_hash: u64 = 0,
 };
-var cover_slots: [RESULTS_CAP]CoverSlot = [_]CoverSlot{.{}} ** RESULTS_CAP;
+var cover_slots: [RESULTS_CAP]CoverSlot = @as([RESULTS_CAP]CoverSlot, @splat(.{}));
 
 pub fn renderContent() void {
     var pageroot = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
@@ -1345,7 +1345,7 @@ pub fn renderContent() void {
             else => "Couldn't reach the Subsonic server — check URL + credentials",
         };
         _ = dvui.label(@src(), "{s}", .{emsg}, .{
-            .color_text = theme.colors.danger,
+            .color_text = .{ .color = theme.colors.danger },
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
         });
     }
@@ -1406,15 +1406,15 @@ pub fn renderLyricsPanel(placement: LyricsPanelPlacement) void {
         .min_size_content = if (placement == .side) .{ .w = panel_w, .h = 0 } else .{ .w = 0, .h = panel_h },
         .max_size_content = if (placement == .side) .{ .w = panel_w, .h = std.math.floatMax(f32) } else .{ .w = std.math.floatMax(f32), .h = panel_h },
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_subtle,
+        .color_fill = .{ .color = theme.colors.bg_surface },
+        .color_border = .{ .color = theme.colors.border_subtle },
         .border = if (placement == .side) .{ .x = 1, .y = 0, .w = 0, .h = 0 } else .{ .x = 0, .y = 1, .w = 0, .h = 0 },
         .padding = if (placement == .side) .{ .x = 16, .y = 12, .w = 16, .h = 12 } else .{ .x = 10, .y = 6, .w = 10, .h = 6 },
     });
     defer panel.deinit();
 
     _ = dvui.label(@src(), "Lyrics", .{}, .{
-        .color_text = theme.colors.text_tertiary,
+        .color_text = .{ .color = theme.colors.text_tertiary },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
     });
 
@@ -1442,12 +1442,12 @@ fn renderSearchBar() void {
         .expand = .horizontal,
         .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = .{ .color = theme.colors.bg_surface },
     });
     defer row.deinit();
 
     _ = dvui.icon(@src(), "", icons.tvg.lucide.music, .{}, .{
-        .color_text = theme.colors.accent,
+        .color_text = .{ .color = theme.colors.accent },
         .min_size_content = theme.iconSize(.md),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
@@ -1463,7 +1463,7 @@ fn renderSearchBar() void {
     }
     if (state.app.music.is_loading.load(.acquire)) {
         dvui.spinner(@src(), .{
-            .color_text = theme.colors.accent,
+            .color_text = .{ .color = theme.colors.accent },
             .min_size_content = theme.iconSize(.md),
             .gravity_y = 0.5,
             .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
@@ -1544,14 +1544,14 @@ fn renderCover(i: usize, song: *const pure.MusicSong, source: u8) void {
         _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
             .id_extra = i + 1000,
             .expand = .both,
-            .corner_radius = dvui.Rect.all(8),
+            .corners = dvui.CornerRect.all(8),
         });
     } else if (cover_url.len > 0 and !slot.failed) {
         components.coverSkeleton(@src(), i + 1000, 8);
     } else {
         _ = dvui.icon(@src(), "", icons.tvg.lucide.music, .{}, .{
             .id_extra = i + 1000,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .gravity_x = 0.5,
             .gravity_y = 0.5,
             .expand = .both,
@@ -1576,8 +1576,8 @@ fn renderCard(i: usize, card_w: f32, song: *const pure.MusicSong, source: u8) vo
         bw.init(@src(), .{}, .{
             .id_extra = i + 2000,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(8),
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .corners = dvui.CornerRect.all(8),
             .min_size_content = .{ .w = card_w, .h = card_w },
             .max_size_content = .{ .w = card_w, .h = card_w },
             .padding = dvui.Rect.all(0),
@@ -1596,16 +1596,16 @@ fn renderCard(i: usize, card_w: f32, song: *const pure.MusicSong, source: u8) vo
         defer nrow.deinit();
         _ = dvui.label(@src(), "{s}", .{title}, .{
             .id_extra = i + 3000,
-            .color_text = theme.colors.text_primary,
+            .color_text = .{ .color = theme.colors.text_primary },
             .expand = .horizontal,
             .gravity_y = 0.5,
             .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
         });
         if (song.download_allowed and dvui.buttonIcon(@src(), "musicdl", icons.tvg.lucide.download, .{}, .{}, .{
             .id_extra = i + 7000,
-            .color_text = theme.colors.text_tertiary,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
+            .color_text = .{ .color = theme.colors.text_tertiary },
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
             .border = dvui.Rect.all(0),
             .min_size_content = theme.iconSize(.sm),
             .padding = dvui.Rect.all(4),
@@ -1618,7 +1618,7 @@ fn renderCard(i: usize, card_w: f32, song: *const pure.MusicSong, source: u8) vo
         var a_safe: [128]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(song.artist[0..@min(song.artist_len, song.artist.len)], &a_safe)}, .{
             .id_extra = i + 4000,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .expand = .horizontal,
             .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         });
@@ -1628,7 +1628,7 @@ fn renderCard(i: usize, card_w: f32, song: *const pure.MusicSong, source: u8) vo
         _ = dvui.label(@src(), "License & attribution", .{}, .{
             .data_out = &credit_wd,
             .id_extra = i + 4100,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .font = dvui.themeGet().font_body.withSize(10),
             .expand = .horizontal,
         });
@@ -1655,7 +1655,7 @@ fn renderResults() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = .{ .color = theme.colors.bg_surface },
     });
     defer scroll.deinit();
 
@@ -1716,7 +1716,7 @@ fn renderResults() void {
         if ((near_bottom or underfilled) and !loading) loadMore();
         if (loading or underfilled) {
             dvui.spinner(@src(), .{
-                .color_text = theme.colors.accent,
+                .color_text = .{ .color = theme.colors.accent },
                 .min_size_content = theme.iconSize(.lg),
                 .gravity_x = 0.5,
                 .margin = dvui.Rect.all(12),

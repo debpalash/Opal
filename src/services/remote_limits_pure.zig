@@ -33,7 +33,7 @@ const Entry = struct {
 };
 
 pub const Limiter = struct {
-    entries: [SLOTS]Entry = [_]Entry{.{}} ** SLOTS,
+    entries: [SLOTS]Entry = @as([SLOTS]Entry, @splat(.{})),
     overflow: Entry = .{},
     global_window: Window = .{},
 };

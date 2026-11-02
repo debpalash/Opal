@@ -36,7 +36,7 @@ pub const MediaKind = enum {
     /// Reverse of `toInt`, saturating on a value from an older config or a
     /// corrupt row rather than panicking on an invalid enum tag.
     pub fn fromInt(v: u8) MediaKind {
-        const max = @typeInfo(MediaKind).@"enum".fields.len - 1;
+        const max = @typeInfo(MediaKind).@"enum".field_names.len - 1;
         return @enumFromInt(@min(v, max));
     }
 };
@@ -93,8 +93,8 @@ pub const MAX_CARDS = 6;
 pub const MIN_CARD_LEN = 40;
 
 pub const Cards = struct {
-    starts: [MAX_CARDS]usize = [_]usize{0} ** MAX_CARDS,
-    ends: [MAX_CARDS]usize = [_]usize{0} ** MAX_CARDS,
+    starts: [MAX_CARDS]usize = @as([MAX_CARDS]usize, @splat(0)),
+    ends: [MAX_CARDS]usize = @as([MAX_CARDS]usize, @splat(0)),
     count: usize = 0,
 
     pub fn slice(self: *const Cards, text: []const u8, i: usize) []const u8 {

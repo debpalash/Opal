@@ -97,7 +97,7 @@ pub fn writeSources(writer: anytype, catalog: []repo.Plugin) !void {
 }
 
 pub fn writeExecutables(writer: anytype) !void {
-    var installed: [32]plugins.Plugin = [_]plugins.Plugin{.{}} ** 32;
+    var installed: [32]plugins.Plugin = @as([32]plugins.Plugin, @splat(.{}));
     const count = plugins.snapshotInstalled(&installed);
     for (installed[0..count], 0..) |*plugin, i| {
         if (i > 0) try writer.writeAll(",");

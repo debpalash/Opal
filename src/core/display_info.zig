@@ -160,7 +160,7 @@ test "parseMode reads a sysfs modes line" {
 }
 
 test "edidSizeMm reads centimetres and rejects unusable blobs" {
-    var edid = [_]u8{0} ** 128;
+    var edid = @as([128]u8, @splat(0));
     const magic = [_]u8{ 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00 };
     @memcpy(edid[0..8], &magic);
     edid[21] = 34; // 34 cm wide
@@ -174,7 +174,7 @@ test "edidSizeMm reads centimetres and rejects unusable blobs" {
     try std.testing.expect(edidSizeMm(&edid) == null);
 
     // Not an EDID at all.
-    var junk = [_]u8{0} ** 128;
+    var junk = @as([128]u8, @splat(0));
     try std.testing.expect(edidSizeMm(&junk) == null);
     try std.testing.expect(edidSizeMm("short") == null);
 }

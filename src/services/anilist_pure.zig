@@ -29,7 +29,7 @@ pub fn browsePayload(out: []u8, page: u32, kind: BrowseKind, filter_enabled: boo
         .popular => "sort: POPULARITY_DESC",
         .upcoming => "status: NOT_YET_RELEASED, sort: POPULARITY_DESC",
     };
-    return std.fmt.bufPrintZ(out,
+    return @import("opal-fmt").bufPrintZ(out,
         \\{{"query":"query ($page: Int) {{ Page(page: $page, perPage: 25) {{ pageInfo {{ hasNextPage }} media(type: ANIME, {s}{s}) {{ id idMal averageScore title {{ romaji english }} coverImage {{ large }} episodes seasonYear description(asHtml: false) }} }} }}","variables":{{"page":{d}}}}}
     , .{ selector, adultGate(filter_enabled), page }) catch null;
 }
@@ -86,7 +86,7 @@ pub fn searchPayload(out: []u8, title: []const u8, filter_enabled: bool) ?[:0]u8
         n += extra;
     }
 
-    return std.fmt.bufPrintZ(out,
+    return @import("opal-fmt").bufPrintZ(out,
         \\{{"query":"query ($search: String) {{ Page(perPage: 25) {{ media(search: $search, type: ANIME{s}) {{ id idMal averageScore title {{ romaji english }} coverImage {{ large }} episodes seasonYear description(asHtml: false) }} }} }}","variables":{{"search":"{s}"}}}}
     , .{ adultGate(filter_enabled), escaped[0..n] }) catch null;
 }

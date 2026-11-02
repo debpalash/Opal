@@ -179,10 +179,10 @@ fn cardBox(src: std.builtin.SourceLocation, id_extra: usize) *dvui.BoxWidget {
         .id_extra = id_extra,
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = theme.dims.rad_md,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .corners = theme.dims.rad_md,
         .border = dvui.Rect.all(1),
-        .color_border = theme.colors.border_subtle,
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
         .padding = .{ .x = 14, .y = 10, .w = 14, .h = 10 },
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 10 },
     });
@@ -191,9 +191,9 @@ fn cardBox(src: std.builtin.SourceLocation, id_extra: usize) *dvui.BoxWidget {
 fn cardTitle(src: std.builtin.SourceLocation, text: []const u8, icon: []const u8) void {
     var row = dvui.box(src, .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .h = 8 } });
     defer row.deinit();
-    _ = dvui.icon(@src(), "", icon, .{}, .{ .min_size_content = theme.iconSize(.sm), .color_text = theme.colors.accent, .gravity_y = 0.5, .margin = .{ .w = 8 } });
+    _ = dvui.icon(@src(), "", icon, .{}, .{ .min_size_content = theme.iconSize(.sm), .color_text = @import("color_compat.zig").wrap(theme.colors.accent), .gravity_y = 0.5, .margin = .{ .w = 8 } });
     _ = dvui.label(src, "{s}", .{text}, .{
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
     });
 }
@@ -208,7 +208,7 @@ fn note(src: std.builtin.SourceLocation, text: []const u8, color: dvui.Color) vo
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     });
     defer tl.deinit();
-    tl.addText(text, .{ .color_text = color });
+    tl.addText(text, .{ .color_text = @import("color_compat.zig").wrap(color) });
 }
 
 fn nowSeconds() i64 {
@@ -230,7 +230,7 @@ fn renderBrowsers() void {
     defer card.deinit();
     var identity = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .h = 12 } });
     surfaces.iconTile(@src(), icons.tvg.lucide.monitor, theme.colors.accent, 30);
-    dvui.labelNoFmt(@src(), "Your browsers", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = theme.colors.text_primary, .gravity_y = 0.5, .margin = .{ .x = 10 } });
+    dvui.labelNoFmt(@src(), "Your browsers", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary), .gravity_y = 0.5, .margin = .{ .x = 10 } });
     identity.deinit();
 
     if (!state.app.web_remote_enabled) {
@@ -248,25 +248,25 @@ fn renderBrowsers() void {
         });
         defer line.deinit();
         var name_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-        if (brands.forName(row.browserSlice())) |brand| dvui.icon(@src(), row.browserSlice(), brands.icon(brand), .{}, .{ .min_size_content = theme.iconSize(.sm), .color_text = theme.colors.text_primary, .gravity_y = if (compact) 0 else 0.5, .margin = .{ .w = 8 } });
+        if (brands.forName(row.browserSlice())) |brand| dvui.icon(@src(), row.browserSlice(), brands.icon(brand), .{}, .{ .min_size_content = theme.iconSize(.sm), .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary), .gravity_y = if (compact) 0 else 0.5, .margin = .{ .w = 8 } });
         var seen_buf: [48]u8 = undefined;
         const seen = view_pure.seenText(&seen_buf, now, row.last_seen);
         const live = std.mem.eql(u8, seen, "connected");
         var name_buf: [96]u8 = undefined;
         const name = view_pure.clip(&name_buf, row.labelSlice(), if (compact) 24 else 40);
-        _ = dvui.label(@src(), "{s}", .{name}, .{ .id_extra = i, .color_text = theme.colors.text_primary, .gravity_y = if (compact) 0 else 0.5 });
+        _ = dvui.label(@src(), "{s}", .{name}, .{ .id_extra = i, .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary), .gravity_y = if (compact) 0 else 0.5 });
         name_row.deinit();
         var browser_buf: [48]u8 = undefined;
         const browser = if (compact) view_pure.clip(&browser_buf, row.browserSlice(), 14) else row.browserSlice();
         if (compact) {
             _ = dvui.label(@src(), "{s} · {s}", .{ seen, browser }, .{
                 .id_extra = i,
-                .color_text = if (live) theme.colors.success else theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(if (live) theme.colors.success else theme.colors.text_secondary),
             });
         } else {
             _ = dvui.label(@src(), "{s}, {s}", .{ browser, seen }, .{
                 .id_extra = i,
-                .color_text = if (live) theme.colors.success else theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(if (live) theme.colors.success else theme.colors.text_secondary),
                 .gravity_y = 0.5,
                 .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
             });
@@ -289,7 +289,7 @@ fn renderBrowsers() void {
         var big = dvui.themeGet().font_body;
         big.size = theme.font_size.title * 1.6;
         _ = dvui.label(@src(), "{s}", .{view.code[0..]}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .font = big,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
         });
@@ -332,12 +332,12 @@ fn renderSharedPage() void {
 
     var clip_buf: [200]u8 = undefined;
     _ = dvui.label(@src(), "{s}", .{view_pure.clip(&clip_buf, page.titleSlice(), 80)}, .{
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .min_size_content = .{ .w = 0, .h = 20 },
     });
     var where_buf: [200]u8 = undefined;
     _ = dvui.label(@src(), "{s}", .{view_pure.clip(&where_buf, page.whereSlice(), 90)}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .font = smallFont(),
     });
     var size_buf: [32]u8 = undefined;
@@ -345,7 +345,7 @@ fn renderSharedPage() void {
     note(@src(), std.fmt.bufPrint(&info_buf, "{s}. {s}", .{ view_pure.textSizeText(&size_buf, page.text_len), view_pure.agentsText(page.agents, state.app.browser_share_agents) }) catch "", theme.colors.text_tertiary);
 
     _ = dvui.label(@src(), "Title to use (edit it if the page title has extra words)", .{}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .font = smallFont(),
     });
     {
@@ -360,13 +360,13 @@ fn renderSharedPage() void {
             var placeholder = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 0, .h = components.TOOLBAR_INPUT_H },
-                .color_fill = theme.colors.bg_elevated,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
                 .background = true,
                 .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
                 .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
             });
             _ = dvui.label(@src(), "{s}", .{view_pure.clip(&clip_buf, std.mem.sliceTo(&title_buf, 0), 34)}, .{
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                 .gravity_y = 0.5,
             });
             test_title_entry_rect = placeholder.data().borderRectScale().r;
@@ -376,11 +376,11 @@ fn renderSharedPage() void {
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 0, .h = components.TOOLBAR_INPUT_H },
                 .gravity_y = 0.5,
-                .color_fill = theme.colors.bg_elevated,
-                .color_border = theme.colors.border_subtle,
-                .color_text = theme.colors.text_primary,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .border = dvui.Rect.all(1),
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
                 .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
                 .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
             });
@@ -426,14 +426,14 @@ fn renderStreams() void {
         var info = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         _ = dvui.label(@src(), "{s}", .{@tagName(c.kind)}, .{
             .id_extra = i,
-            .color_text = theme.colors.accent,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
             .gravity_y = if (compact) 0 else 0.5,
             .min_size_content = .{ .w = 44, .h = 0 },
         });
         var label_buf: [200]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{view_pure.clip(&label_buf, c.labelSlice(), if (compact) 23 else 34)}, .{
             .id_extra = i,
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .gravity_y = if (compact) 0 else 0.5,
         });
         info.deinit();
@@ -495,7 +495,7 @@ fn renderBridge() void {
         });
         defer bar.deinit();
         if (components.actionButton(@src(), "Back to the browser hub", .secondary, 31400)) show_bridge = false;
-        _ = dvui.label(@src(), "Built-in browser (advanced)", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "Built-in browser (advanced)", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .gravity_y = 0.5 });
     }
     @import("../services/browser.zig").renderContent();
 }

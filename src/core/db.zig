@@ -6,10 +6,7 @@ const ai_memory = @import("../services/ai_memory.zig");
 // SQLite3 C Bindings
 // ══════════════════════════════════════════════════════════
 
-pub const c = @cImport({
-    @cInclude("sqlite3.h");
-    @cInclude("core/sqlite/sqlite-vec.h");
-});
+pub const c = @import("opal-native-c");
 
 pub const Sqlite3 = c.sqlite3;
 pub const Stmt = c.sqlite3_stmt;
@@ -40,7 +37,7 @@ pub fn init() void {
     const db_path = paths.zigzagDbFile(&path_buf);
 
     var cpath_buf: [512]u8 = undefined;
-    const cpath = std.fmt.bufPrintZ(&cpath_buf, "{s}", .{db_path}) catch return;
+    const cpath = @import("opal-fmt").bufPrintZ(&cpath_buf, "{s}", .{db_path}) catch return;
 
     // SQLITE_OPEN_FULLMUTEX = serialized threading mode: SQLite takes its own
     // mutex on every API call, making this ONE shared connection safe to use
@@ -101,8 +98,8 @@ pub fn init() void {
 // with the writer. Each slot is used by one thread at a time (claimed with an
 // atomic swap), opened lazily, and closed in deinit after workers are drained.
 const READER_SLOTS = 8;
-var readers: [READER_SLOTS]?*Sqlite3 = .{null} ** READER_SLOTS;
-var reader_claimed: [READER_SLOTS]std.atomic.Value(bool) = .{std.atomic.Value(bool).init(false)} ** READER_SLOTS;
+var readers: [READER_SLOTS]?*Sqlite3 = @splat(null);
+var reader_claimed: [READER_SLOTS]std.atomic.Value(bool) = @splat(std.atomic.Value(bool).init(false));
 var readers_ready = std.atomic.Value(bool).init(false);
 
 pub const Reader = struct { slot: usize, handle: *Sqlite3 };
@@ -131,7 +128,7 @@ fn openReader() ?*Sqlite3 {
     var path_buf: [512]u8 = undefined;
     const db_path = paths.zigzagDbFile(&path_buf);
     var cpath_buf: [512]u8 = undefined;
-    const cpath = std.fmt.bufPrintZ(&cpath_buf, "{s}", .{db_path}) catch return null;
+    const cpath = @import("opal-fmt").bufPrintZ(&cpath_buf, "{s}", .{db_path}) catch return null;
     var handle: ?*Sqlite3 = null;
     // NOMUTEX: a slot is only ever used by the thread that claimed it.
     const flags = c.SQLITE_OPEN_READONLY | c.SQLITE_OPEN_NOMUTEX;

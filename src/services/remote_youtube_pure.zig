@@ -50,9 +50,9 @@ test "escaped YouTube snapshots fit actual bounded writer and retain thumbnails"
 }
 
 test "production row copy owns metadata and clamps bad numeric and length fields" {
-    var title = [_]u8{'a'} ** 128;
+    var title = @as([128]u8, @splat('a'));
     std.mem.doNotOptimizeAway(&title);
-    const item = .{ .video_id = [_]u8{'v'} ** 32, .video_id_len = @as(usize, 500), .title = title, .title_len = @as(usize, 500), .uploader = [_]u8{'u'} ** 64, .uploader_len = @as(usize, 500), .channel_id = [_]u8{'c'} ** 32, .channel_id_len = @as(usize, 500), .thumbnail_url = [_]u8{'t'} ** 512, .thumbnail_url_len = @as(usize, 900), .duration = @as(i64, -1), .views = @as(i64, -10) };
+    const item = .{ .video_id = @as([32]u8, @splat('v')), .video_id_len = @as(usize, 500), .title = title, .title_len = @as(usize, 500), .uploader = @as([64]u8, @splat('u')), .uploader_len = @as(usize, 500), .channel_id = @as([32]u8, @splat('c')), .channel_id_len = @as(usize, 500), .thumbnail_url = @as([512]u8, @splat('t')), .thumbnail_url_len = @as(usize, 900), .duration = @as(i64, -1), .views = @as(i64, -10) };
     const copy = Row.copy(item);
     title[0] = 'b';
     try std.testing.expectEqual(@as(u8, 'a'), copy.title[0]);

@@ -58,7 +58,7 @@ const Loaded = struct {
     filled: bool = false,
 };
 
-var loaded: [assets.len]Loaded = [_]Loaded{.{}} ** assets.len;
+var loaded: [assets.len]Loaded = @as([assets.len]Loaded, @splat(.{}));
 var loaded_mutex: sync.Mutex = .{};
 
 /// Serve an allowlisted asset. Returns false when `route` belongs to another

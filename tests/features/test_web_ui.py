@@ -355,7 +355,7 @@ def test_phone_pairing_qr():
             and 'test "Reed-Solomon: the ISO 18004 annex example' in qr,
         "setup code rides in the fragment": "#setup=" in qr and "/#setup={s}" in urls,
         "settings draws it": "fn renderPhoneQr(" in st and "renderPhoneQr();" in st
-            and "qr.paintRgba(" in st and ".nearest, .rgba_32)" in st,
+            and "qr.paintRgba(" in st and ".interpolation = .nearest, .format = .rgba_32" in st,
         "only when LAN-bound, with a hint otherwise": "remote.bind_mode != .lan" in st
             and "set Network below to LAN" in st,
         "cached per url, not per frame": "std.hash.Wyhash.hash(0, u)" in st and "webui_qr_key" in st,

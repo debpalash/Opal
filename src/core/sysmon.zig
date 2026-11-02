@@ -28,13 +28,7 @@ pub const supported = is_macos or is_linux;
 /// misleading (and merely duplicates CPU in the title bar).
 pub const energy_supported = is_macos;
 
-const mach = if (is_macos) @cImport({
-    @cInclude("mach/mach.h");
-    @cInclude("mach/mach_host.h");
-    @cInclude("mach/task_info.h");
-    @cInclude("sys/sysctl.h");
-    @cInclude("unistd.h");
-}) else struct {};
+const mach = if (is_macos) @import("opal-native-c") else struct {};
 
 pub const Snapshot = struct {
     /// Whole-machine CPU across all cores, 0-100.

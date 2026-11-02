@@ -220,7 +220,7 @@ const S = struct {
         var srv_buf: [128]u8 = undefined;
         const srv_url = server.getServerUrl(&srv_buf);
         var url_buf: [192]u8 = undefined;
-        const url = std.fmt.bufPrintZ(&url_buf, "{s}/v1/chat/completions", .{srv_url}) catch return;
+        const url = @import("opal-fmt").bufPrintZ(&url_buf, "{s}/v1/chat/completions", .{srv_url}) catch return;
 
         // ── ONE completion via the reliable-fetch seam ───────────────────────
         // Body is uploaded from the private file (post_body_file), never argv.

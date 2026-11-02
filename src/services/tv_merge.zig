@@ -18,9 +18,7 @@
 const std = @import("std");
 const pure = @import("tv_merge_pure.zig");
 
-const c = @cImport({
-    @cInclude("sqlite3.h");
-});
+const c = @import("opal-native-c");
 
 pub const Report = struct {
     merged: usize = 0,
@@ -87,7 +85,7 @@ pub fn run(handle: *anyopaque, now_ms: i64) Report {
 
 fn execf(conn: *c.sqlite3, comptime fmt: []const u8, args: anytype) bool {
     var buf: [2048]u8 = undefined;
-    const text = std.fmt.bufPrintZ(&buf, fmt, args) catch return false;
+    const text = @import("opal-fmt").bufPrintZ(&buf, fmt, args) catch return false;
     return c.sqlite3_exec(conn, text.ptr, null, null, null) == c.SQLITE_OK;
 }
 
@@ -237,7 +235,7 @@ fn seedDuplicate(conn: *c.sqlite3, synth: i32) !void {
     for (stmts) |tmpl| {
         const text = try std.mem.replaceOwned(u8, t.allocator, tmpl, "SYN", synth_text);
         defer t.allocator.free(text);
-        const z = try t.allocator.dupeZ(u8, text);
+        const z = try t.allocator.dupeSentinel(u8, text, 0);
         defer t.allocator.free(z);
         try sql(conn, z);
     }
@@ -309,9 +307,9 @@ test "merge: different IMDb ids and unrelated rows are left alone" {
     defer _ = c.sqlite3_close(conn);
     const synth_a = cm.stableId("tt0903747");
     var b: [256]u8 = undefined;
-    const ext = try std.fmt.bufPrintZ(&b, "INSERT INTO tv_external_ids VALUES({d}, 'tt0903747'), (1399, 'tt0944947')", .{synth_a});
+    const ext = try @import("opal-fmt").bufPrintZ(&b, "INSERT INTO tv_external_ids VALUES({d}, 'tt0903747'), (1399, 'tt0944947')", .{synth_a});
     try sql(conn, ext);
-    const shows = try std.fmt.bufPrintZ(&b, "INSERT INTO tv_shows(tmdb_id, name, tracked) VALUES({d}, 'A', 1), (1399, 'B', 1)", .{synth_a});
+    const shows = try @import("opal-fmt").bufPrintZ(&b, "INSERT INTO tv_shows(tmdb_id, name, tracked) VALUES({d}, 'A', 1), (1399, 'B', 1)", .{synth_a});
     try sql(conn, shows);
     const r = run(conn, 1);
     try t.expectEqual(@as(usize, 0), r.merged);

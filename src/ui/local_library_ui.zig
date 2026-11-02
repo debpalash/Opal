@@ -135,8 +135,8 @@ pub fn render() void {
     var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = theme.dims.rad_md,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .corners = theme.dims.rad_md,
         .padding = dvui.Rect.all(theme.spacing.md),
         .margin = dvui.Rect.all(theme.spacing.lg),
     });
@@ -146,11 +146,11 @@ pub fn render() void {
     _ = dvui.label(@src(), "Local library", .{}, .{
         .expand = .horizontal,
         .font = dvui.themeGet().font_heading,
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
     });
     if (dvui.button(@src(), if (library.scanning.load(.acquire)) "Scanning…" else "Scan files", .{}, .{
-        .color_fill = theme.colors.bg_elevated,
-        .color_text = theme.colors.text_secondary,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
     }) and !library.scanning.load(.acquire)) library.scanAsync();
     if (@import("builtin").is_test) test_rows[0] = header.data().borderRectScale().r;
     header.deinit();
@@ -165,12 +165,12 @@ pub fn render() void {
         .placeholder = "Add a media folder path",
     }, .{
         .expand = .horizontal,
-        .color_fill = theme.colors.bg_elevated,
-        .color_text = theme.colors.text_primary,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
+        .corners = theme.dims.rad_sm,
     });
     root_entry.deinit();
-    if (dvui.button(@src(), "Import folder", .{}, .{ .color_fill = theme.colors.accent, .color_text = theme.colors.text_on_accent })) {
+    if (dvui.button(@src(), "Import folder", .{}, .{ .color_fill = @import("color_compat.zig").wrap(theme.colors.accent), .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent) })) {
         if (library.addRoot(std.mem.sliceTo(&root_buf, 0))) {
             @memset(&root_buf, 0);
             library.scanAsync();
@@ -188,9 +188,9 @@ pub fn render() void {
         _ = dvui.labelNoFmt(@src(), root.path[0..root.path_len], .{}, .{
             .id_extra = index,
             .expand = .horizontal,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         });
-        if (dvui.button(@src(), "Remove", .{}, .{ .id_extra = index, .color_fill = theme.colors.bg_elevated })) {
+        if (dvui.button(@src(), "Remove", .{}, .{ .id_extra = index, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated) })) {
             if (library.removeRoot(root.id)) state.showToast("Media folder removed");
             break;
         }
@@ -202,14 +202,14 @@ pub fn render() void {
         .placeholder = "Search indexed files…",
     }, .{
         .expand = .horizontal,
-        .color_fill = theme.colors.bg_elevated,
-        .color_text = theme.colors.text_primary,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
+        .corners = theme.dims.rad_sm,
     });
     search.deinit();
     if (dvui.button(@src(), if (duplicates_only) "Likely duplicates: on" else "Likely duplicates: off", .{}, .{
-        .color_fill = theme.colors.bg_elevated,
-        .color_text = if (duplicates_only) theme.colors.accent else theme.colors.text_secondary,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_text = @import("color_compat.zig").wrap(if (duplicates_only) theme.colors.accent else theme.colors.text_secondary),
     })) duplicates_only = !duplicates_only;
     if (@import("builtin").is_test) test_rows[2] = controls.data().borderRectScale().r;
     controls.deinit();
@@ -222,22 +222,22 @@ pub fn render() void {
             .id_extra = index,
             .expand = .horizontal,
             .padding = .{ .x = 4, .y = 5, .w = 4, .h = 5 },
-            .color_border = theme.colors.border_subtle,
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
             .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         });
         defer row.deinit();
         _ = dvui.labelNoFmt(@src(), item.title[0..item.title_len], .{}, .{
             .id_extra = index,
             .expand = .horizontal,
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         });
         var meta_buf: [80]u8 = undefined;
         const meta = std.fmt.bufPrint(&meta_buf, "{d} MB{s}", .{
             item.size / (1024 * 1024),
             if (item.duplicate_count > 1) " · likely duplicate" else "",
         }) catch "";
-        _ = dvui.labelNoFmt(@src(), meta, .{}, .{ .id_extra = index, .color_text = theme.colors.text_tertiary });
-        if (dvui.button(@src(), "Edit", .{}, .{ .id_extra = index, .color_fill = theme.colors.bg_elevated })) {
+        _ = dvui.labelNoFmt(@src(), meta, .{}, .{ .id_extra = index, .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary) });
+        if (dvui.button(@src(), "Edit", .{}, .{ .id_extra = index, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated) })) {
             edit_id = item.id;
             @memset(&edit_title, 0);
             @memcpy(edit_title[0..item.title_len], item.title[0..item.title_len]);
@@ -249,7 +249,7 @@ pub fn render() void {
         _ = dvui.labelNoFmt(@src(), if (loadingSnapshot()) "Loading indexed files…" else layout.emptyHint(query.len, duplicates_only, root_count), .{}, .{
             .expand = .horizontal,
             .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         });
 
     if (edit_id > 0) renderEditor();
@@ -260,34 +260,34 @@ fn renderEditor() void {
     var editor = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_elevated,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
         .padding = dvui.Rect.all(theme.spacing.sm),
     });
     defer editor.deinit();
     var fields = dvui.box(@src(), .{ .dir = if (stacked) .vertical else .horizontal }, .{ .expand = .horizontal });
     var title = dvui.textEntry(@src(), .{ .text = .{ .buffer = &edit_title }, .placeholder = "Corrected title" }, .{
         .expand = .horizontal,
-        .color_fill = theme.colors.bg_app,
-        .color_text = theme.colors.text_primary,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
     });
     if (@import("builtin").is_test) test_editor_fields[0] = title.data().borderRectScale().r;
     title.deinit();
     var kind = dvui.textEntry(@src(), .{ .text = .{ .buffer = &edit_kind }, .placeholder = "movie / tv / music / audiobook / other" }, .{
         .expand = if (stacked) .horizontal else .none,
         .min_size_content = .{ .w = 220, .h = dvui.themeGet().font_body.sizeM(1, 1).h },
-        .color_fill = theme.colors.bg_app,
-        .color_text = theme.colors.text_primary,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
     });
     if (@import("builtin").is_test) test_editor_fields[1] = kind.data().borderRectScale().r;
     kind.deinit();
     fields.deinit();
     var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
     defer actions.deinit();
-    if (dvui.button(@src(), "Save", .{}, .{ .color_fill = theme.colors.accent, .color_text = theme.colors.text_on_accent })) {
+    if (dvui.button(@src(), "Save", .{}, .{ .color_fill = @import("color_compat.zig").wrap(theme.colors.accent), .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent) })) {
         if (library.correct(edit_id, std.mem.sliceTo(&edit_title, 0), std.mem.sliceTo(&edit_kind, 0))) {
             state.showToast("Metadata saved");
             edit_id = 0;
         } else state.showToast("Use a supported media type");
     }
-    if (dvui.button(@src(), "Cancel", .{}, .{ .color_fill = theme.colors.bg_surface })) edit_id = 0;
+    if (dvui.button(@src(), "Cancel", .{}, .{ .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface) })) edit_id = 0;
 }

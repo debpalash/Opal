@@ -140,7 +140,7 @@ pub fn parseCaps(text: []const u8) Caps {
     var any = false;
     var it = std.mem.tokenizeAny(u8, text, ", ");
     while (it.next()) |word| {
-        inline for (std.meta.fields(Caps)) |f| {
+        inline for (comptime @import("opal-reflect").fields(Caps)) |f| {
             if (std.mem.eql(u8, word, f.name)) {
                 @field(c, f.name) = true;
                 any = true;
@@ -901,12 +901,12 @@ test "stream path parsing: sid, optional path token, name" {
     try t.expect(parseStreamPath(sid ++ "/a/b/index.m3u8") == null);
     try t.expect(parseStreamPath(sid ++ "/notatoken/index.m3u8") == null);
     var idbuf: [SID_LEN]u8 = undefined;
-    try t.expect(validSessionId(sessionIdFromBytes(.{0xab} ** 16, &idbuf)));
+    try t.expect(validSessionId(sessionIdFromBytes(@splat(0xab), &idbuf)));
 }
 
 test "stream token: mint/verify, expiry, tamper, wrong session, wrong key" {
-    const key: [KEY_LEN]u8 = .{7} ** KEY_LEN;
-    const other_key: [KEY_LEN]u8 = .{8} ** KEY_LEN;
+    const key: [KEY_LEN]u8 = @splat(7);
+    const other_key: [KEY_LEN]u8 = @splat(8);
     const sid = "0123456789abcdef0123456789abcdef";
     var buf: [TOKEN_MAX]u8 = undefined;
     const tok = mintToken(&key, sid, 2_000, &buf);

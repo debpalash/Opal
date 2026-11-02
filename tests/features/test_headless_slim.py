@@ -42,7 +42,7 @@ def test_dvui_stub_surface():
     # comics) actually references. Widening this list means the desktop and
     # server builds have started to diverge — gate the CALLER instead.
     surface = [
-        "pub const c = @cImport(", "stb_image.h",       # poster.zig image decode
+        'pub const c = @import("opal-native-c")',       # generated image decoder bindings
         "pub const Window = opaque {}",                  # state.dvui_win
         "pub var current_window",                        # comics.zig texture-free guard
         "pub const Texture = struct",                    # ?Texture fields everywhere
@@ -56,6 +56,9 @@ def test_dvui_stub_surface():
         "pub const panic", "pub const logFn",
     ]
     missing = [s for s in surface if s not in stub]
+    header = _src("src/core/native_bindings.h")
+    if "#include <stb_image.h>" not in header:
+        missing.append("generated stb_image bindings")
     if missing:
         return "fail", "dvui stub missing: " + ", ".join(missing)
     # Color.PMA is reinterpreted over decoded RGBA and mpv frame buffers — a

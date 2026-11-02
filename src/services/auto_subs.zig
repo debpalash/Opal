@@ -255,7 +255,7 @@ fn worker(args: *WorkerArgs) void {
     };
     defer @import("../core/io_global.zig").cwdDeleteTree(run_dir) catch {};
     var tmp_wav_buf: [600]u8 = undefined;
-    const tmp_wav = std.fmt.bufPrintZ(&tmp_wav_buf, "{s}/audio.wav", .{run_dir}) catch return;
+    const tmp_wav = @import("opal-fmt").bufPrintZ(&tmp_wav_buf, "{s}/audio.wav", .{run_dir}) catch return;
 
     setStatus("Extracting audio (ffmpeg)...");
     const ff_argv = [_][]const u8{
@@ -304,7 +304,7 @@ fn worker(args: *WorkerArgs) void {
 
     // whisper-cli emits <input>.srt → /tmp/opal_autosubs_<ts>.wav.srt
     var srt_path_buf: [600]u8 = undefined;
-    const srt_path = std.fmt.bufPrintZ(&srt_path_buf, "{s}.srt", .{tmp_wav}) catch {
+    const srt_path = @import("opal-fmt").bufPrintZ(&srt_path_buf, "{s}.srt", .{tmp_wav}) catch {
         setStatus("srt path too long");
         return;
     };
@@ -313,7 +313,7 @@ fn worker(args: *WorkerArgs) void {
     // repeat plays; fall back to the tmp location if we can't write there.
     var final_srt_buf: [600]u8 = undefined;
     const dot = std.mem.lastIndexOfScalar(u8, args.path, '.') orelse args.path.len;
-    const final_srt = std.fmt.bufPrintZ(&final_srt_buf, "{s}.auto.srt", .{args.path[0..dot]}) catch srt_path;
+    const final_srt = @import("opal-fmt").bufPrintZ(&final_srt_buf, "{s}.auto.srt", .{args.path[0..dot]}) catch srt_path;
     const io = @import("../core/io_global.zig");
     io.renameAbsolute(srt_path, final_srt) catch {
         // Read-only media location: retain the generated subtitle in Opal's
@@ -327,7 +327,7 @@ fn worker(args: *WorkerArgs) void {
             return;
         };
         var fallback_buf: [700]u8 = undefined;
-        const fallback = std.fmt.bufPrintZ(&fallback_buf, "{s}/{s}.srt", .{ cache_dir, nonce_hex }) catch return;
+        const fallback = @import("opal-fmt").bufPrintZ(&fallback_buf, "{s}/{s}.srt", .{ cache_dir, nonce_hex }) catch return;
         io.renameAbsolute(srt_path, fallback) catch {
             setStatus("could not retain generated subtitles");
             return;

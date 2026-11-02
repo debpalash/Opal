@@ -75,7 +75,7 @@ const StationPoster = struct {
 // Sized to match state.app.radio.results[]'s capacity (180) — infinite scroll
 // appends past the first 30-station window, and every appended row needs a
 // slot here too or renderCard's station_posters[i] indexes out of bounds.
-var station_posters: [180]StationPoster = [_]StationPoster{.{}} ** 180;
+var station_posters: [180]StationPoster = @as([180]StationPoster, @splat(.{}));
 
 // ── Thread-safety ──
 // The detached search worker publishes into state.app.radio.* under
@@ -466,7 +466,7 @@ fn appendInstalledStreams(group: *RadioGroup) void {
         var name_buf: [160]u8 = undefined;
         const name = config.copyValue(id, "name", &name_buf) orelse id;
         const query = group.job.query[0..group.job.query_len];
-        if (query.len > 0 and std.ascii.indexOfIgnoreCase(name, query) == null) continue;
+        if (query.len > 0 and std.ascii.findIgnoreCase(name, query) == null) continue;
         var country_buf: [8]u8 = undefined;
         const country = config.copyValue(id, "country", &country_buf) orelse "";
         if (group.job.country != 0 and !std.ascii.eqlIgnoreCase(country, countries.at(group.job.country).code)) continue;
@@ -817,7 +817,7 @@ pub fn renderContent() void {
 
     if (state.app.radio.fetch_error) {
         _ = dvui.label(@src(), "Failed to fetch — check your connection", .{}, .{
-            .color_text = theme.colors.danger,
+            .color_text = .{ .color = theme.colors.danger },
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
         });
     }
@@ -831,7 +831,7 @@ fn renderSearchBar() void {
     defer row.deinit();
 
     _ = dvui.icon(@src(), "", icons.tvg.lucide.radio, .{}, .{
-        .color_text = theme.colors.accent,
+        .color_text = .{ .color = theme.colors.accent },
         .min_size_content = theme.iconSize(.md),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
@@ -849,7 +849,7 @@ fn renderSearchBar() void {
 
     if (state.app.radio.is_loading.load(.acquire)) {
         dvui.spinner(@src(), .{
-            .color_text = theme.colors.accent,
+            .color_text = .{ .color = theme.colors.accent },
             .min_size_content = theme.iconSize(.md),
             .gravity_y = 0.5,
             .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
@@ -897,14 +897,14 @@ fn renderLogo(i: usize, s: *const pure.Station) void {
         _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
             .id_extra = i + 1000,
             .expand = .both,
-            .corner_radius = dvui.Rect.all(8),
+            .corners = dvui.CornerRect.all(8),
         });
     } else if (fav.len > 0 and !slot.failed) {
         components.coverSkeleton(@src(), i + 1000, 8);
     } else {
         _ = dvui.icon(@src(), "", icons.tvg.lucide.radio, .{}, .{
             .id_extra = i + 1000,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .gravity_x = 0.5,
             .gravity_y = 0.5,
             .expand = .both,
@@ -936,8 +936,8 @@ fn renderCard(i: usize, card_w: f32, s: *const pure.Station) void {
         bw.init(@src(), .{}, .{
             .id_extra = i + 2000,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(8),
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .corners = dvui.CornerRect.all(8),
             .min_size_content = .{ .w = card_w, .h = card_w },
             .max_size_content = .{ .w = card_w, .h = card_w },
             .padding = dvui.Rect.all(0),
@@ -973,9 +973,9 @@ fn renderCard(i: usize, card_w: f32, s: *const pure.Station) void {
                 .id_extra = i + 8000,
                 .min_size_content = .{ .w = 8, .h = 8 },
                 .max_size_content = .{ .w = 8, .h = 8 },
-                .corner_radius = dvui.Rect.all(4),
+                .corners = dvui.CornerRect.all(4),
                 .background = true,
-                .color_fill = link_health.statusColor(st),
+                .color_fill = .{ .color = link_health.statusColor(st) },
                 .gravity_y = 0.5,
                 .margin = .{ .x = 2, .y = 0, .w = 4, .h = 0 },
             });
@@ -984,7 +984,7 @@ fn renderCard(i: usize, card_w: f32, s: *const pure.Station) void {
 
         _ = dvui.label(@src(), "{s}", .{name}, .{
             .id_extra = i + 3000,
-            .color_text = theme.colors.text_primary,
+            .color_text = .{ .color = theme.colors.text_primary },
             .expand = .horizontal,
             .gravity_y = 0.5,
             .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
@@ -1013,7 +1013,7 @@ fn renderCard(i: usize, card_w: f32, s: *const pure.Station) void {
         var safe_meta: [120]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(meta_buf[0..mw.end], &safe_meta)}, .{
             .id_extra = i + 4000,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .expand = .horizontal,
             .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         });
@@ -1033,7 +1033,7 @@ fn renderResults() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = .{ .color = theme.colors.bg_surface },
     });
     defer scroll.deinit();
 
@@ -1099,7 +1099,7 @@ fn renderResults() void {
         const underfilled = max_y <= 0 and state.app.radio.result_count > 0;
         if ((near_bottom or underfilled) and !loading and !state.app.radio.is_loading.load(.acquire)) loadMore();
         if (loading or underfilled) {
-            dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.lg), .gravity_x = 0.5, .margin = dvui.Rect.all(12) });
+            dvui.spinner(@src(), .{ .color_text = .{ .color = theme.colors.accent }, .min_size_content = theme.iconSize(.lg), .gravity_x = 0.5, .margin = dvui.Rect.all(12) });
             state.wakeUi();
         }
     }

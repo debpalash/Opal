@@ -920,7 +920,7 @@ fn parsePipedResults(json: []const u8, gen: u32) void {
 
 fn fetchViaYtdlp(query: []const u8, gen: u32, count: usize) void {
     var search_arg: [288]u8 = undefined;
-    const search_str = std.fmt.bufPrintZ(&search_arg, "ytsearch{d}:{s}", .{ count, query }) catch return;
+    const search_str = @import("opal-fmt").bufPrintZ(&search_arg, "ytsearch{d}:{s}", .{ count, query }) catch return;
     runYtdlp(search_str, null, gen);
 }
 
@@ -930,7 +930,7 @@ fn fetchChannelViaYtdlp(channel_id: []const u8, gen: u32, count: usize) void {
     var url_buf: [96]u8 = undefined;
     const url = yt_pure.channelVideosUrl(channel_id, &url_buf) orelse return;
     var range_buf: [24]u8 = undefined;
-    const range = std.fmt.bufPrintZ(&range_buf, "1:{d}", .{count}) catch return;
+    const range = @import("opal-fmt").bufPrintZ(&range_buf, "1:{d}", .{count}) catch return;
     runYtdlp(url, range, gen);
 }
 
@@ -1348,7 +1348,7 @@ pub fn renderContent() void {
 
     const total = resultLen();
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = .{ .color = theme.colors.bg_surface } });
     defer scroll.deinit();
 
     // Responsive grid of 16:9 video tiles from the LIVE width; the column count
@@ -1457,7 +1457,7 @@ pub fn renderContent() void {
         }
         if (loading_more.load(.acquire)) {
             dvui.spinner(@src(), .{
-                .color_text = theme.colors.accent,
+                .color_text = .{ .color = theme.colors.accent },
                 .min_size_content = theme.iconSize(.lg),
                 .gravity_x = 0.5,
                 .margin = dvui.Rect.all(12),
@@ -1471,11 +1471,11 @@ pub fn renderContent() void {
         });
         defer end.deinit();
         _ = dvui.icon(@src(), "Complete", icons.tvg.lucide.check, .{}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .min_size_content = theme.iconSize(.xs),
             .margin = .{ .x = 0, .y = 0, .w = 5, .h = 0 },
         });
-        _ = dvui.label(@src(), "You're all caught up", .{}, .{ .color_text = theme.colors.text_tertiary, .font = metaFont() });
+        _ = dvui.label(@src(), "You're all caught up", .{}, .{ .color_text = .{ .color = theme.colors.text_tertiary }, .font = metaFont() });
     }
 
     if (pending_action) |action| performCardAction(action, &pending_item);
@@ -1562,10 +1562,10 @@ fn renderToolbar() void {
     // Channel banner — back arrow + the channel whose uploads fill the grid.
     if (channel_mode.load(.acquire)) {
         if (dvui.buttonIcon(@src(), "chan-back", icons.tvg.lucide.@"arrow-left", .{}, .{}, .{
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
+            .color_fill_press = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = theme.colors.text_secondary },
             .border = dvui.Rect.all(0),
             .min_size_content = theme.iconSize(.sm),
             .padding = dvui.Rect.all(3),
@@ -1575,9 +1575,9 @@ fn renderToolbar() void {
         }
         _ = dvui.label(@src(), "{s}", .{safeUtf8(channel_name_buf[0..channel_name_len])}, .{
             .background = true,
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.colors.accent },
+            .color_text = .{ .color = theme.colors.text_on_accent },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
             .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
             .gravity_y = 0.5,
@@ -1587,11 +1587,11 @@ fn renderToolbar() void {
     if (@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) renderSearchInline();
 
     if (state.app.yt.is_loading.load(.acquire)) {
-        dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.sm), .gravity_y = 0.5 });
+        dvui.spinner(@src(), .{ .color_text = .{ .color = theme.colors.accent }, .min_size_content = theme.iconSize(.sm), .gravity_y = 0.5 });
     } else if (dvui.buttonIcon(@src(), "Refresh videos", icons.tvg.lucide.@"refresh-cw", .{}, .{}, .{
-        .color_fill = theme.transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_text = theme.colors.text_secondary,
+        .color_fill = .{ .color = theme.transparent },
+        .color_fill_hover = .{ .color = theme.colors.bg_hover },
+        .color_text = .{ .color = theme.colors.text_secondary },
         .border = dvui.Rect.all(0),
         .min_size_content = theme.iconSize(.sm),
         .padding = dvui.Rect.all(4),
@@ -1639,11 +1639,11 @@ fn renderSearchInline() void {
     te.init(@src(), .{ .text = .{ .buffer = &state.app.yt.search_buf }, .placeholder = "Search YouTube…" }, .{
         .min_size_content = .{ .w = input_w, .h = components.TOOLBAR_INPUT_H },
         .max_size_content = .{ .w = input_w, .h = components.TOOLBAR_INPUT_H },
-        .color_fill = theme.colors.bg_elevated,
-        .color_border = theme.colors.border_subtle,
-        .color_text = theme.colors.text_primary,
+        .color_fill = .{ .color = theme.colors.bg_elevated },
+        .color_border = .{ .color = theme.colors.border_subtle },
+        .color_text = .{ .color = theme.colors.text_primary },
         .border = dvui.Rect.all(1),
-        .corner_radius = theme.dims.rad_sm,
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
         .gravity_y = 0.5,
     });
@@ -1811,7 +1811,7 @@ fn prepareThumbnail(item: *state.YtItem, uploads: *usize) void {
         uploads.* -= 1;
         const num_pixels = item.thumb_w * item.thumb_h;
         const pixels_pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(item.thumb_pixels.?.ptr)))[0..num_pixels];
-        item.thumb_tex = dvui.textureCreate(pixels_pma, item.thumb_w, item.thumb_h, .linear, .rgba_32) catch null;
+        item.thumb_tex = dvui.textureCreate(pixels_pma, .{ .width = item.thumb_w, .height = item.thumb_h, .format = .rgba_32, .interpolation = .linear, .wrap_u = .clamp, .wrap_v = .clamp }) catch null;
         if (item.thumb_tex != null) {
             alloc.free(item.thumb_pixels.?);
             item.thumb_pixels = null;
@@ -1858,7 +1858,7 @@ fn renderCard(item: *const state.YtItem, idx: usize, the_card_w: f32, ymd: []con
         .id_extra = idx + 9000,
         .background = false,
         .border = dvui.Rect.all(0),
-        .corner_radius = dvui.Rect.all(0),
+        .corners = dvui.CornerRect.all(0),
         .min_size_content = .{ .w = the_card_w, .h = thumb_h + footer_h },
         .max_size_content = .{ .w = the_card_w, .h = thumb_h + footer_h },
         .margin = .{ .x = 5, .y = 5, .w = 5, .h = 7 },
@@ -1872,8 +1872,8 @@ fn renderCard(item: *const state.YtItem, idx: usize, the_card_w: f32, ymd: []con
         thumb.init(@src(), .{}, .{
             .id_extra = idx + 100,
             .background = true,
-            .color_fill = theme.colors.bg_deep,
-            .corner_radius = dvui.Rect.all(8),
+            .color_fill = .{ .color = theme.colors.bg_deep },
+            .corners = dvui.CornerRect.all(8),
             .min_size_content = .{ .w = the_card_w, .h = thumb_h },
             .max_size_content = .{ .w = the_card_w, .h = thumb_h },
             .padding = dvui.Rect.all(0),
@@ -1897,19 +1897,19 @@ fn renderCard(item: *const state.YtItem, idx: usize, the_card_w: f32, ymd: []con
                     .id_extra = idx + 150,
                     .min_size_content = .{ .w = the_card_w, .h = thumb_h },
                     .max_size_content = .{ .w = the_card_w, .h = thumb_h },
-                    .corner_radius = dvui.Rect.all(theme.radius.lg),
+                    .corners = dvui.CornerRect.all(theme.radius.lg),
                 });
                 const elapsed = @as(i64, @intCast(@divFloor(dvui.frameTimeNS(), std.time.ns_per_ms))) - item.thumb_ready_ms;
                 if (!state.app.reduce_motion and elapsed >= 0 and elapsed < 140) {
                     const t = @as(f32, @floatFromInt(elapsed)) / 140;
-                    var fade = dvui.box(@src(), .{}, .{ .id_extra = idx + 151, .expand = .both, .background = true, .color_fill = theme.colors.bg_elevated.opacity((1 - t) * (1 - t)), .corner_radius = dvui.Rect.all(theme.radius.lg) });
+                    var fade = dvui.box(@src(), .{}, .{ .id_extra = idx + 151, .expand = .both, .background = true, .color_fill = .{ .color = theme.colors.bg_elevated.opacity((1 - t) * (1 - t)) }, .corners = dvui.CornerRect.all(theme.radius.lg) });
                     fade.deinit();
                     components.animatedRefresh(16_667);
                 }
             } else {
                 // Quiet video canvas, never a stretched generic image glyph or
                 // a low-frame-rate shimmer competing with scroll animation.
-                var canvas = dvui.box(@src(), .{}, .{ .id_extra = idx + 150, .expand = .both, .background = true, .color_fill = theme.colors.bg_elevated, .corner_radius = dvui.Rect.all(theme.radius.lg) });
+                var canvas = dvui.box(@src(), .{}, .{ .id_extra = idx + 150, .expand = .both, .background = true, .color_fill = .{ .color = theme.colors.bg_elevated }, .corners = dvui.CornerRect.all(theme.radius.lg) });
                 canvas.deinit();
                 dvui.icon(@src(), "Video artwork", icons.tvg.lucide.play, .{}, .{
                     .id_extra = idx + 152,
@@ -1919,9 +1919,9 @@ fn renderCard(item: *const state.YtItem, idx: usize, the_card_w: f32, ymd: []con
                     .max_size_content = .{ .w = 22, .h = 22 },
                     .padding = dvui.Rect.all(12),
                     .background = true,
-                    .color_fill = theme.colors.bg_hover,
-                    .corner_radius = dvui.Rect.all(23),
-                    .color_text = theme.colors.text_tertiary,
+                    .color_fill = .{ .color = theme.colors.bg_hover },
+                    .corners = dvui.CornerRect.all(23),
+                    .color_text = .{ .color = theme.colors.text_tertiary },
                 });
                 // Retry when a global fetch slot becomes free even if another
                 // provider's completion does not request a frame for this view.
@@ -1936,8 +1936,8 @@ fn renderCard(item: *const state.YtItem, idx: usize, the_card_w: f32, ymd: []con
                     .gravity_x = 1.0,
                     .gravity_y = 1.0,
                     .background = true,
-                    .color_fill = theme.colors.overlay,
-                    .corner_radius = dvui.Rect.all(4),
+                    .color_fill = .{ .color = theme.colors.overlay },
+                    .corners = dvui.CornerRect.all(4),
                     .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
                     .margin = .{ .x = 0, .y = 0, .w = 6, .h = 6 },
                 });
@@ -1946,7 +1946,7 @@ fn renderCard(item: *const state.YtItem, idx: usize, the_card_w: f32, ymd: []con
                 var dur_buf: [24]u8 = undefined;
                 const dur_str = yt_pure.formatDuration(item.duration, &dur_buf);
                 if (dur_str.len > 0) {
-                    _ = dvui.labelNoFmt(@src(), dur_str, .{}, .{ .id_extra = idx + 162, .color_text = dvui.Color.white, .font = metaFont() });
+                    _ = dvui.labelNoFmt(@src(), dur_str, .{}, .{ .id_extra = idx + 162, .color_text = .{ .color = dvui.Color.white }, .font = metaFont() });
                 }
             }
         }
@@ -1968,13 +1968,13 @@ fn renderCard(item: *const state.YtItem, idx: usize, the_card_w: f32, ymd: []con
         if (dvui.button(@src(), title_2l, .{}, .{
             .id_extra = idx + 300,
             .expand = .horizontal,
-            .color_text = theme.colors.text_primary,
+            .color_text = .{ .color = theme.colors.text_primary },
             .font = title_font,
             .min_size_content = .{ .w = the_card_w - 4, .h = title_h },
             .max_size_content = .{ .w = the_card_w - 4, .h = title_h },
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
+            .color_fill_press = .{ .color = theme.colors.bg_elevated },
             .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         })) action = .play;
 
@@ -1998,7 +1998,7 @@ fn renderCard(item: *const state.YtItem, idx: usize, the_card_w: f32, ymd: []con
                     if (dvui.labelClick(@src(), "{s}", .{ch}, .{}, .{
                         .id_extra = idx + 410,
                         .expand = .horizontal,
-                        .color_text = theme.colors.text_secondary,
+                        .color_text = .{ .color = theme.colors.text_secondary },
                         .font = metaFont(),
                     })) {
                         action = .channel;
@@ -2007,7 +2007,7 @@ fn renderCard(item: *const state.YtItem, idx: usize, the_card_w: f32, ymd: []con
                     _ = dvui.labelNoFmt(@src(), ch, .{}, .{
                         .id_extra = idx + 410,
                         .expand = .horizontal,
-                        .color_text = theme.colors.text_secondary,
+                        .color_text = .{ .color = theme.colors.text_secondary },
                         .font = metaFont(),
                     });
                 }
@@ -2021,7 +2021,7 @@ fn renderCard(item: *const state.YtItem, idx: usize, the_card_w: f32, ymd: []con
                 _ = dvui.labelNoFmt(@src(), ml, .{}, .{
                     .id_extra = idx + 430,
                     .expand = .horizontal,
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = .{ .color = theme.colors.text_tertiary },
                     .font = metaFont(),
                 });
             }
@@ -2038,12 +2038,12 @@ fn renderCard(item: *const state.YtItem, idx: usize, the_card_w: f32, ymd: []con
         var menu = dvui.menu(@src(), .horizontal, .{ .id_extra = idx + 520 });
         defer menu.deinit();
         if (dvui.menuItemIcon(@src(), "More actions", icons.tvg.lucide.@"ellipsis-vertical", .{ .submenu = true }, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = .{ .color = theme.colors.text_secondary },
             .padding = dvui.Rect.all(4),
         })) |rect| {
-            var popup = dvui.floatingMenu(@src(), .{ .from = rect }, .{ .color_fill = theme.colors.bg_surface });
+            var popup = dvui.floatingMenu(@src(), .{ .from = rect }, .{ .color_fill = .{ .color = theme.colors.bg_surface } });
             defer popup.deinit();
-            var choices = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_surface, .padding = dvui.Rect.all(4) });
+            var choices = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = .{ .color = theme.colors.bg_surface }, .padding = dvui.Rect.all(4) });
             defer choices.deinit();
             if (dvui.menuItemLabel(@src(), "Add to queue", .{}, .{}) != null) action = .queue;
             if (item.channel_id_len > 0 and dvui.menuItemLabel(@src(), "View channel", .{}, .{}) != null) action = .channel;
@@ -2060,8 +2060,8 @@ fn renderCard(item: *const state.YtItem, idx: usize, the_card_w: f32, ymd: []con
         if (ctext.activePoint()) |cp| {
             var fw = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(cp) }, .{
                 .id_extra = idx + 700,
-                .color_fill = theme.colors.bg_surface,
-                .color_border = theme.colors.border_subtle,
+                .color_fill = .{ .color = theme.colors.bg_surface },
+                .color_border = .{ .color = theme.colors.border_subtle },
             });
             defer fw.deinit();
 
@@ -2161,7 +2161,7 @@ fn sendToPlayer(item: *const state.YtItem, appendToPlaylist: bool) void {
     const browser = @import("browser.zig");
 
     var url_buf: [128]u8 = undefined;
-    const yt_url = std.fmt.bufPrintZ(&url_buf, "https://www.youtube.com/watch?v={s}", .{item.video_id[0..item.video_id_len]}) catch return;
+    const yt_url = @import("opal-fmt").bufPrintZ(&url_buf, "https://www.youtube.com/watch?v={s}", .{item.video_id[0..item.video_id_len]}) catch return;
 
     queue_svc.addToQueue(yt_url, item.title[0..item.title_len], "youtube");
     browser.playDirect(.{

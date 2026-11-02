@@ -92,10 +92,10 @@ pub fn render() void {
         .open_flag = &state.app.command_palette_open,
     }, .{
         .min_size_content = dialog_size,
-        .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_subtle,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
         .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(theme.radius.lg),
+        .corners = dvui.CornerRect.all(theme.radius.lg),
     });
     defer win.deinit();
 
@@ -107,7 +107,7 @@ pub fn render() void {
 
     _ = components.searchInput(@src(), &PaletteState.query_buf, &PaletteState.query_len, "Type a command…");
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .color_fill = theme.transparent });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .color_fill = @import("color_compat.zig").wrap(theme.transparent) });
     defer scroll.deinit();
 
     const q = PaletteState.query_buf[0..PaletteState.query_len];

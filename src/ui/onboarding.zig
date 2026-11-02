@@ -34,10 +34,10 @@ pub fn render() void {
     }, .{
         .min_size_content = dialog_size,
         .max_size_content = dvui.Options.MaxSize.size(dialog_size),
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
         .border = dvui.Rect.all(1),
-        .color_border = theme.colors.border_subtle,
-        .corner_radius = dvui.Rect.all(theme.radius.lg),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+        .corners = dvui.CornerRect.all(theme.radius.lg),
     });
     defer win.deinit();
 
@@ -71,23 +71,23 @@ pub fn render() void {
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .corners = dvui.CornerRect.all(theme.radius.md),
             .padding = dvui.Rect.all(theme.spacing.md),
             .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = 0 },
         });
         defer card.deinit();
         _ = dvui.label(@src(), "Add search sources (optional)", .{}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .font = dvui.themeGet().font_heading,
         });
         description(2, "Find more streams and episodes.");
         if (dvui.button(@src(), "Install starter sources", .{}, .{
-            .color_fill = theme.colors.bg_surface,
-            .color_text = theme.colors.text_primary,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .border = dvui.Rect.all(1),
-            .color_border = theme.colors.border_subtle,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+            .corners = dvui.CornerRect.all(theme.radius.sm),
             .padding = dvui.Rect.all(theme.spacing.sm),
             .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
         })) {
@@ -106,13 +106,13 @@ pub fn render() void {
     defer actions.deinit();
     if (dvui.button(@src(), "Browse movies & TV", .{}, .{
         .expand = .horizontal,
-        .color_fill = theme.colors.accent,
-        .color_fill_hover = theme.colors.accent.lighten(8),
-        .color_text = theme.colors.text_on_accent,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+        .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.accent.lighten(8)),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
         // 1px accent border matches Skip's bordered height so the pair aligns.
         .border = dvui.Rect.all(1),
-        .color_border = theme.colors.accent,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.accent),
+        .corners = dvui.CornerRect.all(theme.radius.md),
         .padding = dvui.Rect.all(theme.spacing.sm),
         .margin = dvui.Rect.all(0),
     })) {
@@ -121,12 +121,12 @@ pub fn render() void {
         finish();
     }
     if (dvui.button(@src(), "Skip to Home", .{}, .{
-        .color_fill = theme.colors.bg_surface,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_text = theme.colors.text_secondary,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .border = dvui.Rect.all(1),
-        .color_border = theme.colors.border_subtle,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+        .corners = dvui.CornerRect.all(theme.radius.md),
         .padding = dvui.Rect.all(theme.spacing.sm),
         .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
     })) {
@@ -143,7 +143,7 @@ fn description(id: usize, text: []const u8) void {
         .padding = dvui.Rect.all(0),
         .margin = dvui.Rect.all(0),
     });
-    tl.addText(text, .{ .color_text = theme.colors.text_secondary });
+    tl.addText(text, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary) });
     tl.deinit();
 }
 

@@ -22,7 +22,7 @@ const closeEpisodes = podcasts.closeEpisodes;
 
 const PodPoster = components.CoverSlot;
 
-var pod_posters: [50]PodPoster = [_]PodPoster{.{}} ** 50;
+var pod_posters: [50]PodPoster = @as([50]PodPoster, @splat(.{}));
 
 pub fn renderContent() void {
     var pageroot = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
@@ -42,7 +42,7 @@ pub fn renderContent() void {
 
     if (view.fetch_error) {
         _ = dvui.label(@src(), "Failed to fetch — check your connection", .{}, .{
-            .color_text = theme.colors.danger,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.danger),
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
         });
     }
@@ -79,7 +79,7 @@ fn renderSearchBar() void {
 
     if (state.app.podcasts.is_loading.load(.acquire)) {
         dvui.spinner(@src(), .{
-            .color_text = theme.colors.accent,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
             .min_size_content = theme.iconSize(.md),
             .gravity_y = 0.5,
             .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
@@ -128,8 +128,8 @@ fn renderCard(i: usize, card_w: f32, p: *const pure.Podcast) void {
         bw.init(@src(), .{}, .{
             .id_extra = i + 2000,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(theme.radius.lg),
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .corners = dvui.CornerRect.all(theme.radius.lg),
             .min_size_content = .{ .w = card_w, .h = card_w },
             .max_size_content = .{ .w = card_w, .h = card_w },
             .padding = dvui.Rect.all(0),
@@ -148,7 +148,7 @@ fn renderCard(i: usize, card_w: f32, p: *const pure.Podcast) void {
 
     _ = dvui.label(@src(), "{s}", .{name}, .{
         .id_extra = i + 3000,
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .expand = .horizontal,
         .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
     });
@@ -156,7 +156,7 @@ fn renderCard(i: usize, card_w: f32, p: *const pure.Podcast) void {
     if (artist.len > 0) {
         _ = dvui.label(@src(), "{s}", .{artist}, .{
             .id_extra = i + 4000,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .expand = .horizontal,
             .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         });
@@ -173,7 +173,7 @@ fn renderResults(view: *const Snapshot) void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
     });
     defer scroll.deinit();
 
@@ -232,14 +232,14 @@ fn renderEpisodes(view: *const Snapshot) void {
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
             .background = true,
-            .color_fill = theme.colors.bg_surface,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
         });
         defer hdr.deinit();
 
         if (dvui.buttonIcon(@src(), "Back", icons.tvg.lucide.@"arrow-left", .{}, .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
+            .corners = theme.dims.rad_sm,
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
         })) {
@@ -253,14 +253,14 @@ fn renderEpisodes(view: *const Snapshot) void {
             &title_buf,
         );
         _ = dvui.label(@src(), "{s}", .{title}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .expand = .horizontal,
             .gravity_y = 0.5,
         });
 
         if (view.episodes_loading) {
             dvui.spinner(@src(), .{
-                .color_text = theme.colors.accent,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
                 .min_size_content = theme.iconSize(.md),
                 .gravity_y = 0.5,
             });
@@ -274,9 +274,9 @@ fn renderEpisodes(view: *const Snapshot) void {
             components.emptyState(icons.tvg.lucide.podcast, "Feed unavailable", "Reconnecting automatically. Cached episodes will stay available.");
             if (view.selected_idx) |idx| {
                 if (dvui.button(@src(), "Retry now", .{}, .{
-                    .color_fill = theme.colors.bg_elevated,
-                    .color_text = theme.colors.text_primary,
-                    .corner_radius = theme.dims.rad_sm,
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
+                    .corners = theme.dims.rad_sm,
                     .gravity_x = 0.5,
                     .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
                 })) loadEpisodes(idx);
@@ -293,13 +293,13 @@ fn renderEpisodes(view: *const Snapshot) void {
         _ = dvui.label(@src(), "{d}–{d} of {d} published episodes", .{ view.episode_offset + 1, view.episode_offset + view.episode_count, view.episode_total }, .{});
         if (view.episode_offset + view.episode_count < view.episode_total and components.actionButton(@src(), "Next episodes", .secondary, 52102))
             podcasts.changeEpisodePage(view.generation, true);
-        if (view.episodes_failed) _ = dvui.label(@src(), "Refresh failed; showing saved episodes", .{}, .{ .color_text = theme.colors.danger });
+        if (view.episodes_failed) _ = dvui.label(@src(), "Refresh failed; showing saved episodes", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.danger) });
     }
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
     });
     defer scroll.deinit();
 
@@ -322,8 +322,8 @@ fn renderEpisodes(view: *const Snapshot) void {
             .id_extra = i,
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .color_border = theme.colors.border_subtle,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
             .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
             .min_size_content = .{ .w = 0, .h = row_h },
             .max_size_content = .{ .w = std.math.floatMax(f32), .h = row_h },
@@ -340,7 +340,7 @@ fn renderEpisodes(view: *const Snapshot) void {
 
             _ = dvui.label(@src(), "{s}", .{title}, .{
                 .id_extra = i + 4000,
-                .color_text = theme.colors.text_primary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .expand = .horizontal,
             });
 
@@ -354,7 +354,7 @@ fn renderEpisodes(view: *const Snapshot) void {
                 var safe_meta: [64]u8 = undefined;
                 _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(meta_buf[0..mw.end], &safe_meta)}, .{
                     .id_extra = i + 5000,
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                     .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
                 });
             }
@@ -362,9 +362,9 @@ fn renderEpisodes(view: *const Snapshot) void {
 
         if (dvui.buttonIcon(@src(), "Play", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = i + 6000,
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
+            .corners = theme.dims.rad_sm,
             .gravity_y = 0.5,
         })) {
             _ = podcasts.playEpisodeAtGeneration(i, view.generation);

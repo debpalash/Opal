@@ -103,9 +103,9 @@ fn overlaps(a: Seg, b: Seg) bool {
 /// already-accepted one is dropped. Returns the count written.
 pub fn merge(lists: [3][]const Seg, out: []Seg) usize {
     var n: usize = 0;
-    var claimed = std.EnumSet(Category).initEmpty();
+    var claimed: std.EnumSet(Category) = .empty;
     for (lists) |list| {
-        var here = std.EnumSet(Category).initEmpty();
+        var here: std.EnumSet(Category) = .empty;
         for (list) |s| {
             if (!skippable(s.category) or !(s.end > s.start)) continue;
             if (claimed.contains(s.category)) continue;

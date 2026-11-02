@@ -128,16 +128,16 @@ fn draw() !void {
     try std.testing.expect(uploaded <= 4);
     if (burst_frame >= 4) try std.testing.expectEqual(@as(usize, 10), ready);
     burst_frame += 1;
-    var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = dvui.Rect.all(20), .color_fill = .{ .r = 24, .g = 24, .b = 24 }, .background = true });
+    var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = dvui.Rect.all(20), .color_fill = .{ .color = .{ .r = 24, .g = 24, .b = 24 } }, .background = true });
     defer page.deinit();
-    _ = dvui.label(@src(), "Shared WebP decoder / actual GPU upload", .{}, .{ .color_text = .{ .r = 245, .g = 245, .b = 245 } });
+    _ = dvui.label(@src(), "Shared WebP decoder / actual GPU upload", .{}, .{ .color_text = .{ .color = .{ .r = 245, .g = 245, .b = 245 } } });
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
     defer row.deinit();
     for (textures, 0..) |optional, index| {
         const texture = optional orelse continue;
         var column = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = index, .padding = dvui.Rect.all(12) });
         defer column.deinit();
-        _ = dvui.label(@src(), "{s}", .{if (index == 0) "Synthetic lossless RGBA / 32×32" else "Real Wuxia cover / 204×325"}, .{ .id_extra = index, .font = dvui.themeGet().font_body.withSize(12), .color_text = .{ .r = 210, .g = 210, .b = 210 } });
+        _ = dvui.label(@src(), "{s}", .{if (index == 0) "Synthetic lossless RGBA / 32×32" else "Real Wuxia cover / 204×325"}, .{ .id_extra = index, .font = dvui.themeGet().font_body.withSize(12), .color_text = .{ .color = .{ .r = 210, .g = 210, .b = 210 } } });
         _ = dvui.image(@src(), .{ .source = .{ .texture = texture }, .shrink = .ratio }, .{ .id_extra = index, .min_size_content = .{ .w = 220, .h = 340 }, .max_size_content = .{ .w = 220, .h = 340 } });
     }
 }

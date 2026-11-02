@@ -1,9 +1,9 @@
 const std = @import("std");
 
 pub const Metadata = struct {
-    title: [256]u8 = .{0} ** 256,
+    title: [256]u8 = @splat(0),
     title_len: usize = 0,
-    url: [512]u8 = .{0} ** 512,
+    url: [512]u8 = @splat(0),
     url_len: usize = 0,
     runtime_secs: f64 = 0,
 };

@@ -21,7 +21,7 @@ const PosterSlot = struct {
     failed: bool = false,
     id_hash: u64 = 0,
 };
-var poster_slots: [336]PosterSlot = [_]PosterSlot{.{}} ** 336;
+var poster_slots: [336]PosterSlot = @as([336]PosterSlot, @splat(.{}));
 
 var login_initialized = false;
 var login_server: [256]u8 = std.mem.zeroes([256]u8);
@@ -72,7 +72,7 @@ fn renderLoginForm() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
     });
     defer scroll.deinit();
 
@@ -96,7 +96,7 @@ fn renderLoginForm() void {
         defer form.deinit();
 
         _ = dvui.label(@src(), "Server URL", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
 
@@ -105,17 +105,17 @@ fn renderLoginForm() void {
         }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .color_border = theme.colors.border_subtle,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
         });
         url_te.deinit();
 
         _ = dvui.label(@src(), "Username", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
         var user_te = dvui.textEntry(@src(), .{
@@ -123,17 +123,17 @@ fn renderLoginForm() void {
         }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .color_border = theme.colors.border_subtle,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
         });
         user_te.deinit();
 
         _ = dvui.label(@src(), "Password", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
         var pass_te = dvui.textEntry(@src(), .{
@@ -141,10 +141,10 @@ fn renderLoginForm() void {
         }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .color_border = theme.colors.border_subtle,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 12 },
         });
@@ -153,7 +153,7 @@ fn renderLoginForm() void {
 
         if (frame_view.login_error_len > 0) {
             _ = dvui.label(@src(), "{s}", .{frame_view.login_error[0..frame_view.login_error_len]}, .{
-                .color_text = theme.colors.danger,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.danger),
                 .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
             });
         }
@@ -161,9 +161,9 @@ fn renderLoginForm() void {
         if (!frame_view.loading) {
             const clicked_connect = dvui.button(@src(), "Connect", .{}, .{
                 .expand = .horizontal,
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.text_on_accent,
-                .corner_radius = theme.dims.rad_sm,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
+                .corners = theme.dims.rad_sm,
                 .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.sm },
             });
             if (clicked_connect or login_enter) {
@@ -178,7 +178,7 @@ fn renderLoginForm() void {
         } else {
             _ = dvui.label(@src(), "Connecting…", .{}, .{
                 .expand = .horizontal,
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                 .gravity_x = 0.5,
                 .padding = .{ .x = 0, .y = 10, .w = 0, .h = 10 },
             });
@@ -197,10 +197,10 @@ fn renderLibraries() void {
         defer hdr.deinit();
 
         if (dvui.buttonIcon(@src(), "search", icons.tvg.lucide.search, .{}, .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .padding = dvui.Rect.all(5),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
         })) {
             jf.openSearch();
         }
@@ -216,10 +216,10 @@ fn renderLibraries() void {
         }
 
         if (dvui.buttonIcon(@src(), "disconnect", icons.tvg.lucide.@"log-out", .{}, .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .padding = dvui.Rect.all(5),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
         })) {
             jf.disconnect();
         }
@@ -233,7 +233,7 @@ fn renderLibraries() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
     });
     defer scroll.deinit();
 
@@ -250,7 +250,7 @@ fn renderLibraries() void {
     // ── Continue Watching Section ──
     if (frame_view.resume_count > 0) {
         _ = dvui.label(@src(), "Continue Watching", .{}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .padding = .{ .x = 12, .y = 10, .w = 0, .h = 4 },
         });
 
@@ -275,7 +275,7 @@ fn renderLibraries() void {
     // ── Library Rows ──
     if (frame_view.library_count > 0) {
         _ = dvui.label(@src(), "Libraries", .{}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 4 },
         });
     }
@@ -297,7 +297,7 @@ fn renderLibraries() void {
         dvui.icon(@src(), "", ic, .{}, .{
             .id_extra = i,
             .gravity_y = 0.5,
-            .color_text = theme.colors.accent,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
             .min_size_content = .{ .w = 18, .h = 18 },
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
@@ -306,10 +306,10 @@ fn renderLibraries() void {
             .id_extra = i,
             .expand = .horizontal,
             .gravity_y = 0.5,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
+            .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .padding = dvui.Rect.all(0),
         })) {
             const id = lib.id[0..lib.id_len];
@@ -319,7 +319,7 @@ fn renderLibraries() void {
         dvui.icon(@src(), "", icons.tvg.lucide.@"chevron-right", .{}, .{
             .id_extra = i,
             .gravity_y = 0.5,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .min_size_content = theme.iconSize(.sm),
         });
     }
@@ -336,10 +336,10 @@ fn renderItems() void {
         defer hdr.deinit();
 
         if (dvui.buttonIcon(@src(), "back", icons.tvg.lucide.@"arrow-left", .{}, .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .padding = dvui.Rect.all(5),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
         })) {
             jf.popNav();
         }
@@ -347,7 +347,7 @@ fn renderItems() void {
         if (frame_view.parent_name_len > 0) {
             var pn_buf: [128]u8 = undefined;
             _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(frame_view.parent_name[0..frame_view.parent_name_len], &pn_buf)}, .{
-                .color_text = theme.colors.text_primary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .gravity_y = 0.5,
                 .padding = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
             });
@@ -360,7 +360,7 @@ fn renderItems() void {
 
         if (frame_view.loading) {
             _ = dvui.label(@src(), "Loading…", .{}, .{
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                 .gravity_y = 0.5,
             });
         }
@@ -391,7 +391,7 @@ fn renderItems() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
     });
     defer scroll.deinit();
 
@@ -453,7 +453,7 @@ fn renderItems() void {
         }
         if (loading or underfilled) {
             dvui.spinner(@src(), .{
-                .color_text = theme.colors.accent,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
                 .min_size_content = theme.iconSize(.lg),
                 .gravity_x = 0.5,
                 .margin = dvui.Rect.all(12),
@@ -471,7 +471,7 @@ fn renderSkeletonRows() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
     });
     defer scroll.deinit();
 
@@ -490,8 +490,8 @@ fn renderSkeletonRows() void {
         var poster = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = i + 91100,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .corners = dvui.CornerRect.all(theme.radius.md),
             .min_size_content = .{ .w = 50, .h = 75 },
             .max_size_content = .{ .w = 50, .h = 75 },
         });
@@ -509,8 +509,8 @@ fn renderSkeletonRows() void {
         var title_bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i + 91210,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .corners = dvui.CornerRect.all(theme.radius.md),
             .min_size_content = .{ .w = 160, .h = 12 },
             .max_size_content = .{ .w = 220, .h = 12 },
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
@@ -520,8 +520,8 @@ fn renderSkeletonRows() void {
         var meta_bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i + 91220,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .corners = dvui.CornerRect.all(theme.radius.md),
             .min_size_content = .{ .w = 80, .h = 8 },
             .max_size_content = .{ .w = 120, .h = 8 },
         });
@@ -582,8 +582,8 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = idx,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .corners = dvui.CornerRect.all(theme.radius.md),
         .min_size_content = .{ .w = card_w, .h = poster_h + CARD_FOOTER_H },
         .max_size_content = .{ .w = card_w, .h = poster_h + CARD_FOOTER_H },
         .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
@@ -595,8 +595,8 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
         var img_box = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = idx + 50,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = .{ .x = theme.radius.md, .y = theme.radius.md, .w = 0, .h = 0 },
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .corners = .{ .tl = .theme(theme.radius.md), .tr = .theme(theme.radius.md), .br = .theme(0), .bl = .theme(0) },
             .min_size_content = .{ .w = card_w, .h = poster_h },
             .max_size_content = .{ .w = card_w, .h = poster_h },
         });
@@ -607,7 +607,7 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
             if (dvui.button(@src(), "", .{}, .{
                 .id_extra = idx + 60,
                 .expand = .both,
-                .color_fill = theme.transparent,
+                .color_fill = @import("color_compat.zig").wrap(theme.transparent),
             })) {
                 activateItem(item);
             }
@@ -622,10 +622,10 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
                 .id_extra = idx + 60,
                 .gravity_x = 0.5,
                 .gravity_y = 0.5,
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .color_text = theme.colors.accent,
+                .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+                .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+                .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
             })) activateItem(item);
         }
 
@@ -645,14 +645,14 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
             .min_size_content = .{ .w = 10, .h = 2 },
             .max_size_content = .{ .w = card_w, .h = 2 },
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
         });
         var fill = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = idx + 85,
             .min_size_content = .{ .w = fill_w, .h = 2 },
             .max_size_content = .{ .w = fill_w, .h = 2 },
             .background = true,
-            .color_fill = theme.colors.accent,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
         });
         fill.deinit();
         pb.deinit();
@@ -670,26 +670,26 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
     _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(item.name[0..item.name_len], &jf_title_buf)}, .{
         .id_extra = idx + 91,
         .expand = .horizontal,
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .gravity_y = 0.5,
     });
     if (!item.is_folder) {
         if (dvui.buttonIcon(@src(), "favorite", icons.tvg.lucide.star, .{}, .{}, .{
             .id_extra = idx + 92,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = if (item.is_favorite) theme.colors.warning else theme.colors.text_secondary,
+            .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("color_compat.zig").wrap(if (item.is_favorite) theme.colors.warning else theme.colors.text_secondary),
             .min_size_content = .{ .w = 14, .h = 14 },
             .padding = dvui.Rect.all(4),
             .gravity_y = 0.5,
         })) _ = jf.setUserData(item.id[0..item.id_len], .favorite, !item.is_favorite);
         if (dvui.buttonIcon(@src(), "watched", if (item.is_played) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, .{}, .{}, .{
             .id_extra = idx + 93,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = if (item.is_played) theme.colors.success else theme.colors.text_secondary,
+            .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("color_compat.zig").wrap(if (item.is_played) theme.colors.success else theme.colors.text_secondary),
             .min_size_content = .{ .w = 14, .h = 14 },
             .padding = dvui.Rect.all(4),
             .gravity_y = 0.5,
@@ -707,10 +707,10 @@ fn renderSearch() void {
         defer hdr.deinit();
 
         if (dvui.buttonIcon(@src(), "back", icons.tvg.lucide.@"arrow-left", .{}, .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .padding = dvui.Rect.all(5),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
         })) {
             jf.goToLibraries();
         }
@@ -721,10 +721,10 @@ fn renderSearch() void {
             }, .{
                 .expand = .horizontal,
                 .background = true,
-                .color_fill = theme.colors.bg_surface,
-                .color_border = theme.colors.border_subtle,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+                .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
                 .border = dvui.Rect.all(1),
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
                 .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
                 .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
             });
@@ -732,10 +732,10 @@ fn renderSearch() void {
             te.deinit();
 
             const clicked_search = dvui.buttonIcon(@src(), "search", icons.tvg.lucide.search, .{}, .{}, .{
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.text_on_accent,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
                 .padding = dvui.Rect.all(theme.radius.md),
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
             });
             if (clicked_search or search_enter) {
                 jf.searchFor(std.mem.sliceTo(&search_buf, 0));

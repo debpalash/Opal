@@ -200,7 +200,7 @@ pub fn scanPlugins() void {
         plugin_count += 1;
 
         var log_buf: [128]u8 = undefined;
-        const lm = std.fmt.bufPrintZ(&log_buf, "Plugin loaded: {s}", .{p.name[0..p.name_len]}) catch "Plugin loaded";
+        const lm = @import("opal-fmt").bufPrintZ(&log_buf, "Plugin loaded: {s}", .{p.name[0..p.name_len]}) catch "Plugin loaded";
         logs.pushLog("info", "plugin", lm, false);
     }
 
@@ -427,13 +427,13 @@ fn buildSandboxedLuaArgv(
 
 fn logSandboxed(name: []const u8) void {
     var buf: [128]u8 = undefined;
-    const msg = std.fmt.bufPrintZ(&buf, "Sandboxed: {s}", .{name}) catch "Sandboxed";
+    const msg = @import("opal-fmt").bufPrintZ(&buf, "Sandboxed: {s}", .{name}) catch "Sandboxed";
     logs.pushLog("info", "plugins", msg, false);
 }
 
 fn logUnsafeWarn(name: []const u8) void {
     var buf: [160]u8 = undefined;
-    const msg = std.fmt.bufPrintZ(&buf, "Lua sandbox skipped (allow_unsafe + user-trusted): {s}", .{name}) catch "Lua sandbox skipped";
+    const msg = @import("opal-fmt").bufPrintZ(&buf, "Lua sandbox skipped (allow_unsafe + user-trusted): {s}", .{name}) catch "Lua sandbox skipped";
     logs.pushLog("warn", "plugins", msg, false);
 }
 
@@ -441,7 +441,7 @@ fn logUntrustedNative(p: *const Plugin) void {
     var marker_buf: [800]u8 = undefined;
     const marker = approvalMarkerPath(p, &marker_buf) orelse "the app-owned plugin trust directory";
     var buf: [1100]u8 = undefined;
-    const msg = std.fmt.bufPrintZ(
+    const msg = @import("opal-fmt").bufPrintZ(
         &buf,
         "Blocked unapproved executable plugin: {s}. Review it, then create {s} to approve this exact version.",
         .{ p.name[0..p.name_len], marker },
@@ -452,7 +452,7 @@ fn logUntrustedNative(p: *const Plugin) void {
 fn logPluginProcessFailure(name: []const u8, result: bounded_process.Result) void {
     var buf: [256]u8 = undefined;
     const detail = if (result.truncated) "output limit exceeded" else @tagName(result.failure);
-    const msg = std.fmt.bufPrintZ(&buf, "Plugin {s} stopped: {s}", .{ name, detail }) catch "Plugin process failed";
+    const msg = @import("opal-fmt").bufPrintZ(&buf, "Plugin {s} stopped: {s}", .{ name, detail }) catch "Plugin process failed";
     logs.pushLog("error", "plugin", msg, true);
 }
 
@@ -530,7 +530,7 @@ fn runSearch(plugin: Plugin, query: []const u8, rows: []@import("plugins_pure.zi
 
 fn searchPluginInto(plugin: Plugin, query: []const u8, out: []UniversalResult) usize {
     const pp = @import("plugins_pure.zig");
-    var rows: [UNIVERSAL_ROWS_PER_PLUGIN]pp.SearchRow = [_]pp.SearchRow{.{}} ** UNIVERSAL_ROWS_PER_PLUGIN;
+    var rows: [UNIVERSAL_ROWS_PER_PLUGIN]pp.SearchRow = @as([UNIVERSAL_ROWS_PER_PLUGIN]pp.SearchRow, @splat(.{}));
     const run = runSearch(plugin, query, &rows);
     if (run.outcome != .ok) return 0;
     const n = @min(run.count, out.len);
@@ -549,7 +549,7 @@ pub const TestOutcome = enum { ok, not_found, no_search, not_approved, run_faile
 
 pub const TestReport = struct {
     outcome: TestOutcome = .not_found,
-    rows: [UNIVERSAL_ROWS_PER_PLUGIN]@import("plugins_pure.zig").SearchRow = [_]@import("plugins_pure.zig").SearchRow{.{}} ** UNIVERSAL_ROWS_PER_PLUGIN,
+    rows: [UNIVERSAL_ROWS_PER_PLUGIN]@import("plugins_pure.zig").SearchRow = @as([UNIVERSAL_ROWS_PER_PLUGIN]@import("plugins_pure.zig").SearchRow, @splat(.{})),
     count: usize = 0,
 };
 
@@ -623,7 +623,7 @@ pub fn scaffold(id: []const u8, name: []const u8, description: []const u8) Scaff
 /// every child before returning, so no plugin can publish after its generation.
 pub fn searchInstalledInto(query: []const u8, out: []UniversalResult) usize {
     if (query.len == 0 or out.len == 0) return 0;
-    var discovered: [UNIVERSAL_PLUGIN_CAP]Plugin = [_]Plugin{.{}} ** UNIVERSAL_PLUGIN_CAP;
+    var discovered: [UNIVERSAL_PLUGIN_CAP]Plugin = @as([UNIVERSAL_PLUGIN_CAP]Plugin, @splat(.{}));
     const plugin_len = discoverSearchPlugins(&discovered);
     if (plugin_len == 0) return 0;
 
@@ -632,9 +632,9 @@ pub fn searchInstalledInto(query: []const u8, out: []UniversalResult) usize {
     @memcpy(query_buf[0..query_len], query[0..query_len]);
     const slots = c_alloc.alloc([UNIVERSAL_ROWS_PER_PLUGIN]UniversalResult, UNIVERSAL_PLUGIN_CAP) catch return 0;
     defer c_alloc.free(slots);
-    @memset(slots, [_]UniversalResult{.{}} ** UNIVERSAL_ROWS_PER_PLUGIN);
-    var counts: [UNIVERSAL_PLUGIN_CAP]usize = [_]usize{0} ** UNIVERSAL_PLUGIN_CAP;
-    var threads: [UNIVERSAL_PLUGIN_CAP]?std.Thread = [_]?std.Thread{null} ** UNIVERSAL_PLUGIN_CAP;
+    @memset(slots, @as([UNIVERSAL_ROWS_PER_PLUGIN]UniversalResult, @splat(.{})));
+    var counts: [UNIVERSAL_PLUGIN_CAP]usize = @as([UNIVERSAL_PLUGIN_CAP]usize, @splat(0));
+    var threads: [UNIVERSAL_PLUGIN_CAP]?std.Thread = @as([UNIVERSAL_PLUGIN_CAP]?std.Thread, @splat(null));
     const Task = struct {
         fn run(plugin: Plugin, owned_query: [256]u8, owned_query_len: usize, slot: *[UNIVERSAL_ROWS_PER_PLUGIN]UniversalResult, count: *usize) void {
             count.* = searchPluginInto(plugin, owned_query[0..owned_query_len], slot);
@@ -917,7 +917,7 @@ fn runPluginResolveWith(plugin: Plugin, id: []const u8, episode: []const u8) voi
                         fn dl() void {
                             // Download pages in parallel batches of 8
                             const BATCH = 8;
-                            var threads: [BATCH]?std.Thread = [_]?std.Thread{null} ** BATCH;
+                            var threads: [BATCH]?std.Thread = @as([BATCH]?std.Thread, @splat(null));
                             var page_i: usize = 0;
                             const page_alloc = @import("../core/alloc.zig").allocator;
 
@@ -1217,10 +1217,10 @@ fn cardBegin(src: std.builtin.SourceLocation, id: usize) *dvui.BoxWidget {
         .id_extra = id,
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(theme.radius.lg),
+        .color_fill = .{ .color = theme.colors.bg_surface },
+        .corners = dvui.CornerRect.all(theme.radius.lg),
         .border = dvui.Rect.all(1),
-        .color_border = theme.colors.border_subtle,
+        .color_border = .{ .color = theme.colors.border_subtle },
         .padding = dvui.Rect.all(theme.spacing.md),
         .margin = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
     });
@@ -1229,8 +1229,8 @@ fn cardBegin(src: std.builtin.SourceLocation, id: usize) *dvui.BoxWidget {
 
 fn cardTitle(src: std.builtin.SourceLocation, text: []const u8, sub: []const u8) void {
     var heading = dvui.box(src, .{ .dir = .horizontal }, .{ .expand = .horizontal });
-    if (brands.forName(text)) |brand| dvui.icon(@src(), text, brands.icon(brand), .{}, .{ .min_size_content = theme.iconSize(.lg), .color_text = theme.colors.text_primary, .gravity_y = 0.5, .margin = .{ .w = 8 } });
-    _ = dvui.label(@src(), "{s}", .{text}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_heading });
+    if (brands.forName(text)) |brand| dvui.icon(@src(), text, brands.icon(brand), .{}, .{ .min_size_content = theme.iconSize(.lg), .color_text = .{ .color = theme.colors.text_primary }, .gravity_y = 0.5, .margin = .{ .w = 8 } });
+    _ = dvui.label(@src(), "{s}", .{text}, .{ .color_text = .{ .color = theme.colors.text_primary }, .font = dvui.themeGet().font_heading });
     heading.deinit();
     if (sub.len > 0) {
         components.bodyText(@src(), sub, theme.colors.text_secondary);
@@ -1281,9 +1281,9 @@ fn renderSourcePlugins() void {
             .max_size_content = .{ .w = 155, .h = std.math.floatMax(f32) },
             .padding = dvui.Rect.all(4),
             .font = dvui.themeGet().font_body.withSize(13),
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = theme.colors.text_primary },
+            .corners = theme.dims.rad_sm,
             .gravity_y = 0.5,
         });
         te.deinit();
@@ -1318,7 +1318,7 @@ fn renderSourcePlugins() void {
         if (components.iconButton(@src(), icons.tvg.lucide.settings, "Advanced repositories", Advanced.open)) Advanced.open = !Advanced.open;
     }
     if (source_count == 0) {
-        dvui.labelNoFmt(@src(), "No sources available", .{}, .{ .color_text = theme.colors.text_tertiary });
+        dvui.labelNoFmt(@src(), "No sources available", .{}, .{ .color_text = .{ .color = theme.colors.text_tertiary } });
         return;
     }
 
@@ -1345,7 +1345,7 @@ fn renderSourcePlugins() void {
         // Category header with its match count.
         _ = dvui.label(@src(), "{s}  ({d})", .{ cat.label(), cat_matches }, .{
             .id_extra = @as(usize, @intFromEnum(cat)) + 82000,
-            .color_text = theme.colors.text_secondary,
+            .color_text = .{ .color = theme.colors.text_secondary },
             .font = dvui.themeGet().font_body.withSize(12),
             .margin = .{ .x = 4, .y = 8, .w = 0, .h = 4 },
         });
@@ -1366,10 +1366,10 @@ fn renderSourcePlugins() void {
                 .padding = dvui.Rect.all(10),
                 .margin = dvui.Rect.all(4),
                 .background = true,
-                .color_fill = theme.colors.bg_surface,
+                .color_fill = .{ .color = theme.colors.bg_surface },
                 .border = dvui.Rect.all(1),
-                .color_border = if (installed) theme.colors.accent.opacity(0.25) else theme.colors.border_subtle,
-                .corner_radius = theme.dims.rad_md,
+                .color_border = .{ .color = if (installed) theme.colors.accent.opacity(0.25) else theme.colors.border_subtle },
+                .corners = theme.dims.rad_md,
             });
             defer rowb.deinit();
             const glyph = switch (cat) {
@@ -1380,10 +1380,10 @@ fn renderSourcePlugins() void {
                 .metadata => icons.tvg.lucide.database,
                 .other => icons.tvg.lucide.puzzle,
             };
-            dvui.icon(@src(), "", if (brands.forName(p.nameSlice())) |brand| brands.icon(brand) else glyph, .{}, .{ .min_size_content = theme.iconSize(.sm), .color_text = if (installed) theme.colors.accent else theme.colors.text_secondary, .gravity_y = 0.5, .margin = .{ .w = 10 } });
+            dvui.icon(@src(), "", if (brands.forName(p.nameSlice())) |brand| brands.icon(brand) else glyph, .{}, .{ .min_size_content = theme.iconSize(.sm), .color_text = .{ .color = if (installed) theme.colors.accent else theme.colors.text_secondary }, .gravity_y = 0.5, .margin = .{ .w = 10 } });
             var identity = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .gravity_y = 0.5, .max_size_content = .{ .w = card_width - 100, .h = std.math.floatMax(f32) } });
             var name_wd: dvui.WidgetData = undefined;
-            dvui.labelNoFmt(@src(), p.nameSlice(), .{}, .{ .data_out = &name_wd, .color_text = theme.colors.text_primary, .padding = dvui.Rect.all(0), .expand = .horizontal });
+            dvui.labelNoFmt(@src(), p.nameSlice(), .{}, .{ .data_out = &name_wd, .color_text = .{ .color = theme.colors.text_primary }, .padding = dvui.Rect.all(0), .expand = .horizontal });
             const health = @import("source_request.zig").snapshot(p.idSlice());
             const status_label = if (!installed) "Available" else switch (health.state) {
                 .unchecked => "Installed",
@@ -1395,7 +1395,7 @@ fn renderSourcePlugins() void {
             var meta_buf: [96]u8 = undefined;
             const meta = if (p.version_len > 0) std.fmt.bufPrint(&meta_buf, "{s} · v{s}", .{ status_label, p.version[0..p.version_len] }) catch status_label else status_label;
             var meta_wd: dvui.WidgetData = undefined;
-            dvui.labelNoFmt(@src(), meta, .{}, .{ .data_out = &meta_wd, .color_text = if (installed and health.state == .unavailable) theme.colors.warning else theme.colors.text_tertiary, .padding = .{ .y = 5 }, .font = dvui.themeGet().font_body.withSize(11), .expand = .horizontal });
+            dvui.labelNoFmt(@src(), meta, .{}, .{ .data_out = &meta_wd, .color_text = .{ .color = if (installed and health.state == .unavailable) theme.colors.warning else theme.colors.text_tertiary }, .padding = .{ .y = 5 }, .font = dvui.themeGet().font_body.withSize(11), .expand = .horizontal });
             if (@import("builtin").is_test and source_rect_count < source_name_rects.len) {
                 source_name_rects[source_rect_count] = name_wd.borderRectScale().r;
                 source_meta_rects[source_rect_count] = meta_wd.borderRectScale().r;
@@ -1415,7 +1415,7 @@ fn renderSourcePlugins() void {
 
     // A non-empty catalog filtered down to nothing → tell the user why.
     if (shown_total == 0) {
-        _ = dvui.label(@src(), "No sources match the filter.", .{}, .{ .color_text = theme.colors.text_tertiary, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
+        _ = dvui.label(@src(), "No sources match the filter.", .{}, .{ .color_text = .{ .color = theme.colors.text_tertiary }, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
     }
 }
 
@@ -1514,14 +1514,14 @@ fn renderSuwayomi() void {
             .err, .no_java => theme.colors.danger,
             .idle => theme.colors.text_tertiary,
         };
-        var d = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 9, .h = 9 }, .max_size_content = .{ .w = 9, .h = 9 }, .corner_radius = dvui.Rect.all(5), .background = true, .color_fill = dot, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 } });
+        var d = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 9, .h = 9 }, .max_size_content = .{ .w = 9, .h = 9 }, .corners = dvui.CornerRect.all(5), .background = true, .color_fill = .{ .color = dot }, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 } });
         d.deinit();
 
         const label = if (srv.statusText().len > 0) srv.statusText() else switch (st) {
             .running => "Running",
             else => "Stopped",
         };
-        _ = dvui.label(@src(), "{s}", .{label}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "{s}", .{label}, .{ .color_text = .{ .color = theme.colors.text_secondary }, .gravity_y = 0.5 });
 
         {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
@@ -1530,11 +1530,11 @@ fn renderSuwayomi() void {
 
         const busy_now = st == .downloading or st == .starting;
         if (st == .running) {
-            if (dvui.button(@src(), "Stop", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.danger, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .gravity_y = 0.5 })) {
+            if (dvui.button(@src(), "Stop", .{}, .{ .color_fill = .{ .color = theme.colors.bg_elevated }, .color_text = .{ .color = theme.colors.danger }, .corners = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .gravity_y = 0.5 })) {
                 srv.stopEmbedded();
             }
         } else if (!busy_now) {
-            if (dvui.button(@src(), "Start server", .{}, .{ .color_fill = theme.colors.accent, .color_text = theme.colors.text_on_accent, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .gravity_y = 0.5 })) {
+            if (dvui.button(@src(), "Start server", .{}, .{ .color_fill = .{ .color = theme.colors.accent }, .color_text = .{ .color = theme.colors.text_on_accent }, .corners = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .gravity_y = 0.5 })) {
                 srv.startEmbedded();
             }
         }
@@ -1547,7 +1547,7 @@ fn renderSuwayomi() void {
         const k = @min(cur.len, suwa_url_buf.len - 1);
         @memcpy(suwa_url_buf[0..k], cur[0..k]);
     }
-    _ = dvui.label(@src(), "Advanced: use an external server", .{}, .{ .color_text = theme.colors.text_tertiary, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 2 } });
+    _ = dvui.label(@src(), "Advanced: use an external server", .{}, .{ .color_text = .{ .color = theme.colors.text_tertiary }, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 2 } });
     {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer row.deinit();
@@ -1555,15 +1555,15 @@ fn renderSuwayomi() void {
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &suwa_url_buf }, .placeholder = "http://localhost:4567" }, .{
             .expand = .horizontal,
             .gravity_y = 0.5,
-            .color_fill = theme.colors.bg_elevated,
-            .color_border = theme.colors.border_subtle,
-            .color_text = theme.colors.text_primary,
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .color_border = .{ .color = theme.colors.border_subtle },
+            .color_text = .{ .color = theme.colors.text_primary },
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
         });
         te.deinit();
 
-        if (dvui.button(@src(), "Save", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.accent, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 }, .gravity_y = 0.5 })) {
+        if (dvui.button(@src(), "Save", .{}, .{ .color_fill = .{ .color = theme.colors.bg_elevated }, .color_text = .{ .color = theme.colors.accent }, .corners = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 }, .gravity_y = 0.5 })) {
             const url = std.mem.trim(u8, suwa_url_buf[0 .. std.mem.indexOfScalar(u8, &suwa_url_buf, 0) orelse suwa_url_buf.len], " \t\r\n");
             var body: [320]u8 = undefined;
             const src = sc.get("suwayomi", "source") orelse "";
@@ -1572,10 +1572,10 @@ fn renderSuwayomi() void {
                 setSuwaMsg("Saved");
             } else |_| {}
         }
-        if (dvui.button(@src(), "Test", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 }, .gravity_y = 0.5 })) {
+        if (dvui.button(@src(), "Test", .{}, .{ .color_fill = .{ .color = theme.colors.bg_elevated }, .color_text = .{ .color = theme.colors.text_secondary }, .corners = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 }, .gravity_y = 0.5 })) {
             suwaTest();
         }
-        if (sc.get("suwayomi", "base") != null and dvui.button(@src(), "Disconnect", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.danger, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 }, .gravity_y = 0.5 })) {
+        if (sc.get("suwayomi", "base") != null and dvui.button(@src(), "Disconnect", .{}, .{ .color_fill = .{ .color = theme.colors.bg_elevated }, .color_text = .{ .color = theme.colors.danger }, .corners = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 }, .gravity_y = 0.5 })) {
             srv.stopEmbedded();
             sc.uninstallById("suwayomi");
             @memset(&suwa_url_buf, 0);
@@ -1589,7 +1589,7 @@ fn renderSuwayomi() void {
     @memcpy(test_message[0..test_message_len], suwa_test_msg[0..test_message_len]);
     suwa_test_mutex.unlock();
     if (test_message_len > 0) {
-        _ = dvui.label(@src(), "{s}", .{test_message[0..test_message_len]}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
+        _ = dvui.label(@src(), "{s}", .{test_message[0..test_message_len]}, .{ .color_text = .{ .color = theme.colors.text_secondary }, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
     }
 }
 
@@ -1604,7 +1604,7 @@ fn renderDebrid() void {
     defer row.deinit();
 
     const providers = [_][]const u8{ "realdebrid", "alldebrid", "premiumize", "torbox", "debridlink" };
-    if (dvui.button(@src(), pr.debridProvider(), .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.accent, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 }, .gravity_y = 0.5 })) {
+    if (dvui.button(@src(), pr.debridProvider(), .{}, .{ .color_fill = .{ .color = theme.colors.bg_elevated }, .color_text = .{ .color = theme.colors.accent }, .corners = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 }, .gravity_y = 0.5 })) {
         var idx: usize = 0;
         for (providers, 0..) |p, k| {
             if (std.mem.eql(u8, p, pr.debridProvider())) idx = k;
@@ -1617,11 +1617,11 @@ fn renderDebrid() void {
     var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &pr.debrid_key_buf }, .placeholder = "debrid API key" }, .{ .expand = .horizontal, .gravity_y = 0.5, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 } });
     te.deinit();
     pr.debrid_key_len = std.mem.indexOfScalar(u8, &pr.debrid_key_buf, 0) orelse pr.debrid_key_buf.len;
-    if (dvui.button(@src(), "Save", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
+    if (dvui.button(@src(), "Save", .{}, .{ .color_fill = .{ .color = theme.colors.bg_elevated }, .color_text = .{ .color = theme.colors.text_secondary }, .corners = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
         pr.saveDebrid();
         state.showToastTyped("Debrid saved", .success);
     }
-    if (pr.debrid_key_len > 0 and dvui.button(@src(), "Disconnect", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
+    if (pr.debrid_key_len > 0 and dvui.button(@src(), "Disconnect", .{}, .{ .color_fill = .{ .color = theme.colors.bg_elevated }, .color_text = .{ .color = theme.colors.text_secondary }, .corners = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
         pr.clearDebrid();
         state.showToast("Debrid disconnected");
     }
@@ -1643,18 +1643,18 @@ fn renderTrakt() void {
     if (account.connected) {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer row.deinit();
-        _ = dvui.label(@src(), "Connected", .{}, .{ .color_text = theme.colors.success, .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "Connected", .{}, .{ .color_text = .{ .color = theme.colors.success }, .gravity_y = 0.5 });
         {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
         }
-        if (dvui.button(@src(), "Disconnect", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 }, .gravity_y = 0.5 })) {
+        if (dvui.button(@src(), "Disconnect", .{}, .{ .color_fill = .{ .color = theme.colors.bg_elevated }, .color_text = .{ .color = theme.colors.text_secondary }, .corners = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 }, .gravity_y = 0.5 })) {
             tr.disconnect();
         }
         return;
     }
 
-    _ = dvui.label(@src(), "Create an app at trakt.tv/oauth/applications (redirect urn:ietf:wg:oauth:2.0:oob), then paste id + secret.", .{}, .{ .color_text = theme.colors.text_tertiary, .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 } });
+    _ = dvui.label(@src(), "Create an app at trakt.tv/oauth/applications (redirect urn:ietf:wg:oauth:2.0:oob), then paste id + secret.", .{}, .{ .color_text = .{ .color = theme.colors.text_tertiary }, .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 } });
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
     defer row.deinit();
@@ -1667,7 +1667,7 @@ fn renderTrakt() void {
 
     const id_len = std.mem.indexOfScalar(u8, &Draft.client_id, 0) orelse Draft.client_id.len;
     const secret_len = std.mem.indexOfScalar(u8, &Draft.client_secret, 0) orelse Draft.client_secret.len;
-    if ((id_len > 0 or secret_len > 0) and dvui.button(@src(), "Save keys", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
+    if ((id_len > 0 or secret_len > 0) and dvui.button(@src(), "Save keys", .{}, .{ .color_fill = .{ .color = theme.colors.bg_elevated }, .color_text = .{ .color = theme.colors.text_secondary }, .corners = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
         if (id_len > 0) _ = tr.setCredential("client_id", Draft.client_id[0..id_len]);
         if (secret_len > 0) _ = tr.setCredential("client_secret", Draft.client_secret[0..secret_len]);
         @memset(&Draft.client_id, 0);
@@ -1676,7 +1676,7 @@ fn renderTrakt() void {
     }
 
     const label_txt = if (account.pending) "Waiting" else "Connect";
-    if (dvui.button(@src(), label_txt, .{}, .{ .color_fill = theme.colors.accent, .color_text = theme.colors.text_on_accent, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
+    if (dvui.button(@src(), label_txt, .{}, .{ .color_fill = .{ .color = theme.colors.accent }, .color_text = .{ .color = theme.colors.text_on_accent }, .corners = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
         if (id_len > 0) _ = tr.setCredential("client_id", Draft.client_id[0..id_len]);
         if (secret_len > 0) _ = tr.setCredential("client_secret", Draft.client_secret[0..secret_len]);
         @memset(&Draft.client_id, 0);
@@ -1685,7 +1685,7 @@ fn renderTrakt() void {
     }
 
     if (account.pending and account.user_code_len > 0) {
-        _ = dvui.label(@src(), "Enter code {s} at trakt.tv/activate", .{account.user_code[0..account.user_code_len]}, .{ .color_text = theme.colors.accent, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
+        _ = dvui.label(@src(), "Enter code {s} at trakt.tv/activate", .{account.user_code[0..account.user_code_len]}, .{ .color_text = .{ .color = theme.colors.accent }, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
     }
 }
 
@@ -1695,7 +1695,7 @@ fn renderTrakt() void {
 pub fn renderContent() void {
     if (!scanned) scanPlugins();
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_app });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = .{ .color = theme.colors.bg_app } });
     defer scroll.deinit();
 
     renderSourcePlugins();
@@ -1711,7 +1711,7 @@ pub fn renderContent() void {
 pub fn renderSection(tab: @import("../core/router.zig").PluginTab) void {
     if (!scanned) scanPlugins();
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_app });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = .{ .color = theme.colors.bg_app } });
     defer scroll.deinit();
 
     switch (tab) {
@@ -1736,28 +1736,28 @@ fn renderContentPlugins() void {
         defer top.deinit();
 
         _ = dvui.label(@src(), "Install an executable plugin: place its extracted folder (including manifest.json and its commands) in Opal's plugins folder, then Rescan. Only use plugins you trust.", .{}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .expand = .horizontal,
         });
         if (dvui.button(@src(), "Open plugins folder", .{}, .{
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.colors.accent },
+            .color_text = .{ .color = theme.colors.text_on_accent },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
         })) {
             var dir_buf: [512]u8 = undefined;
             @import("../ui/settings.zig").openExternal(getPluginDir(&dir_buf));
         }
         if (dvui.button(@src(), "Rescan", .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = theme.colors.text_primary },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
         })) {
             scanned = false;
         }
         if (plugin_count == 0) {
-            _ = dvui.label(@src(), "No content plugins installed", .{}, .{ .color_text = theme.colors.text_secondary, .expand = .horizontal });
+            _ = dvui.label(@src(), "No content plugins installed", .{}, .{ .color_text = .{ .color = theme.colors.text_secondary }, .expand = .horizontal });
             return;
         }
 
@@ -1782,9 +1782,9 @@ fn renderContentPlugins() void {
 
                 if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(name), .{}, .{
                     .id_extra = pi + 8000,
-                    .color_fill = if (is_active) theme.colors.accent else theme.transparent,
-                    .color_text = if (is_active) theme.colors.text_on_accent else theme.colors.text_secondary,
-                    .corner_radius = dvui.Rect.all(theme.radius.pill),
+                    .color_fill = .{ .color = if (is_active) theme.colors.accent else theme.transparent },
+                    .color_text = .{ .color = if (is_active) theme.colors.text_on_accent else theme.colors.text_secondary },
+                    .corners = dvui.CornerRect.all(theme.radius.pill),
                     .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
                     .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
                 })) {
@@ -1811,19 +1811,19 @@ fn renderContentPlugins() void {
             var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &search_buf } }, .{
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 200, .h = 20 },
-                .color_fill = theme.colors.bg_elevated,
-                .color_border = theme.colors.border_subtle,
-                .color_text = theme.colors.text_primary,
+                .color_fill = .{ .color = theme.colors.bg_elevated },
+                .color_border = .{ .color = theme.colors.border_subtle },
+                .color_text = .{ .color = theme.colors.text_primary },
                 .border = dvui.Rect.all(1),
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
             });
             const enter_pressed = te.enter_pressed;
             te.deinit();
 
             const clicked = dvui.button(@src(), "Search", .{}, .{
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.text_on_accent,
-                .corner_radius = theme.dims.rad_sm,
+                .color_fill = .{ .color = theme.colors.accent },
+                .color_text = .{ .color = theme.colors.text_on_accent },
+                .corners = theme.dims.rad_sm,
                 .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
                 .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
             });
@@ -1844,7 +1844,7 @@ fn renderContentPlugins() void {
     // Loading
     if (loading_now) {
         _ = dvui.label(@src(), "Loading…", .{}, .{
-            .color_text = theme.colors.accent,
+            .color_text = .{ .color = theme.colors.accent },
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
         });
         return;
@@ -1853,7 +1853,7 @@ fn renderContentPlugins() void {
     // Results
     if (count_now == 0) {
         _ = dvui.label(@src(), "Search or browse content from plugins", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = .{ .color = theme.colors.text_secondary },
             .padding = .{ .x = 12, .y = 12, .w = 0, .h = 0 },
         });
         return;
@@ -1886,8 +1886,8 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
         .id_extra = idx + 1000,
         .expand = .horizontal,
         .background = true,
-        .color_fill = if (item.expanded) theme.colors.bg_hover else theme.colors.bg_surface,
-        .color_border = if (item.expanded) theme.colors.accent_glow else theme.colors.border_subtle,
+        .color_fill = .{ .color = if (item.expanded) theme.colors.bg_hover else theme.colors.bg_surface },
+        .color_border = .{ .color = if (item.expanded) theme.colors.accent_glow else theme.colors.border_subtle },
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .padding = .{ .x = 10, .y = 10, .w = 10, .h = 10 },
     });
@@ -1906,8 +1906,8 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
             var poster = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = idx + 100,
                 .background = true,
-                .color_fill = dvui.Color{ .r = 20 + h1 / 6, .g = 25 + h2 / 8, .b = 35 + h1 / 5, .a = 255 },
-                .corner_radius = dvui.Rect.all(6),
+                .color_fill = .{ .color = dvui.Color{ .r = 20 + h1 / 6, .g = 25 + h2 / 8, .b = 35 + h1 / 5, .a = 255 } },
+                .corners = dvui.CornerRect.all(6),
                 .min_size_content = .{ .w = 60, .h = 90 },
                 .max_size_content = .{ .w = 60, .h = 90 },
             });
@@ -1916,7 +1916,7 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
             if (item.poster_tex == null and item.poster_pixels != null) {
                 const num_pixels = item.poster_w * item.poster_h;
                 const pixels_pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(item.poster_pixels.?.ptr)))[0..num_pixels];
-                item.poster_tex = dvui.textureCreate(pixels_pma, item.poster_w, item.poster_h, .linear, .rgba_32) catch null;
+                item.poster_tex = dvui.textureCreate(pixels_pma, .{ .width = item.poster_w, .height = item.poster_h, .format = .rgba_32, .interpolation = .linear, .wrap_u = .clamp, .wrap_v = .clamp }) catch null;
                 if (item.poster_tex != null) {
                     c_alloc.free(item.poster_pixels.?);
                     item.poster_pixels = null;
@@ -1927,7 +1927,7 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                 _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
                     .id_extra = idx + 150,
                     .expand = .both,
-                    .corner_radius = dvui.Rect.all(6),
+                    .corners = dvui.CornerRect.all(6),
                 });
             } else {
                 if (item.poster_fetching) item.poster_attempted = true else if (item.poster_attempted and item.poster_pixels == null) item.poster_failed = true;
@@ -1953,10 +1953,10 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
             if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(title), .{}, .{
                 .id_extra = idx + 500,
                 .expand = .horizontal,
-                .color_text = if (item.expanded) theme.colors.accent else theme.colors.text_primary,
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
+                .color_text = .{ .color = if (item.expanded) theme.colors.accent else theme.colors.text_primary },
+                .color_fill = .{ .color = theme.transparent },
+                .color_fill_hover = .{ .color = theme.colors.bg_hover },
+                .color_fill_press = .{ .color = theme.colors.bg_elevated },
                 .padding = dvui.Rect.all(0),
             })) {
                 // If stream_url is already set, play directly
@@ -1987,25 +1987,25 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                 if (item.year_len > 0) {
                     _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(item.year[0..item.year_len])}, .{
                         .id_extra = idx + 610,
-                        .color_text = theme.colors.text_secondary,
+                        .color_text = .{ .color = theme.colors.text_secondary },
                     });
-                    _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 615, .color_text = theme.colors.text_secondary });
+                    _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 615, .color_text = .{ .color = theme.colors.text_secondary } });
                 }
 
                 if (item.episodes > 0) {
                     var ep_buf: [16]u8 = undefined;
-                    if (std.fmt.bufPrintZ(&ep_buf, "{d} eps", .{item.episodes})) |eps| {
-                        _ = dvui.label(@src(), "{s}", .{eps}, .{ .id_extra = idx + 620, .color_text = theme.colors.text_secondary });
+                    if (@import("opal-fmt").bufPrintZ(&ep_buf, "{d} eps", .{item.episodes})) |eps| {
+                        _ = dvui.label(@src(), "{s}", .{eps}, .{ .id_extra = idx + 620, .color_text = .{ .color = theme.colors.text_secondary } });
                     } else |_| {}
                 }
 
                 if (item.score > 0) {
-                    _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 625, .color_text = theme.colors.text_secondary });
+                    _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 625, .color_text = .{ .color = theme.colors.text_secondary } });
                     const pct = @as(u8, @intFromFloat(std.math.clamp(item.score * 10.0, 0.0, 100.0)));
                     const sc = if (pct >= 70) theme.colors.success else if (pct >= 50) theme.colors.warning else theme.colors.danger;
                     var pb: [8]u8 = undefined;
-                    if (std.fmt.bufPrintZ(&pb, "{d}%", .{pct})) |ps| {
-                        _ = dvui.label(@src(), "{s}", .{ps}, .{ .id_extra = idx + 630, .color_text = sc });
+                    if (@import("opal-fmt").bufPrintZ(&pb, "{d}%", .{pct})) |ps| {
+                        _ = dvui.label(@src(), "{s}", .{ps}, .{ .id_extra = idx + 630, .color_text = .{ .color = sc } });
                     } else |_| {}
                 }
             }
@@ -2015,10 +2015,10 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                 const snip_len = @min(item.overview_len, 60);
                 const suffix: []const u8 = if (item.overview_len > 60) "..." else "";
                 var btn_buf: [128]u8 = undefined;
-                if (std.fmt.bufPrintZ(&btn_buf, "{s}{s}", .{ item.overview[0..snip_len], suffix })) |snip| {
+                if (@import("opal-fmt").bufPrintZ(&btn_buf, "{s}{s}", .{ item.overview[0..snip_len], suffix })) |snip| {
                     _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(snip)}, .{
                         .id_extra = idx + 650,
-                        .color_text = theme.colors.text_tertiary,
+                        .color_text = .{ .color = theme.colors.text_tertiary },
                         .expand = .horizontal,
                         .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
                     });
@@ -2035,7 +2035,7 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                 .id_extra = idx + 750,
                 .expand = .horizontal,
                 .background = true,
-                .color_fill = theme.colors.border_subtle,
+                .color_fill = .{ .color = theme.colors.border_subtle },
                 .min_size_content = .{ .w = 0, .h = 1 },
                 .margin = .{ .x = 0, .y = 6, .w = 0, .h = 6 },
             });
@@ -2044,7 +2044,7 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
 
         _ = dvui.label(@src(), "Select Episode", .{}, .{
             .id_extra = idx + 760,
-            .color_text = theme.colors.accent,
+            .color_text = .{ .color = theme.colors.accent },
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
 
@@ -2066,14 +2066,14 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
             for (row_start..row_end) |ep_i| {
                 const ep_num = ep_i + 1;
                 var lbl: [8]u8 = undefined;
-                if (std.fmt.bufPrintZ(&lbl, "{d}", .{ep_num})) |ep_str| {
+                if (@import("opal-fmt").bufPrintZ(&lbl, "{d}", .{ep_num})) |ep_str| {
                     if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(ep_str), .{}, .{
                         .id_extra = idx * 300 + ep_i + 3000,
-                        .color_fill = theme.colors.bg_elevated,
-                        .color_text = theme.colors.text_primary,
-                        .color_border = theme.colors.border_subtle,
+                        .color_fill = .{ .color = theme.colors.bg_elevated },
+                        .color_text = .{ .color = theme.colors.text_primary },
+                        .color_border = .{ .color = theme.colors.border_subtle },
                         .border = dvui.Rect.all(1),
-                        .corner_radius = dvui.Rect.all(4),
+                        .corners = dvui.CornerRect.all(4),
                         .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
                         .margin = .{ .x = 2, .y = 1, .w = 2, .h = 1 },
                         .min_size_content = .{ .w = 24, .h = 14 },
@@ -2081,7 +2081,7 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                         // Resolve this specific episode
                         if (item.id_len > 0) {
                             var ep_arg: [8]u8 = undefined;
-                            if (std.fmt.bufPrintZ(&ep_arg, "{d}", .{ep_num})) |ea| {
+                            if (@import("opal-fmt").bufPrintZ(&ep_arg, "{d}", .{ep_num})) |ea| {
                                 runPluginResolve(item.id[0..item.id_len], ea);
                             } else |_| {}
                         }
@@ -2148,9 +2148,9 @@ pub fn verifySuwaNonblockingForTest() !void {
 
 // Signed repositories share executable approval with installed plugins.
 const SignedUi = struct {
-    var id: [33]u8 = .{0} ** 33;
-    var url: [1025]u8 = .{0} ** 1025;
-    var key: [65]u8 = .{0} ** 65;
+    var id: [33]u8 = @splat(0);
+    var url: [1025]u8 = @splat(0);
+    var key: [65]u8 = @splat(0);
     var snapshot: ?std.json.Parsed(std.json.Value) = null;
     var busy = std.atomic.Value(bool).init(false);
     var changed = std.atomic.Value(bool).init(true);
@@ -2174,11 +2174,11 @@ fn signedField(buf: []u8, placeholder: []const u8, id: usize) void {
     var field = dvui.textEntry(@src(), .{ .text = .{ .buffer = buf }, .placeholder = placeholder }, .{
         .id_extra = id,
         .expand = .horizontal,
-        .color_fill = theme.colors.bg_elevated,
-        .color_border = theme.colors.border_subtle,
-        .color_text = theme.colors.text_primary,
+        .color_fill = .{ .color = theme.colors.bg_elevated },
+        .color_border = .{ .color = theme.colors.border_subtle },
+        .color_text = .{ .color = theme.colors.text_primary },
         .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .corners = dvui.CornerRect.all(theme.radius.sm),
     });
     field.deinit();
 }
@@ -2219,7 +2219,7 @@ fn renderSignedRepositories() void {
     const repos = snapshot.value.object.get("repositories") orelse return;
     for (repos.array.items, 0..) |entry, ri| {
         const id = signedString(entry, "id");
-        _ = dvui.label(@src(), "{s}", .{id}, .{ .color_text = theme.colors.text_primary, .id_extra = 9200 + ri });
+        _ = dvui.label(@src(), "{s}", .{id}, .{ .color_text = .{ .color = theme.colors.text_primary }, .id_extra = 9200 + ri });
         if (!SignedUi.busy.load(.acquire) and components.actionButton(@src(), "Fetch signed catalog", .secondary, 9300 + ri)) {
             var job: SignedUi.Job = .{ .id = undefined, .len = id.len };
             @memcpy(job.id[0..id.len], id);
@@ -2234,10 +2234,10 @@ fn renderSignedRepositories() void {
         for (addons.array.items, 0..) |addon, ai| {
             const uid = 10000 + ri * 100 + ai;
             const name = signedString(addon, "name");
-            _ = dvui.label(@src(), "{s} · {s}", .{ name, signedString(addon, "version") }, .{ .color_text = theme.colors.text_primary, .id_extra = uid });
+            _ = dvui.label(@src(), "{s} · {s}", .{ name, signedString(addon, "version") }, .{ .color_text = .{ .color = theme.colors.text_primary }, .id_extra = uid });
             const permissions = addon.object.get("permissions").?;
             for (permissions.array.items, 0..) |permission, pi| {
-                _ = dvui.label(@src(), "Requests: {s}", .{permission.string}, .{ .color_text = theme.colors.warning, .id_extra = uid * 10 + pi });
+                _ = dvui.label(@src(), "Requests: {s}", .{permission.string}, .{ .color_text = .{ .color = theme.colors.warning }, .id_extra = uid * 10 + pi });
             }
             if (components.confirmDangerButton(@src(), "Install files (approval still required)", uid + 1000)) {
                 repo.install(id, signedString(addon, "id"), signedString(entry, "confirmation")) catch |err| {
@@ -2248,8 +2248,8 @@ fn renderSignedRepositories() void {
                 SignedUi.changed.store(true, .release);
             }
             if (addon.object.get("panel")) |panel| if (panel == .object) {
-                _ = dvui.label(@src(), "{s}", .{signedString(panel, "title")}, .{ .color_text = theme.colors.text_primary, .id_extra = uid + 2000 });
-                var text = dvui.textLayout(@src(), .{}, .{ .expand = .horizontal, .color_text = theme.colors.text_secondary, .id_extra = uid + 3000 });
+                _ = dvui.label(@src(), "{s}", .{signedString(panel, "title")}, .{ .color_text = .{ .color = theme.colors.text_primary }, .id_extra = uid + 2000 });
+                var text = dvui.textLayout(@src(), .{}, .{ .expand = .horizontal, .color_text = .{ .color = theme.colors.text_secondary }, .id_extra = uid + 3000 });
                 text.addText(signedString(panel, "body"), .{});
                 text.deinit();
             };

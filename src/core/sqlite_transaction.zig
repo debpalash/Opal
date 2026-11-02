@@ -4,9 +4,7 @@
 //! Acquire feature snapshots before beginning; do not acquire feature locks or
 //! perform network/process work while a transaction is alive. Same thread only.
 const std = @import("std");
-pub const c = @cImport({
-    @cInclude("sqlite3.h");
-});
+pub const c = @import("opal-native-c");
 
 pub const Transaction = struct {
     connection: *c.sqlite3,

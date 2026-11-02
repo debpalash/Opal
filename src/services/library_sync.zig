@@ -265,7 +265,7 @@ const Slot = struct {
     url_len: usize = 0,
 };
 
-var slots: [MAX_PEERS]Slot = [_]Slot{.{}} ** MAX_PEERS;
+var slots: [MAX_PEERS]Slot = @as([MAX_PEERS]Slot, @splat(.{}));
 var outcome_mutex: sync.Mutex = .{};
 var last_auto_ms: i64 = 0;
 

@@ -1,4 +1,6 @@
 """Executable Horizon browser behavior regressions."""
+import os
+import sys
 import subprocess
 from .harness import *
 
@@ -13,7 +15,7 @@ def test_horizon_browser():
 
 def _pure_modules(modules):
     for module in modules:
-        result = subprocess.run(['zig', 'test', 'src/services/' + module + '.zig'], cwd=PROJECT_DIR, capture_output=True, text=True, timeout=90)
+        result = subprocess.run([sys.executable, os.path.join(PROJECT_DIR, 'scripts', 'zig-test.py'), 'src/services/' + module + '.zig'], cwd=PROJECT_DIR, capture_output=True, text=True, timeout=90)
         if result.returncode:
             return 'fail', module + ': ' + result.stderr[-2000:]
     return 'pass', 'Executed production pure modules: ' + ', '.join(modules)

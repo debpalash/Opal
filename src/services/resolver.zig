@@ -183,7 +183,7 @@ pub const sourceStatusIsFailure = lifecycle.isFailure;
 pub const SourceBit = enum(u4) { local, torrent, jellyfin, youtube, anime, comics, stremio, rss, livetv, music, radio, podcast, novels, vndb, audiobooks, opds };
 /// Every declared bit set. Kept in sync with SourceBit at comptime so adding a
 /// vertical can't silently leave its pill off (or make `all on` mis-detect).
-pub const ALL_SOURCE_BITS: u16 = @intCast((@as(u32, 1) << @typeInfo(SourceBit).@"enum".fields.len) - 1);
+pub const ALL_SOURCE_BITS: u16 = @intCast((@as(u32, 1) << @typeInfo(SourceBit).@"enum".field_names.len) - 1);
 pub var source_mask: std.atomic.Value(u16) = std.atomic.Value(u16).init(ALL_SOURCE_BITS);
 const CacheScope = struct { mask: u16 = ALL_SOURCE_BITS, fingerprint: u64 = 0 };
 var resolver_cache_scope: CacheScope = .{}; // lifecycle_mutex
@@ -606,7 +606,7 @@ const RemoteAction = struct {
     kind: RemoteActionKind = .play,
     item: ResolvedItem = .{},
 };
-var remote_actions: [REMOTE_ACTION_CAP]RemoteAction = [_]RemoteAction{.{}} ** REMOTE_ACTION_CAP;
+var remote_actions: [REMOTE_ACTION_CAP]RemoteAction = @as([REMOTE_ACTION_CAP]RemoteAction, @splat(.{}));
 var remote_action_head: usize = 0;
 var remote_action_count: usize = 0;
 var remote_action_mutex = @import("../core/sync.zig").Mutex{};
@@ -1203,7 +1203,7 @@ fn resolveCatalog(query_buf: [256]u8, qlen: usize) void {
     defer finishWorker(&status_catalog, .done);
     if (qlen == 0) return;
 
-    var catalog: [24]state.TmdbItem = [_]state.TmdbItem{.{}} ** 24;
+    var catalog: [24]state.TmdbItem = @as([24]state.TmdbItem, @splat(.{}));
     const count = @import("tmdb_api.zig").searchCatalogInto(query_buf[0..qlen], &catalog);
     if (count == 0) {
         noteWorkerOutcome(.no_results);
@@ -1548,7 +1548,7 @@ fn deserializeInto(bytes: []const u8) usize {
         const url = r.blob() orelse break;
         copyField(&it.url, &it.url_len, url);
         const src_tag = r.u8v() orelse break;
-        const src_fields = @typeInfo(SourceType).@"enum".fields.len;
+        const src_fields = @typeInfo(SourceType).@"enum".field_names.len;
         it.source = if (src_tag < src_fields) @enumFromInt(src_tag) else .torrent;
         it.quality = r.u8v() orelse break;
         it.seeds = r.u16v() orelse break;
@@ -1888,7 +1888,7 @@ fn resolveAudiobooks(query_buf: [256]u8, qlen: usize) void {
     }
     if (connection.library_count == 0) return;
     const Page = struct {
-        rows: [6]ResolvedItem = [_]ResolvedItem{.{}} ** 6,
+        rows: [6]ResolvedItem = @as([6]ResolvedItem, @splat(.{})),
         count: usize = 0,
         status: SourceStatus = .no_results,
     };
@@ -1898,7 +1898,7 @@ fn resolveAudiobooks(query_buf: [256]u8, qlen: usize) void {
     };
     defer alloc.free(pages);
     for (pages) |*page| page.* = .{};
-    var threads: [16]?std.Thread = .{null} ** 16;
+    var threads: [16]?std.Thread = @splat(null);
     const Fetch = struct {
         fn run(snapshot: *const abs.ConnectionSnapshot, query: *const [256]u8, query_len: usize, library: pure.Library, page: *Page, generation: u32) void {
             if (run_gen.load(.acquire) != generation) return;
@@ -2294,7 +2294,7 @@ fn resolvePlex(query_buf: [256]u8, qlen: usize) void {
         return;
     }
 
-    var found: [20]plex.SearchItem = [_]plex.SearchItem{.{}} ** 20;
+    var found: [20]plex.SearchItem = @as([20]plex.SearchItem, @splat(.{}));
     const response = plex.searchIntoResult(query_buf[0..qlen], &found);
     const count = response.count;
     if (count == 0) {
@@ -3872,7 +3872,7 @@ fn resolvePodcasts(query_buf: [256]u8, qlen: usize) void {
             noteWorkerOutcome(.parse_failed);
             continue;
         };
-        if (std.ascii.indexOfIgnoreCase(show.name[0..show.name_len], query) == null and std.ascii.indexOfIgnoreCase(show.artist[0..show.artist_len], query) == null) continue;
+        if (std.ascii.findIgnoreCase(show.name[0..show.name_len], query) == null and std.ascii.findIgnoreCase(show.artist[0..show.artist_len], query) == null) continue;
         shows[installed_count] = show;
         installed_count += 1;
     }

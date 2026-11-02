@@ -115,8 +115,8 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
         bw.init(@src(), .{}, .{
             .id_extra = id_extra,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(theme.radius.lg),
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .corners = dvui.CornerRect.all(theme.radius.lg),
             .min_size_content = .{ .w = width, .h = art_h },
             .max_size_content = .{ .w = width, .h = art_h },
             .padding = dvui.Rect.all(0),
@@ -130,7 +130,7 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
             _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
                 .id_extra = id_extra,
                 .expand = .both,
-                .corner_radius = dvui.Rect.all(theme.radius.lg),
+                .corners = dvui.CornerRect.all(theme.radius.lg),
             });
         } else {
             // Full attempted -> failed transition. Gating on !failed without ever
@@ -148,7 +148,7 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
                 components.coverSkeleton(@src(), id_extra + 10, 8)
             else
                 _ = dvui.label(@src(), "Artwork unavailable", .{}, .{
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                     .gravity_x = 0.5,
                     .gravity_y = 0.5,
                 });
@@ -159,7 +159,7 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
     // ── Title ──
     _ = dvui.label(@src(), "{s}", .{card.title}, .{
         .id_extra = id_extra,
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .expand = .horizontal,
         .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
     });
@@ -167,7 +167,7 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
     // ── Status line ──
     _ = dvui.label(@src(), "{s}", .{card.subtitle}, .{
         .id_extra = id_extra,
-        .color_text = if (card.subtitle_accent) theme.colors.accent else theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(if (card.subtitle_accent) theme.colors.accent else theme.colors.text_tertiary),
         .expand = .horizontal,
         .padding = .{ .x = 2, .y = 0, .w = 2, .h = 2 },
     });
@@ -189,7 +189,7 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
                 .expand = .horizontal,
                 .gravity_y = 0.5,
                 .background = true,
-                .color_fill = theme.colors.bg_elevated,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
                 .min_size_content = .{ .w = 0, .h = 3 },
                 .max_size_content = .{ .w = std.math.floatMax(f32), .h = 3 },
             });
@@ -198,7 +198,7 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
             var fill = dvui.box(@src(), .{}, .{
                 .id_extra = id_extra,
                 .background = true,
-                .color_fill = theme.colors.accent,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
                 .min_size_content = .{ .w = f * track_w, .h = 3 },
                 .max_size_content = .{ .w = f * track_w, .h = 3 },
             });
@@ -209,7 +209,7 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
         if (card.progress_label.len > 0) {
             _ = dvui.label(@src(), "{s}", .{card.progress_label}, .{
                 .id_extra = id_extra,
-                .color_text = theme.colors.text_tertiary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                 .gravity_y = 0.5,
                 .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
             });
@@ -232,9 +232,9 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
                 .id_extra = id_extra,
                 .expand = .horizontal,
                 .background = true,
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.text_primary,
-                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
+                .corners = dvui.CornerRect.all(theme.radius.sm),
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
                 .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
             })) clicked = .action;
@@ -249,12 +249,12 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
             if (dvui.buttonIcon(@src(), "card-remove", icons.tvg.lucide.x, .{}, .{}, .{
                 .data_out = &wd,
                 .id_extra = id_extra,
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .color_text = theme.colors.text_tertiary,
+                .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+                .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+                .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                 .border = dvui.Rect.all(0),
-                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .corners = dvui.CornerRect.all(theme.radius.sm),
                 .gravity_y = 0.5,
                 .padding = .{ .x = 5, .y = 5, .w = 5, .h = 5 },
                 .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
@@ -263,7 +263,7 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
         }
     }
 
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         const S = struct {
             var n: usize = 0;
         };

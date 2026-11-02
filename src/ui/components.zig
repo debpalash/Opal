@@ -79,11 +79,11 @@ const tk = struct {
     pub const sp_xxl: f32 = theme.spacing.xxl;
 
     // ── radii (dvui.Rect-typed for corner_radius slots) ──
-    pub const rad_xs = dvui.Rect.all(theme.radius.xs);
-    pub const rad_sm = dvui.Rect.all(theme.radius.sm);
-    pub const rad_md = dvui.Rect.all(theme.radius.md);
-    pub const rad_lg = dvui.Rect.all(theme.radius.lg);
-    pub const rad_pill = dvui.Rect.all(theme.radius.pill);
+    pub const rad_xs = dvui.CornerRect.all(theme.radius.xs);
+    pub const rad_sm = dvui.CornerRect.all(theme.radius.sm);
+    pub const rad_md = dvui.CornerRect.all(theme.radius.md);
+    pub const rad_lg = dvui.CornerRect.all(theme.radius.lg);
+    pub const rad_pill = dvui.CornerRect.all(theme.radius.pill);
 
     // ── font sizes ──
     pub const fs_micro: f32 = theme.font_size.micro;
@@ -174,8 +174,8 @@ pub fn coverSkeleton(src: std.builtin.SourceLocation, id_extra: usize, radius: f
         .id_extra = id_extra,
         .expand = .both,
         .background = true,
-        .color_fill = mixColor(theme.colors.bg_elevated, theme.colors.bg_hover, 0.18 + motion.glow * 0.18),
-        .corner_radius = dvui.Rect.all(radius),
+        .color_fill = @import("color_compat.zig").wrap(mixColor(theme.colors.bg_elevated, theme.colors.bg_hover, 0.18 + motion.glow * 0.18)),
+        .corners = dvui.CornerRect.all(radius),
     });
     base.deinit();
 
@@ -185,8 +185,8 @@ pub fn coverSkeleton(src: std.builtin.SourceLocation, id_extra: usize, radius: f
         .id_extra = id_extra,
         .expand = .vertical,
         .background = true,
-        .color_fill = shine,
-        .corner_radius = dvui.Rect.all(radius),
+        .color_fill = @import("color_compat.zig").wrap(shine),
+        .corners = dvui.CornerRect.all(radius),
         .min_size_content = .{ .w = 34, .h = 1 },
         .max_size_content = .{ .w = 34, .h = std.math.floatMax(f32) },
         .gravity_x = motion.phase,
@@ -248,7 +248,7 @@ pub fn renderCoverSlot(src: std.builtin.SourceLocation, id_extra: usize, slot: *
         _ = dvui.image(src, .{ .source = .{ .texture = tex } }, .{
             .id_extra = id_extra,
             .expand = .both,
-            .corner_radius = dvui.Rect.all(radius),
+            .corners = dvui.CornerRect.all(radius),
         });
         return;
     };
@@ -258,7 +258,7 @@ pub fn renderCoverSlot(src: std.builtin.SourceLocation, id_extra: usize, slot: *
     }
     _ = dvui.icon(src, "cover-fallback", fallback_icon, .{}, .{
         .id_extra = id_extra,
-        .color_text = theme.colors.accent_dim,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.accent_dim),
         .min_size_content = theme.iconSize(.lg),
         .max_size_content = dvui.Options.MaxSize.size(theme.iconSize(.lg)),
         .gravity_x = 0.5,
@@ -277,7 +277,7 @@ pub fn galleryCoverArt(src: std.builtin.SourceLocation, id: usize, slot: *CoverS
     }
     if (slot.url_hash == slot.desired_url_hash) if (slot.tex) |tex| {
         const crop = @import("search_gallery_pure.zig").coverCrop(.{ .w = @floatFromInt(slot.w), .h = @floatFromInt(slot.h) }, .{ .w = width, .h = height });
-        _ = dvui.image(src, .{ .source = .{ .texture = tex }, .uv = .{ .x = crop.x, .y = crop.y, .w = crop.w, .h = crop.h } }, .{ .id_extra = id, .min_size_content = .{ .w = width, .h = height }, .max_size_content = .{ .w = width, .h = height }, .corner_radius = dvui.Rect.all(radius) });
+        _ = dvui.image(src, .{ .source = .{ .texture = tex }, .uv = .{ .x = crop.x, .y = crop.y, .w = crop.w, .h = crop.h } }, .{ .id_extra = id, .min_size_content = .{ .w = width, .h = height }, .max_size_content = .{ .w = width, .h = height }, .corners = dvui.CornerRect.all(radius) });
         return;
     };
     renderCoverSlot(src, id, slot, url.len > 0, fallback, radius);
@@ -324,8 +324,8 @@ pub fn coverSkeletonGrid(src: std.builtin.SourceLocation, id_base: usize, cols: 
             var title = dvui.box(src, .{}, .{
                 .id_extra = id + 40,
                 .background = true,
-                .color_fill = theme.colors.bg_elevated,
-                .corner_radius = dvui.Rect.all(theme.radius.pill),
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .corners = dvui.CornerRect.all(theme.radius.pill),
                 .min_size_content = .{ .w = card_w * 0.72, .h = 8 },
                 .max_size_content = .{ .w = card_w * 0.72, .h = 8 },
                 .margin = .{ .x = 5, .y = 7, .w = 0, .h = 0 },
@@ -378,11 +378,11 @@ pub fn tipId(src: std.builtin.SourceLocation, wd: dvui.WidgetData, text: []const
     var tip_src = src;
     tip_src.column +%= 0x1000 +% @as(u32, @truncate(id_extra));
     dvui.tooltip(tip_src, .{ .active_rect = wd.borderRectScale().r }, "{s}", .{text}, .{
-        .color_fill = tk.bg_elevated(),
-        .color_text = tk.text_primary(),
-        .color_border = tk.border_subtle(),
+        .color_fill = @import("color_compat.zig").wrap(tk.bg_elevated()),
+        .color_text = @import("color_compat.zig").wrap(tk.text_primary()),
+        .color_border = @import("color_compat.zig").wrap(tk.border_subtle()),
         .border = dvui.Rect.all(1),
-        .corner_radius = tk.rad_md,
+        .corners = tk.rad_md,
         .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 },
         .box_shadow = theme.elevation.md(),
     });
@@ -397,7 +397,7 @@ pub fn ProgressBar(src: std.builtin.SourceLocation, fraction: f32, label: []cons
     defer container.deinit();
 
     if (label.len > 0) {
-        _ = dvui.label(@src(), "{s}", .{label}, .{ .id_extra = id_extra, .color_text = theme.colors.text_secondary });
+        _ = dvui.label(@src(), "{s}", .{label}, .{ .id_extra = id_extra, .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary) });
     }
 
     // Read-only display. This was a dvui.slider, which captured drags and
@@ -407,8 +407,8 @@ pub fn ProgressBar(src: std.builtin.SourceLocation, fraction: f32, label: []cons
         .id_extra = id_extra,
         .expand = .horizontal,
         .min_size_content = .{ .w = 10, .h = 8 },
-        .color_fill = theme.colors.bg_elevated,
-        .corner_radius = tk.rad_pill,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .corners = tk.rad_pill,
     });
 }
 
@@ -450,7 +450,7 @@ pub fn sectionHeader(label: []const u8) void {
 
     _ = dvui.label(@src(), "{s}", .{upper}, .{
         .id_extra = sectionheader_seq,
-        .color_text = tk.text_tertiary(),
+        .color_text = @import("color_compat.zig").wrap(tk.text_tertiary()),
         .font = fontAt(tk.fs_small).withWeight(.bold),
     });
 }
@@ -468,7 +468,7 @@ pub fn divider() void {
         .id_extra = divider_seq,
         .expand = .horizontal,
         .background = true,
-        .color_fill = tk.border_subtle(),
+        .color_fill = @import("color_compat.zig").wrap(tk.border_subtle()),
         .min_size_content = .{ .w = 0, .h = 1 },
         .max_size_content = .{ .w = std.math.floatMax(f32), .h = 1 },
         .margin = .{ .x = 0, .y = tk.sp_sm, .w = 0, .h = tk.sp_sm },
@@ -503,15 +503,15 @@ pub fn toggleRow(
     var row = dvui.box(src, .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = tk.bg_surface(),
-        .corner_radius = tk.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(tk.bg_surface()),
+        .corners = tk.rad_sm,
         .padding = .{ .x = tk.sp_md, .y = tk.sp_sm, .w = tk.sp_md, .h = tk.sp_sm },
         .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
     });
 
     // Keyboard access: give the row a tab stop and flip on Enter/Space.
     const rid = row.data().id;
-    dvui.tabIndexSet(rid, null);
+    dvui.tabIndexSet(rid, null, null);
     const row_focused = dvui.focusedWidgetId() == rid;
     if (row_focused) {
         for (dvui.events()) |*e| {
@@ -526,7 +526,7 @@ pub fn toggleRow(
     // Toggle on click anywhere in the row.
     if (dvui.clicked(row.data(), .{ .hovered = &hovered })) {
         value.* = !value.*;
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             std.debug.print("[components.toggleRow] '{s}' -> {}\n", .{ label, value.* });
         }
     }
@@ -534,7 +534,7 @@ pub fn toggleRow(
     // known (Options.color_fill_hover is button-only — plain boxes never read
     // it), so the old `if (hovered)` ternary at init could never render. Mutate
     // the stored options now that hover IS known and repaint over the base fill.
-    row.data().options.color_fill = stateFill(tk.bg_surface(), hovered, dvui.captured(rid));
+    row.data().options.color_fill = @import("color_compat.zig").wrap(stateFill(tk.bg_surface(), hovered, dvui.captured(rid)));
     row.drawBackground();
     if (row_focused) row.data().focusBorder();
 
@@ -552,7 +552,7 @@ pub fn toggleRow(
 
         _ = dvui.label(@src(), "{s}", .{label}, .{
             .expand = .horizontal,
-            .color_text = tk.text_primary(),
+            .color_text = @import("color_compat.zig").wrap(tk.text_primary()),
             .font = fontAt(tk.fs_body),
         });
         if (hint) |h| {
@@ -560,7 +560,7 @@ pub fn toggleRow(
                 var help = dvui.textLayout(@src(), .{ .break_lines = true }, .{
                     .expand = .horizontal,
                     .background = false,
-                    .color_text = tk.text_tertiary(),
+                    .color_text = @import("color_compat.zig").wrap(tk.text_tertiary()),
                     .font = fontAt(tk.fs_small),
                     .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
                 });
@@ -583,8 +583,8 @@ pub fn toggleRow(
             .background = true,
             // Fill alone signals state — accent when on, bg_elevated when off.
             // No border (calm: avoid the extra hairline ring around the pill).
-            .color_fill = if (value.*) tk.accent_primary() else tk.bg_elevated(),
-            .corner_radius = tk.rad_pill,
+            .color_fill = @import("color_compat.zig").wrap(if (value.*) tk.accent_primary() else tk.bg_elevated()),
+            .corners = tk.rad_pill,
             .min_size_content = .{ .w = pill_w, .h = pill_h },
             .max_size_content = .{ .w = pill_w, .h = pill_h },
             .padding = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
@@ -614,13 +614,13 @@ pub fn toggleRow(
 
         // Crossfade the pill fill along the same curve (overdraws the baked
         // end-state fill from init — children render after, so this is safe).
-        pill.data().options.color_fill = tk.bg_elevated().lerp(tk.accent_primary(), frac);
+        pill.data().options.color_fill = @import("color_compat.zig").wrap(tk.bg_elevated().lerp(tk.accent_primary(), frac));
         pill.drawBackground();
 
         var knob_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .background = true,
-            .color_fill = if (frac > 0.5) tk.text_on_accent() else tk.text_primary(),
-            .corner_radius = tk.rad_pill,
+            .color_fill = @import("color_compat.zig").wrap(if (frac > 0.5) tk.text_on_accent() else tk.text_primary()),
+            .corners = tk.rad_pill,
             .box_shadow = theme.elevation.sm(),
             .min_size_content = .{ .w = knob, .h = knob },
             .max_size_content = .{ .w = knob, .h = knob },
@@ -651,8 +651,8 @@ pub fn segment(
     var bar = dvui.flexbox(src, .{ .justify_content = .start }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = tk.bg_surface(),
-        .corner_radius = tk.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(tk.bg_surface()),
+        .corners = tk.rad_sm,
         .padding = dvui.Rect.all(tk.sp_xs),
     });
     defer bar.deinit();
@@ -666,15 +666,15 @@ pub fn segment(
             .background = true,
             // Active = subtle bg_elevated fill; inactive = transparent.
             // No per-segment border (calm).
-            .color_fill = if (is_active) tk.bg_elevated() else theme.transparent,
-            .corner_radius = tk.rad_sm,
+            .color_fill = @import("color_compat.zig").wrap(if (is_active) tk.bg_elevated() else theme.transparent),
+            .corners = tk.rad_sm,
             .padding = .{ .x = tk.sp_sm, .y = tk.sp_xs, .w = tk.sp_sm, .h = tk.sp_xs },
             .margin = .{ .x = 1, .y = 1, .w = 1, .h = 1 },
         });
 
         // Keyboard: each segment takes a tab stop; Enter/Space selects it.
         const sid = seg.data().id;
-        dvui.tabIndexSet(sid, null);
+        dvui.tabIndexSet(sid, null, null);
         const seg_focused = dvui.focusedWidgetId() == sid;
         if (seg_focused) {
             for (dvui.events()) |*e| {
@@ -690,7 +690,7 @@ pub fn segment(
         }
         // Inactive segments get a hover fill so they read as clickable — the
         // background drawn at init couldn't know hover yet (see toggleRow).
-        if (!is_active) seg.data().options.color_fill = stateFill(theme.transparent, hovered, dvui.captured(sid));
+        if (!is_active) seg.data().options.color_fill = @import("color_compat.zig").wrap(stateFill(theme.transparent, hovered, dvui.captured(sid)));
         if (is_active) seg.data().options.box_shadow = theme.elevation.sm();
         seg.drawBackground();
         if (seg_focused) seg.data().focusBorder();
@@ -698,7 +698,7 @@ pub fn segment(
         _ = dvui.label(@src(), "{s}", .{opt}, .{
             .id_extra = i,
             .gravity_y = 0.5,
-            .color_text = if (is_active) tk.text_primary() else tk.text_secondary(),
+            .color_text = @import("color_compat.zig").wrap(if (is_active) tk.text_primary() else tk.text_secondary()),
             .font = fontAt(tk.fs_small),
         });
 
@@ -761,7 +761,7 @@ fn iconButtonExColors(
         // Same geometry as the live button (ButtonWidget default margin 4 +
         // our padding 6 + 20px glyph) so layouts don't shift when state flips.
         dvui.icon(src, "iconButtonDisabled", icon, .{}, .{
-            .color_text = tk.text_tertiary(),
+            .color_text = @import("color_compat.zig").wrap(tk.text_tertiary()),
             .margin = dvui.Rect.all(4),
             .padding = dvui.Rect.all(6),
             .min_size_content = theme.iconSize(.md),
@@ -777,12 +777,12 @@ fn iconButtonExColors(
     // transparent-fill button in the app had ZERO pointer feedback.
     const clicked = dvui.buttonIcon(src, "iconButton", icon, .{}, .{}, .{
         .data_out = &wd,
-        .color_fill = if (active) active_fill else theme.transparent,
-        .color_fill_hover = hover_fill,
-        .color_fill_press = press_fill,
-        .color_text = if (active) tk.accent_primary() else tk.text_secondary(),
+        .color_fill = @import("color_compat.zig").wrap(if (active) active_fill else theme.transparent),
+        .color_fill_hover = @import("color_compat.zig").wrap(hover_fill),
+        .color_fill_press = @import("color_compat.zig").wrap(press_fill),
+        .color_text = @import("color_compat.zig").wrap(if (active) tk.accent_primary() else tk.text_secondary()),
         .border = dvui.Rect.all(0),
-        .corner_radius = tk.rad_sm,
+        .corners = tk.rad_sm,
         .min_size_content = theme.iconSize(.md),
         .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
     });
@@ -819,8 +819,8 @@ pub fn statusPill(label: []const u8, kind: enum { info, success, warn, err }) vo
     var pill = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = statuspill_seq,
         .background = true,
-        .color_fill = bg,
-        .corner_radius = tk.rad_pill,
+        .color_fill = @import("color_compat.zig").wrap(bg),
+        .corners = tk.rad_pill,
         .padding = .{ .x = tk.sp_sm, .y = theme.spacing.xxs, .w = tk.sp_sm, .h = theme.spacing.xxs },
         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
     });
@@ -828,7 +828,7 @@ pub fn statusPill(label: []const u8, kind: enum { info, success, warn, err }) vo
 
     _ = dvui.label(@src(), "{s}", .{label}, .{
         .id_extra = statuspill_seq,
-        .color_text = fg,
+        .color_text = @import("color_compat.zig").wrap(fg),
         .font = fontAt(tk.fs_small),
     });
 }
@@ -849,34 +849,34 @@ pub fn listItem(
         .id_extra = id_extra,
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.transparent,
-        .corner_radius = tk.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+        .corners = tk.rad_sm,
         .padding = .{ .x = tk.sp_md, .y = tk.sp_sm, .w = tk.sp_md, .h = tk.sp_sm },
         .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
     });
     const clicked = dvui.clicked(row.data(), .{ .hovered = &hovered });
     // Hover is only known after clicked(); the init-time fill could never
     // show it, so resolve the state now and repaint.
-    row.data().options.color_fill = stateFill(theme.transparent, hovered, dvui.captured(row.data().id));
+    row.data().options.color_fill = @import("color_compat.zig").wrap(stateFill(theme.transparent, hovered, dvui.captured(row.data().id)));
     row.drawBackground();
 
     if (leading_icon) |ic| {
         dvui.icon(@src(), "li", ic, .{}, .{
             .id_extra = id_extra,
-            .color_text = tk.text_secondary(),
+            .color_text = @import("color_compat.zig").wrap(tk.text_secondary()),
             .min_size_content = .{ .w = 16, .h = 16 },
             .max_size_content = .{ .w = 16, .h = 16 },
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = tk.sp_sm, .h = 0 },
         });
     }
-    _ = dvui.label(@src(), "{s}", .{label}, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_text = tk.text_primary(), .font = fontAt(tk.fs_body) });
+    _ = dvui.label(@src(), "{s}", .{label}, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_text = @import("color_compat.zig").wrap(tk.text_primary()), .font = fontAt(tk.fs_body) });
     {
         var s = dvui.box(@src(), .{}, .{ .id_extra = id_extra, .expand = .horizontal });
         s.deinit();
     }
     if (trailing.len > 0) {
-        _ = dvui.label(@src(), "{s}", .{trailing}, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_text = tk.text_tertiary(), .font = fontAt(tk.fs_small) });
+        _ = dvui.label(@src(), "{s}", .{trailing}, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_text = @import("color_compat.zig").wrap(tk.text_tertiary()), .font = fontAt(tk.fs_small) });
     }
     row.deinit();
     return clicked;
@@ -907,21 +907,21 @@ pub fn emptyStateCta(icon: []const u8, title: []const u8, hint: []const u8, cta:
 
     if (icon.len > 0) {
         dvui.icon(@src(), "empty-state", icon, .{}, .{
-            .color_text = tk.text_tertiary(),
+            .color_text = @import("color_compat.zig").wrap(tk.text_tertiary()),
             .min_size_content = theme.iconSize(.hero),
             .gravity_x = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = tk.sp_md },
         });
     }
     _ = dvui.label(@src(), "{s}", .{title}, .{
-        .color_text = tk.text_secondary(),
+        .color_text = @import("color_compat.zig").wrap(tk.text_secondary()),
         .font = fontAt(tk.fs_title),
         .gravity_x = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = tk.sp_xs },
     });
     if (hint.len > 0) {
         _ = dvui.label(@src(), "{s}", .{hint}, .{
-            .color_text = tk.text_tertiary(),
+            .color_text = @import("color_compat.zig").wrap(tk.text_tertiary()),
             .font = fontAt(tk.fs_body),
             .gravity_x = 0.5,
         });
@@ -930,12 +930,12 @@ pub fn emptyStateCta(icon: []const u8, title: []const u8, hint: []const u8, cta:
         cta_clicked = dvui.button(@src(), cta, .{}, .{
             .gravity_x = 0.5,
             .margin = .{ .x = 0, .y = tk.sp_md, .w = 0, .h = 0 },
-            .color_fill = tk.accent_primary(),
-            .color_fill_hover = tk.accent_hover(),
-            .color_fill_press = tk.accent_pressed(),
-            .color_text = tk.text_on_accent(),
+            .color_fill = @import("color_compat.zig").wrap(tk.accent_primary()),
+            .color_fill_hover = @import("color_compat.zig").wrap(tk.accent_hover()),
+            .color_fill_press = @import("color_compat.zig").wrap(tk.accent_pressed()),
+            .color_text = @import("color_compat.zig").wrap(tk.text_on_accent()),
             .border = dvui.Rect.all(0),
-            .corner_radius = tk.rad_sm,
+            .corners = tk.rad_sm,
             .padding = .{ .x = tk.sp_lg, .y = tk.sp_sm, .w = tk.sp_lg, .h = tk.sp_sm },
         });
     }
@@ -966,14 +966,14 @@ pub fn loadingState(label: []const u8) void {
         s.deinit();
     }
     dvui.spinner(@src(), .{
-        .color_text = tk.accent_primary(),
+        .color_text = @import("color_compat.zig").wrap(tk.accent_primary()),
         .min_size_content = theme.iconSize(.xl),
         .gravity_x = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = tk.sp_md },
     });
     if (label.len > 0) {
         _ = dvui.label(@src(), "{s}", .{label}, .{
-            .color_text = tk.text_secondary(),
+            .color_text = @import("color_compat.zig").wrap(tk.text_secondary()),
             .font = fontAt(tk.fs_body),
             .gravity_x = 0.5,
         });
@@ -1021,16 +1021,16 @@ pub fn actionButton(
     const fills = actionFills(kind);
     return dvui.button(src, label, .{}, .{
         .id_extra = id_extra,
-        .color_fill = fills[0],
-        .color_fill_hover = fills[1],
-        .color_fill_press = fills[2],
-        .color_text = switch (kind) {
+        .color_fill = @import("color_compat.zig").wrap(fills[0]),
+        .color_fill_hover = @import("color_compat.zig").wrap(fills[1]),
+        .color_fill_press = @import("color_compat.zig").wrap(fills[2]),
+        .color_text = @import("color_compat.zig").wrap(switch (kind) {
             .primary => tk.text_on_accent(),
             .secondary => tk.text_primary(),
             .danger => tk.semantic_error(),
-        },
+        }),
         .border = dvui.Rect.all(0),
-        .corner_radius = tk.rad_sm,
+        .corners = tk.rad_sm,
         .padding = .{ .x = tk.sp_md, .y = tk.sp_xs, .w = tk.sp_md, .h = tk.sp_xs },
         .margin = .{ .x = 0, .y = 0, .w = tk.sp_sm, .h = 0 },
         // NO gravity_y here. gravity_y = 0.5 centers the widget across the
@@ -1073,11 +1073,11 @@ pub fn iconActionButton(
     var bw: dvui.ButtonWidget = undefined;
     bw.init(src, .{}, .{
         .id_extra = id_extra,
-        .color_fill = fills[0],
-        .color_fill_hover = fills[1],
-        .color_fill_press = fills[2],
+        .color_fill = @import("color_compat.zig").wrap(fills[0]),
+        .color_fill_hover = @import("color_compat.zig").wrap(fills[1]),
+        .color_fill_press = @import("color_compat.zig").wrap(fills[2]),
         .border = dvui.Rect.all(0),
-        .corner_radius = tk.rad_sm,
+        .corners = tk.rad_sm,
         .padding = .{ .x = tk.sp_md, .y = tk.sp_xs, .w = tk.sp_md, .h = tk.sp_xs },
         .margin = .{ .x = 0, .y = 0, .w = tk.sp_sm, .h = 0 },
     });
@@ -1087,12 +1087,12 @@ pub fn iconActionButton(
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 0.5 });
         defer row.deinit();
         dvui.icon(@src(), "", icon, .{}, .{
-            .color_text = fg,
+            .color_text = @import("color_compat.zig").wrap(fg),
             .min_size_content = theme.iconSize(.sm),
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = tk.sp_xs, .h = 0 },
         });
-        _ = dvui.labelNoFmt(@src(), label, .{}, .{ .color_text = fg, .gravity_y = 0.5 });
+        _ = dvui.labelNoFmt(@src(), label, .{}, .{ .color_text = @import("color_compat.zig").wrap(fg), .gravity_y = 0.5 });
     }
     bw.drawFocus();
     const clicked = bw.clicked();
@@ -1104,11 +1104,11 @@ pub fn confirmDangerButton(src: std.builtin.SourceLocation, label: []const u8, i
     var bw: dvui.ButtonWidget = undefined;
     bw.init(src, .{}, .{
         .id_extra = id_extra,
-        .color_fill = theme.transparent,
-        .color_fill_hover = theme.colors.danger_dim,
-        .color_fill_press = tk.bg_pressed(),
+        .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+        .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.danger_dim),
+        .color_fill_press = @import("color_compat.zig").wrap(tk.bg_pressed()),
         .border = dvui.Rect.all(0),
-        .corner_radius = tk.rad_sm,
+        .corners = tk.rad_sm,
         .padding = .{ .x = tk.sp_sm, .y = tk.sp_xs, .w = tk.sp_sm, .h = tk.sp_xs },
         .gravity_y = 0.5,
         .margin = dvui.Rect.all(0),
@@ -1120,11 +1120,11 @@ pub fn confirmDangerButton(src: std.builtin.SourceLocation, label: []const u8, i
     if (armed and dvui.timerDone(id)) armed = false; // auto-disarm after 3s
     // Armed: hold an opaque danger_bg capsule so the confirm prompt is
     // unmistakable (danger fg on danger_bg is comptime-gated at 4.5:1).
-    if (armed) bw.data().options.color_fill = theme.colors.danger_bg;
+    if (armed) bw.data().options.color_fill = @import("color_compat.zig").wrap(theme.colors.danger_bg);
 
     bw.drawBackground();
     _ = dvui.labelNoFmt(@src(), if (armed) "Click again to confirm" else label, .{ .align_x = 0.5, .align_y = 0.5 }, .{
-        .color_text = if (armed) tk.semantic_error() else tk.text_secondary(),
+        .color_text = @import("color_compat.zig").wrap(if (armed) tk.semantic_error() else tk.text_secondary()),
         .font = fontAt(tk.fs_small),
         .padding = dvui.Rect.all(0),
         .gravity_x = 0.5,
@@ -1161,10 +1161,10 @@ pub fn searchInput(
     var shell = dvui.box(src, .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = tk.bg_elevated(),
-        .color_border = tk.border_subtle(),
+        .color_fill = @import("color_compat.zig").wrap(tk.bg_elevated()),
+        .color_border = @import("color_compat.zig").wrap(tk.border_subtle()),
         .border = dvui.Rect.all(1),
-        .corner_radius = tk.rad_md,
+        .corners = tk.rad_md,
         .padding = .{ .x = tk.sp_md, .y = tk.sp_xs, .w = tk.sp_md, .h = tk.sp_xs },
         .min_size_content = .{ .w = 0, .h = 32 },
     });
@@ -1176,14 +1176,14 @@ pub fn searchInput(
     // and repaint the shell with the accent border (one frame of lag is fine).
     const sid = shell.data().id;
     if (dvui.dataGet(null, sid, "_focus", bool) orelse false) {
-        shell.data().options.color_border = theme.colors.focus_ring;
+        shell.data().options.color_border = @import("color_compat.zig").wrap(theme.colors.focus_ring);
         shell.data().options.box_shadow = .{ .color = theme.colors.accent_glow, .offset = .{ .x = 0, .y = 0 }, .fade = 4, .alpha = 1 };
         shell.drawBackground();
     }
 
     // Magnifier prefix.
     dvui.icon(@src(), "search", icons.tvg.lucide.search, .{}, .{
-        .color_text = tk.text_tertiary(),
+        .color_text = @import("color_compat.zig").wrap(tk.text_tertiary()),
         .min_size_content = theme.iconSize(.sm),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = tk.sp_sm, .h = 0 },
@@ -1196,9 +1196,9 @@ pub fn searchInput(
     }, .{
         .expand = .horizontal,
         .gravity_y = 0.5,
-        .color_fill = theme.transparent,
-        .color_text = tk.text_primary(),
-        .color_border = theme.transparent,
+        .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+        .color_text = @import("color_compat.zig").wrap(tk.text_primary()),
+        .color_border = @import("color_compat.zig").wrap(theme.transparent),
         .border = dvui.Rect.all(0),
         .background = false,
         .min_size_content = .{ .w = 0, .h = 24 },
@@ -1234,11 +1234,11 @@ pub fn toolbarSearch(src: std.builtin.SourceLocation, buf: []u8, placeholder: []
     var te = dvui.textEntry(src, .{ .text = .{ .buffer = buf }, .placeholder = placeholder }, .{
         .min_size_content = .{ .w = width, .h = TOOLBAR_INPUT_H },
         .max_size_content = .{ .w = width, .h = TOOLBAR_INPUT_H },
-        .color_fill = theme.colors.bg_elevated,
-        .color_border = theme.colors.border_subtle,
-        .color_text = theme.colors.text_primary,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .border = dvui.Rect.all(1),
-        .corner_radius = theme.dims.rad_sm,
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
         .gravity_y = 0.5,
     });
@@ -1251,12 +1251,12 @@ pub fn toolbarSearch(src: std.builtin.SourceLocation, buf: []u8, placeholder: []
 /// toolbarSearch height.
 pub fn toolbarGo(src: std.builtin.SourceLocation, label: []const u8) bool {
     return dvui.button(src, label, .{}, .{
-        .color_fill = theme.colors.accent,
-        .color_fill_hover = theme.colors.accent_hover,
-        .color_fill_press = theme.colors.accent_pressed,
-        .color_text = theme.colors.text_on_accent,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+        .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.accent_hover),
+        .color_fill_press = @import("color_compat.zig").wrap(theme.colors.accent_pressed),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
         .border = dvui.Rect.all(0),
-        .corner_radius = theme.dims.rad_sm,
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
         .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
         .gravity_y = 0.5,
@@ -1268,8 +1268,8 @@ pub fn bodyText(src: std.builtin.SourceLocation, text: []const u8, color: dvui.C
     var layout = dvui.textLayout(src, .{ .break_lines = true }, .{
         .expand = .horizontal,
         .background = false,
-        .color_fill = theme.transparent,
-        .color_text = color,
+        .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+        .color_text = @import("color_compat.zig").wrap(color),
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
     });
     layout.addText(text, .{});
@@ -1282,7 +1282,7 @@ pub fn pageHeading(src: std.builtin.SourceLocation, title: []const u8, subtitle:
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.md, .w = theme.spacing.md, .h = theme.spacing.sm },
     });
     defer heading.deinit();
-    _ = dvui.label(@src(), "{s}", .{title}, .{ .font = dvui.themeGet().font_heading, .color_text = theme.colors.text_primary });
+    _ = dvui.label(@src(), "{s}", .{title}, .{ .font = dvui.themeGet().font_heading, .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary) });
     if (subtitle.len > 0) bodyText(@src(), subtitle, theme.colors.text_secondary);
 }
 

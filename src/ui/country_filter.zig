@@ -9,15 +9,15 @@ pub fn render(src: std.builtin.SourceLocation, selected: usize) ?usize {
     defer menu.deinit();
     var result: ?usize = null;
     if (dvui.menuItemLabel(src, countries.at(selected).name, .{ .submenu = true }, .{
-        .color_text = if (selected == 0) theme.colors.text_secondary else theme.colors.accent,
-        .color_fill = theme.colors.bg_elevated,
+        .color_text = @import("color_compat.zig").wrap(if (selected == 0) theme.colors.text_secondary else theme.colors.accent),
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
         .background = true,
-        .corner_radius = theme.dims.rad_sm,
+        .corners = theme.dims.rad_sm,
         .padding = dvui.Rect.all(6),
     })) |r| {
         var popup = dvui.floatingMenu(src, .{ .from = r }, .{});
         defer popup.deinit();
-        var box = dvui.box(src, .{ .dir = .vertical }, .{ .min_size_content = .{ .w = 220 }, .padding = dvui.Rect.all(6), .background = true, .color_fill = theme.colors.bg_surface });
+        var box = dvui.box(src, .{ .dir = .vertical }, .{ .min_size_content = .{ .w = 220 }, .padding = dvui.Rect.all(6), .background = true, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface) });
         defer box.deinit();
         var input = dvui.textEntry(src, .{ .text = .{ .buffer = &search }, .placeholder = "Find country…" }, .{ .expand = .horizontal });
         input.deinit();
@@ -27,8 +27,8 @@ pub fn render(src: std.builtin.SourceLocation, selected: usize) ?usize {
         defer options.deinit();
         const query = std.mem.sliceTo(&search, 0);
         for (countries.all, 0..) |country, i| {
-            if (i != 0 and query.len > 0 and std.ascii.indexOfIgnoreCase(country.name, query) == null and std.ascii.indexOfIgnoreCase(country.code, query) == null) continue;
-            if (dvui.menuItemLabel(src, country.name, .{}, .{ .id_extra = i, .expand = .horizontal, .color_text = if (i == selected) theme.colors.accent else theme.colors.text_primary })) |_| {
+            if (i != 0 and query.len > 0 and std.ascii.findIgnoreCase(country.name, query) == null and std.ascii.findIgnoreCase(country.code, query) == null) continue;
+            if (dvui.menuItemLabel(src, country.name, .{}, .{ .id_extra = i, .expand = .horizontal, .color_text = @import("color_compat.zig").wrap(if (i == selected) theme.colors.accent else theme.colors.text_primary) })) |_| {
                 result = i;
                 @memset(&search, 0);
             }

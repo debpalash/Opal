@@ -83,7 +83,7 @@ const Slot = struct {
     }
 };
 
-var slots: [MAX_SESSIONS]Slot = [_]Slot{.{}} ** MAX_SESSIONS;
+var slots: [MAX_SESSIONS]Slot = @as([MAX_SESSIONS]Slot, @splat(.{}));
 var mutex: sync.Mutex = .{};
 var key: [pure.KEY_LEN]u8 = undefined;
 var key_ready = false; // under `mutex`

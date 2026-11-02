@@ -16,7 +16,7 @@ pub fn encode(comptime E: type, tab: E) u8 {
 
 pub fn decode(comptime E: type, v: u8) ?E {
     if (v == 0) return null;
-    const fields = @typeInfo(E).@"enum".fields;
+    const fields = @typeInfo(E).@"enum".field_names;
     if (v - 1 >= fields.len) return null; // corrupted value
     return @enumFromInt(v - 1);
 }
@@ -26,7 +26,7 @@ pub fn decode(comptime E: type, v: u8) ?E {
 const Tab16 = enum { a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p };
 
 test "every variant of a 16-entry enum round-trips (u4 saturation regression)" {
-    inline for (@typeInfo(Tab16).@"enum".fields, 0..) |_, i| {
+    inline for (@typeInfo(Tab16).@"enum".field_names, 0..) |_, i| {
         const tab: Tab16 = @enumFromInt(i);
         const v = encode(Tab16, tab);
         try std.testing.expect(v != 0);

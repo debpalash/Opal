@@ -129,7 +129,7 @@ pub const Kind = enum {
     other,
 
     pub fn parse(s: []const u8) ?Kind {
-        inline for (@typeInfo(Kind).@"enum".fields) |f| {
+        inline for (comptime @import("opal-reflect").fields(Kind)) |f| {
             if (std.mem.eql(u8, s, f.name)) return @field(Kind, f.name);
         }
         return null;

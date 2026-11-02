@@ -119,7 +119,7 @@ fn fft(s: *Scratch) void {
 pub fn compute(samples: []const i16, out: []u32, s: *Scratch) usize {
     if (!s.ready) s.init();
     const total = @min(frameCount(samples.len), out.len);
-    var prev = [_]f32{0} ** BANDS;
+    var prev = @as([BANDS]f32, @splat(0));
     var cur: [BANDS]f32 = undefined;
     for (0..total) |f| {
         const base = f * HOP;
@@ -274,7 +274,7 @@ test "noisy copy is close; unrelated audio is far; sub-hop shift stays close" {
 }
 
 test "silence is SILENT and never matches" {
-    const z = [_]i16{0} ** (FRAME_LEN + HOP);
+    const z = @as([(FRAME_LEN + HOP)]i16, @splat(0));
     var out: [2]u32 = undefined;
     var s: Scratch = .{};
     try testing.expectEqual(@as(usize, 2), compute(&z, &out, &s));

@@ -81,7 +81,7 @@ fn renderSize(width: u32, height: u32, rows: []const resolver.ResolvedItem, movi
     // Separate windows must not reuse a simulated frame timestamp: poster
     // uploads share a per-frame budget across the application.
     capture_time_base += 1_000_000_000;
-    var backend = try dvui.backend.initWindow(.{ .io = io.io(), .allocator = alloc, .size = .{ .w = @floatFromInt(width), .h = @floatFromInt(height) }, .vsync = false, .title = "Opal offline gallery pixel regression", .hidden = true });
+    var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-fixture", .persist_window_geometry = false, .size = .{ .w = @floatFromInt(width), .h = @floatFromInt(height) }, .vsync = false, .title = "Opal offline gallery pixel regression", .hidden = true });
     defer backend.deinit();
     var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
     defer window.deinit();
@@ -110,7 +110,7 @@ fn renderSize(width: u32, height: u32, rows: []const resolver.ResolvedItem, movi
         }
         if (movies_only and frame == 4) {
             _ = try window.addEventMouseMotion(.{ .pt = .{ .x = @as(f32, @floatFromInt(width)), .y = @as(f32, @floatFromInt(height)) } });
-            _ = try window.addEventMouseWheel(-600, .vertical);
+            _ = try window.addEventMouseWheel(-600, .vertical, null);
         }
         if (frame == 2 or frame == 3) _ = try window.addEventKey(.{ .code = .tab, .action = .down, .mod = .none });
         @import("../ui/theme.zig").setTheme();
@@ -184,7 +184,7 @@ test "Native Search performance offline warmed maximum gallery scroll frames" {
     for ([_][2]u32{ .{ 1360, 1000 }, .{ 640, 800 } }) |size| {
         workers.init();
         defer workers.finishShutdown();
-        var backend = try dvui.backend.initWindow(.{ .io = io.io(), .allocator = alloc, .size = .{ .w = @floatFromInt(size[0]), .h = @floatFromInt(size[1]) }, .vsync = false, .title = "Opal owned scroll benchmark", .hidden = true });
+        var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-fixture", .persist_window_geometry = false, .size = .{ .w = @floatFromInt(size[0]), .h = @floatFromInt(size[1]) }, .vsync = false, .title = "Opal owned scroll benchmark", .hidden = true });
         defer backend.deinit();
         var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
         defer window.deinit();
@@ -207,7 +207,7 @@ test "Native Search performance offline warmed maximum gallery scroll frames" {
             };
             if (frame >= 8) {
                 _ = try window.addEventMouseMotion(.{ .pt = .{ .x = @as(f32, @floatFromInt(size[0])) / 2, .y = @as(f32, @floatFromInt(size[1])) / 2 } });
-                _ = try window.addEventMouseWheel(if (frame % 60 < 30) -120 else 120, .vertical);
+                _ = try window.addEventMouseWheel(if (frame % 60 < 30) -120 else 120, .vertical, null);
             }
             @import("../ui/theme.zig").setTheme();
             search.renderGalleryForTest();

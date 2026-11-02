@@ -279,7 +279,7 @@ pub fn scrobbleStart(title: []const u8, progress: f64) void {
             ei += 1;
         }
     }
-    const json = std.fmt.bufPrintZ(&json_buf,
+    const json = @import("opal-fmt").bufPrintZ(&json_buf,
         \\{{"movie":{{"title":"{s}"}},"progress":{d:.1}}}
     , .{ esc[0..ei], progress }) catch return;
 
@@ -305,7 +305,7 @@ pub fn scrobblePause(title: []const u8, progress: f64) void {
             ei += 1;
         }
     }
-    const json = std.fmt.bufPrintZ(&json_buf,
+    const json = @import("opal-fmt").bufPrintZ(&json_buf,
         \\{{"movie":{{"title":"{s}"}},"progress":{d:.1}}}
     , .{ esc[0..ei], progress }) catch return;
     const result = postScrobble("/scrobble/pause", json);
@@ -330,7 +330,7 @@ pub fn scrobbleStop(title: []const u8, progress: f64) void {
             ei += 1;
         }
     }
-    const json = std.fmt.bufPrintZ(&json_buf,
+    const json = @import("opal-fmt").bufPrintZ(&json_buf,
         \\{{"movie":{{"title":"{s}"}},"progress":{d:.1}}}
     , .{ esc[0..ei], progress }) catch return;
     const result = postScrobble("/scrobble/stop", json);
@@ -368,7 +368,7 @@ fn refreshAccessToken(expected_revision: u32) bool {
     if (refresh_len == 0 or cid_len == 0 or secret_len == 0) return false;
 
     var body_buf: [1024]u8 = undefined;
-    const body = std.fmt.bufPrintZ(
+    const body = @import("opal-fmt").bufPrintZ(
         &body_buf,
         "{{\"refresh_token\":\"{s}\",\"client_id\":\"{s}\",\"client_secret\":\"{s}\",\"redirect_uri\":\"urn:ietf:wg:oauth:2.0:oob\",\"grant_type\":\"refresh_token\"}}",
         .{ refresh[0..refresh_len], cid[0..cid_len], secret[0..secret_len] },
@@ -432,7 +432,7 @@ fn revokeAuthorization(expected_revision: u32) void {
 
 fn postScrobble(endpoint: []const u8, json_body: []const u8) DeliveryResult {
     var url_buf: [256]u8 = undefined;
-    const url = std.fmt.bufPrintZ(&url_buf, "{s}{s}", .{ TRAKT_API_URL, endpoint }) catch return .{ .status = .retry, .revision = 0 };
+    const url = @import("opal-fmt").bufPrintZ(&url_buf, "{s}{s}", .{ TRAKT_API_URL, endpoint }) catch return .{ .status = .retry, .revision = 0 };
 
     var token: [256]u8 = undefined;
     var token_len: usize = 0;
@@ -515,7 +515,7 @@ fn deviceAuthWorker(generation: u32) void {
 
     // Step 1: POST /oauth/device/code
     var json_buf: [256]u8 = undefined;
-    const body = std.fmt.bufPrintZ(&json_buf, "{{\"client_id\":\"{s}\"}}", .{cid[0..cid_len]}) catch return;
+    const body = @import("opal-fmt").bufPrintZ(&json_buf, "{{\"client_id\":\"{s}\"}}", .{cid[0..cid_len]}) catch return;
 
     var out: [4096]u8 = undefined;
     const n = (postJson(TRAKT_API_URL ++ "/oauth/device/code", &out, body, null, &.{}) orelse @as([]const u8, "")).len;
@@ -551,7 +551,7 @@ fn deviceAuthWorker(generation: u32) void {
         if (auth_generation.load(.acquire) != generation or workers.isQuitting()) return;
 
         var poll_body: [256]u8 = undefined;
-        const pb = std.fmt.bufPrintZ(&poll_body, "{{\"code\":\"{s}\",\"client_id\":\"{s}\",\"client_secret\":\"{s}\"}}", .{
+        const pb = @import("opal-fmt").bufPrintZ(&poll_body, "{{\"code\":\"{s}\",\"client_id\":\"{s}\",\"client_secret\":\"{s}\"}}", .{
             code[0..code_len], cid[0..cid_len], secret[0..secret_len],
         }) catch return;
 

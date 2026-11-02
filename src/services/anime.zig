@@ -702,7 +702,7 @@ fn listsThread(my_gen: u32) void {
     listsStampSet(@import("browse_cache.zig").now());
 
     var lb: [64]u8 = undefined;
-    logs.pushLog("info", "anime", std.fmt.bufPrintZ(&lb, "Lists loaded ({d} airing)", .{n}) catch "Lists loaded", false);
+    logs.pushLog("info", "anime", @import("opal-fmt").bufPrintZ(&lb, "Lists loaded ({d} airing)", .{n}) catch "Lists loaded", false);
 }
 
 /// Parse a lists payload and publish it into the anime grid. Returns rows shown.
@@ -2500,7 +2500,7 @@ fn scraperSearchThread(job: SearchJob) void {
 
     const shown = publishScraperGrid(html_buf[0..n], base, src, my_gen);
     var lb: [96]u8 = undefined;
-    logs.pushLog("info", "anime", std.fmt.bufPrintZ(&lb, "{s} grid loaded ({d})", .{ scraperId(src), shown }) catch "Scraper grid loaded", false);
+    logs.pushLog("info", "anime", @import("opal-fmt").bufPrintZ(&lb, "{s} grid loaded ({d})", .{ scraperId(src), shown }) catch "Scraper grid loaded", false);
 }
 
 fn workers_isQuitting() bool {
@@ -2925,7 +2925,7 @@ pub fn renderContent() void {
                     state.app.anime.episode_count = 0;
                     return;
                 }
-                _ = dvui.label(@src(), "Anime", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+                _ = dvui.label(@src(), "Anime", .{}, .{ .color_text = .{ .color = theme.colors.text_secondary }, .gravity_y = 0.5 });
             }
 
             // ── Rich detail header: poster (left) + title / meta / synopsis
@@ -2939,8 +2939,8 @@ pub fn renderContent() void {
                     .expand = .horizontal,
                     .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
                     .background = true,
-                    .color_fill = theme.colors.bg_deep,
-                    .color_border = theme.colors.border_subtle,
+                    .color_fill = .{ .color = theme.colors.bg_deep },
+                    .color_border = .{ .color = theme.colors.border_subtle },
                     .border = dvui.Rect.all(0),
                 });
                 defer head.deinit();
@@ -2950,8 +2950,8 @@ pub fn renderContent() void {
                     var pbox = dvui.box(@src(), .{ .dir = .vertical }, .{
                         .id_extra = 71,
                         .background = true,
-                        .color_fill = theme.colors.bg_elevated,
-                        .corner_radius = dvui.Rect.all(6),
+                        .color_fill = .{ .color = theme.colors.bg_elevated },
+                        .corners = dvui.CornerRect.all(6),
                         .min_size_content = .{ .w = 72, .h = 108 },
                         .max_size_content = .{ .w = 72, .h = 108 },
                     });
@@ -2963,7 +2963,7 @@ pub fn renderContent() void {
                         _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
                             .id_extra = 72,
                             .expand = .both,
-                            .corner_radius = dvui.Rect.all(6),
+                            .corners = dvui.CornerRect.all(6),
                         });
                     } else {
                         if (!anime_images.failed(url) and url.len > 0)
@@ -2973,7 +2973,7 @@ pub fn renderContent() void {
                                 .id_extra = 73,
                                 .gravity_x = 0.5,
                                 .gravity_y = 0.5,
-                                .color_text = theme.colors.text_secondary,
+                                .color_text = .{ .color = theme.colors.text_secondary },
                                 .expand = .both,
                             });
                     }
@@ -2993,7 +2993,7 @@ pub fn renderContent() void {
                     _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(r.name[0..r.name_len], &tn_buf)}, .{
                         .id_extra = 75,
                         .expand = .horizontal,
-                        .color_text = theme.colors.text_primary,
+                        .color_text = .{ .color = theme.colors.text_primary },
                         .font = dvui.themeGet().font_heading,
                     });
 
@@ -3022,7 +3022,7 @@ pub fn renderContent() void {
                         if (ml > 0) {
                             _ = dvui.label(@src(), "{s}", .{meta_buf[0..ml]}, .{
                                 .id_extra = 77,
-                                .color_text = theme.colors.text_secondary,
+                                .color_text = .{ .color = theme.colors.text_secondary },
                                 .gravity_y = 0.5,
                             });
                         }
@@ -3035,7 +3035,7 @@ pub fn renderContent() void {
                             if (std.fmt.bufPrint(&pb, "{d}%", .{pct})) |ps| {
                                 _ = dvui.label(@src(), "{s}", .{ps}, .{
                                     .id_extra = 78,
-                                    .color_text = sc,
+                                    .color_text = .{ .color = sc },
                                     .gravity_y = 0.5,
                                     .padding = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
                                 });
@@ -3047,9 +3047,9 @@ pub fn renderContent() void {
                             _ = dvui.label(@src(), "Airing", .{}, .{
                                 .id_extra = 79,
                                 .background = true,
-                                .color_fill = theme.colors.accent,
-                                .color_text = theme.colors.text_on_accent,
-                                .corner_radius = theme.dims.rad_sm,
+                                .color_fill = .{ .color = theme.colors.accent },
+                                .color_text = .{ .color = theme.colors.text_on_accent },
+                                .corners = theme.dims.rad_sm,
                                 .padding = .{ .x = 6, .y = 1, .w = 6, .h = 1 },
                                 .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
                                 .gravity_y = 0.5,
@@ -3064,7 +3064,7 @@ pub fn renderContent() void {
                             .background = false,
                             .id_extra = 80,
                             .expand = .horizontal,
-                            .color_text = theme.colors.text_secondary,
+                            .color_text = .{ .color = theme.colors.text_secondary },
                             .padding = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
                             .max_size_content = .{ .w = std.math.floatMax(f32), .h = dvui.themeGet().font_body.lineHeight() * 2 },
                         });
@@ -3087,13 +3087,13 @@ pub fn renderContent() void {
                     playEpisode(std.fmt.bufPrint(&eb, "{d}", .{nextUnwatchedEp()}) catch "1");
                 }
                 _ = dvui.label(@src(), "{d} episodes · {d} watched", .{ state.app.anime.episode_count, watchedCount() }, .{
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = .{ .color = theme.colors.text_secondary },
                     .gravity_y = 0.5,
                     .expand = .horizontal,
                     .padding = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
                 });
                 if (state.app.anime.episodes_loading.load(.acquire)) {
-                    _ = dvui.label(@src(), "Loading details…", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+                    _ = dvui.label(@src(), "Loading details…", .{}, .{ .color_text = .{ .color = theme.colors.text_secondary }, .gravity_y = 0.5 });
                 } else if (episode_failed.load(.acquire)) {
                     if (components.iconButton(@src(), icons.tvg.lucide.@"refresh-cw", "Retry episode details", false)) loadEpisodes(sel_idx);
                 }
@@ -3108,30 +3108,30 @@ pub fn renderContent() void {
             if (state.app.anime.episode_count > 0) {
                 renderEpisodeGrid(sel_idx);
             } else if (state.app.anime.episodes_loading.load(.acquire)) {
-                _ = dvui.label(@src(), "Loading episode details…", .{}, .{ .color_text = theme.colors.accent });
+                _ = dvui.label(@src(), "Loading episode details…", .{}, .{ .color_text = .{ .color = theme.colors.accent } });
             } else if (episode_failed.load(.acquire)) {
-                _ = dvui.label(@src(), "Episode catalog unavailable", .{}, .{ .color_text = theme.colors.text_secondary });
+                _ = dvui.label(@src(), "Episode catalog unavailable", .{}, .{ .color_text = .{ .color = theme.colors.text_secondary } });
                 if (components.actionButton(@src(), "Retry", .secondary, 706)) loadEpisodes(sel_idx);
             } else if (results_are_scraper and state.app.anime.is_loading.load(.acquire)) {
                 _ = dvui.label(@src(), "Loading episodes…", .{}, .{
-                    .color_text = theme.colors.accent,
+                    .color_text = .{ .color = theme.colors.accent },
                     .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
                 });
             } else if (results_are_scraper and scraper_episode_failed.load(.acquire)) {
                 _ = dvui.label(@src(), "Episode source unavailable. Retrying automatically…", .{}, .{
-                    .color_text = theme.colors.accent,
+                    .color_text = .{ .color = theme.colors.accent },
                     .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
                 });
                 if (dvui.button(@src(), "Retry now", .{}, .{
-                    .color_fill = theme.colors.bg_elevated,
-                    .color_text = theme.colors.text_primary,
-                    .corner_radius = theme.dims.rad_sm,
+                    .color_fill = .{ .color = theme.colors.bg_elevated },
+                    .color_text = .{ .color = theme.colors.text_primary },
+                    .corners = theme.dims.rad_sm,
                     .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
                     .margin = .{ .x = 12, .y = 2, .w = 0, .h = 0 },
                 })) startEpisodesScraper(sel_idx, true);
             } else {
                 _ = dvui.label(@src(), "No episodes available", .{}, .{
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = .{ .color = theme.colors.text_secondary },
                     .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
                 });
             }
@@ -3190,9 +3190,9 @@ fn renderEpisodeGrid(sel_idx: usize) void {
             var card = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = ep_i,
                 .background = true,
-                .color_fill = if (busy) theme.colors.accent_dim else if (is_next) theme.colors.bg_elevated else theme.colors.bg_surface,
+                .color_fill = .{ .color = if (busy) theme.colors.accent_dim else if (is_next) theme.colors.bg_elevated else theme.colors.bg_surface },
                 .border = dvui.Rect.all(0),
-                .corner_radius = dvui.Rect.all(8),
+                .corners = dvui.CornerRect.all(8),
                 .padding = dvui.Rect.all(10),
                 .margin = .{ .x = 0, .y = 0, .w = if (ep_i + 1 < first + layout.columns) 8 else 0, .h = 0 },
                 .min_size_content = .{ .w = @max(1, layout.width - 20), .h = height - 20 },
@@ -3204,8 +3204,8 @@ fn renderEpisodeGrid(sel_idx: usize) void {
                     .min_size_content = .{ .w = @max(1, layout.width - 20), .h = thumb_height },
                     .max_size_content = .{ .w = @max(1, layout.width - 20), .h = thumb_height },
                     .background = true,
-                    .color_fill = theme.colors.bg_deep,
-                    .corner_radius = dvui.Rect.all(6),
+                    .color_fill = .{ .color = theme.colors.bg_deep },
+                    .corners = dvui.CornerRect.all(6),
                     .padding = dvui.Rect.all(0),
                     .margin = .{ .h = 6 },
                 });
@@ -3213,9 +3213,9 @@ fn renderEpisodeGrid(sel_idx: usize) void {
                 const url = episode_thumbnails[ep_i][0..episode_thumbnail_lens[ep_i]];
                 const tex = if (preview.data().visible()) @import("../ui/anime_images.zig").get(url) else null;
                 if (tex) |image| {
-                    _ = dvui.image(@src(), .{ .source = .{ .texture = image } }, .{ .expand = .ratio, .gravity_x = 0.5, .gravity_y = 0.5, .corner_radius = dvui.Rect.all(6) });
+                    _ = dvui.image(@src(), .{ .source = .{ .texture = image } }, .{ .expand = .ratio, .gravity_x = 0.5, .gravity_y = 0.5, .corners = dvui.CornerRect.all(6) });
                 } else {
-                    dvui.icon(@src(), "Episode preview", icons.tvg.lucide.film, .{}, .{ .min_size_content = .{ .w = 28, .h = 28 }, .gravity_x = 0.5, .gravity_y = 0.5, .color_text = theme.colors.text_tertiary });
+                    dvui.icon(@src(), "Episode preview", icons.tvg.lucide.film, .{}, .{ .min_size_content = .{ .w = 28, .h = 28 }, .gravity_x = 0.5, .gravity_y = 0.5, .color_text = .{ .color = theme.colors.text_tertiary } });
                 }
                 if (dvui.clicked(preview.data(), .{})) playEpisode(ep_str);
             }
@@ -3225,9 +3225,9 @@ fn renderEpisodeGrid(sel_idx: usize) void {
                 var number_buf: [32]u8 = undefined;
                 const number = std.fmt.bufPrint(&number_buf, "Episode {s}", .{ep_str}) catch "Episode";
                 if (dvui.button(@src(), number, .{}, .{
-                    .color_fill = theme.transparent,
-                    .color_fill_hover = theme.colors.bg_hover,
-                    .color_text = if (is_next) theme.colors.accent else theme.colors.text_primary,
+                    .color_fill = .{ .color = theme.transparent },
+                    .color_fill_hover = .{ .color = theme.colors.bg_hover },
+                    .color_text = .{ .color = if (is_next) theme.colors.accent else theme.colors.text_primary },
                     .border = dvui.Rect.all(0),
                     .padding = dvui.Rect.all(0),
                     .gravity_y = 0.5,
@@ -3237,11 +3237,11 @@ fn renderEpisodeGrid(sel_idx: usize) void {
                 if (busy or failed) {
                     if (dvui.button(@src(), if (busy) "Cancel" else "Retry", .{}, .{
                         .background = true,
-                        .color_fill = theme.transparent,
-                        .color_fill_hover = theme.colors.bg_hover,
-                        .color_text = theme.colors.accent,
+                        .color_fill = .{ .color = theme.transparent },
+                        .color_fill_hover = .{ .color = theme.colors.bg_hover },
+                        .color_text = .{ .color = theme.colors.accent },
                         .border = dvui.Rect.all(0),
-                        .corner_radius = theme.dims.rad_sm,
+                        .corners = theme.dims.rad_sm,
                         .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
                         .gravity_y = 0.5,
                     })) {
@@ -3263,7 +3263,7 @@ fn renderEpisodeGrid(sel_idx: usize) void {
             });
 
             if (busy) dvui.spinner(@src(), .{
-                .color_text = theme.colors.accent,
+                .color_text = .{ .color = theme.colors.accent },
                 .min_size_content = .{ .w = 12, .h = 12 },
                 .max_size_content = .{ .w = 12, .h = 12 },
                 .gravity_y = 0.5,
@@ -3276,7 +3276,7 @@ fn renderEpisodeGrid(sel_idx: usize) void {
                 .data_out = &caption_wd,
                 .expand = .horizontal,
                 .padding = dvui.Rect.all(0),
-                .color_text = if (busy) theme.colors.accent else if (failed) theme.colors.warning else theme.colors.text_secondary,
+                .color_text = .{ .color = if (busy) theme.colors.accent else if (failed) theme.colors.warning else theme.colors.text_secondary },
                 .min_size_content = .{ .w = 0, .h = font.lineHeight() },
                 .max_size_content = .{ .w = @max(1, layout.width - 20), .h = font.lineHeight() },
             });
@@ -3289,7 +3289,7 @@ fn renderEpisodeGrid(sel_idx: usize) void {
                 std.fmt.bufPrint(&meta_buf, "Rated {d:.1}  {s}{s}{s}", .{ a.episode_scores[ep_i], status, if (status.len > 0 and date.len > 0) " · " else "", date }) catch status
             else
                 std.fmt.bufPrint(&meta_buf, "{s}{s}{s}", .{ status, if (status.len > 0 and date.len > 0) " · " else "", date }) catch status;
-            dvui.labelNoFmt(@src(), meta, .{}, .{ .expand = .horizontal, .padding = dvui.Rect.all(0), .font = font.withSize(11), .color_text = if (is_next) theme.colors.accent else theme.colors.text_tertiary });
+            dvui.labelNoFmt(@src(), meta, .{}, .{ .expand = .horizontal, .padding = dvui.Rect.all(0), .font = font.withSize(11), .color_text = .{ .color = if (is_next) theme.colors.accent else theme.colors.text_tertiary } });
         }
     }
     if (visible.last < layout.rows) {
@@ -3313,7 +3313,7 @@ fn renderScheduleView() void {
 
     if (loading and count == 0) {
         _ = dvui.label(@src(), "Loading airing schedule…", .{}, .{
-            .color_text = theme.colors.accent,
+            .color_text = .{ .color = theme.colors.accent },
             .gravity_x = 0.5,
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
         });
@@ -3321,7 +3321,7 @@ fn renderScheduleView() void {
     }
     if (count == 0) {
         _ = dvui.label(@src(), "No airing schedule available right now. Try Refresh.", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = .{ .color = theme.colors.text_secondary },
             .gravity_x = 0.5,
             .margin = dvui.Rect.all(24),
         });
@@ -3331,7 +3331,7 @@ fn renderScheduleView() void {
     const win_start = state.app.anime.sched_window_start;
     const tz = state.app.anime.sched_tz_offset_s;
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = .{ .color = theme.colors.bg_surface } });
     defer scroll.deinit();
 
     // One pass per window day (0 = window.start's day … 6). Skip days with no
@@ -3356,9 +3356,9 @@ fn renderScheduleView() void {
         _ = dvui.label(@src(), "{s}", .{asp.weekdayName(asp.weekdayMon0(day_local))}, .{
             .id_extra = @as(usize, day) + 90000,
             .expand = .horizontal,
-            .color_text = theme.colors.accent,
+            .color_text = .{ .color = theme.colors.accent },
             .background = true,
-            .color_fill = theme.colors.bg_app,
+            .color_fill = .{ .color = theme.colors.bg_app },
             .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
         });
 
@@ -3373,8 +3373,8 @@ fn renderScheduleView() void {
                 .id_extra = i + 91000,
                 .expand = .horizontal,
                 .background = true,
-                .color_fill = theme.colors.bg_surface,
-                .color_border = theme.colors.border_subtle,
+                .color_fill = .{ .color = theme.colors.bg_surface },
+                .color_border = .{ .color = theme.colors.border_subtle },
                 .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
                 .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
             });
@@ -3384,7 +3384,7 @@ fn renderScheduleView() void {
             var tbuf: [8]u8 = undefined;
             _ = dvui.label(@src(), "{s}", .{asp.fmtTime(slot.airing_at + tz, &tbuf)}, .{
                 .id_extra = i + 92000,
-                .color_text = theme.colors.text_secondary,
+                .color_text = .{ .color = theme.colors.text_secondary },
                 .gravity_y = 0.5,
                 .min_size_content = .{ .w = 48, .h = 0 },
             });
@@ -3395,10 +3395,10 @@ fn renderScheduleView() void {
             if (dvui.button(@src(), title, .{}, .{
                 .id_extra = i + 93000,
                 .expand = .horizontal,
-                .color_text = theme.colors.text_primary,
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
+                .color_text = .{ .color = theme.colors.text_primary },
+                .color_fill = .{ .color = theme.transparent },
+                .color_fill_hover = .{ .color = theme.colors.bg_hover },
+                .color_fill_press = .{ .color = theme.colors.bg_elevated },
                 .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
                 .gravity_y = 0.5,
             })) {
@@ -3408,10 +3408,10 @@ fn renderScheduleView() void {
             // Episode badge.
             if (slot.episode > 0) {
                 var eb: [16]u8 = undefined;
-                const es = std.fmt.bufPrintZ(&eb, "Ep {d}", .{@as(u32, @intCast(slot.episode))}) catch "";
+                const es = @import("opal-fmt").bufPrintZ(&eb, "Ep {d}", .{@as(u32, @intCast(slot.episode))}) catch "";
                 _ = dvui.label(@src(), "{s}", .{es}, .{
                     .id_extra = i + 94000,
-                    .color_text = theme.colors.accent,
+                    .color_text = .{ .color = theme.colors.accent },
                     .gravity_y = 0.5,
                     .padding = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
                 });
@@ -3602,9 +3602,9 @@ fn renderSeasonalSubToolbar() void {
     if (dvui.button(@src(), "−", .{}, .{
         .id_extra = 21100,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .color_text = theme.colors.text_primary,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = .{ .color = theme.colors.bg_surface },
+        .color_text = .{ .color = theme.colors.text_primary },
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
         .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
     })) {
@@ -3615,7 +3615,7 @@ fn renderSeasonalSubToolbar() void {
         const ys = std.fmt.bufPrint(&yb, "{d}", .{state.app.anime.season_year}) catch "----";
         _ = dvui.label(@src(), "{s}", .{ys}, .{
             .id_extra = 21101,
-            .color_text = theme.colors.text_primary,
+            .color_text = .{ .color = theme.colors.text_primary },
             .gravity_y = 0.5,
             .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         });
@@ -3623,9 +3623,9 @@ fn renderSeasonalSubToolbar() void {
     if (dvui.button(@src(), "+", .{}, .{
         .id_extra = 21102,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .color_text = theme.colors.text_primary,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = .{ .color = theme.colors.bg_surface },
+        .color_text = .{ .color = theme.colors.text_primary },
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
         .margin = .{ .x = 3, .y = 0, .w = 3, .h = 0 },
     })) {
@@ -3662,14 +3662,14 @@ fn renderCalendarSubToolbar() void {
 fn renderContinueGrid() void {
     if (state.app.anime.continue_count == 0) {
         _ = dvui.label(@src(), "Nothing here yet — play an episode and it'll show up to resume.", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = .{ .color = theme.colors.text_secondary },
             .gravity_x = 0.5,
             .margin = dvui.Rect.all(24),
         });
         return;
     }
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = .{ .color = theme.colors.bg_surface } });
     defer scroll.deinit();
 
     const rect_w = scroll.data().rect.w;
@@ -3708,8 +3708,8 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
         .min_size_content = .{ .w = card_w, .h = 10 },
         .max_size_content = .{ .w = card_w, .h = poster_h + 70 },
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(6),
+        .color_fill = .{ .color = theme.colors.bg_surface },
+        .corners = dvui.CornerRect.all(6),
         .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
     });
@@ -3720,8 +3720,8 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
         bw.init(@src(), .{}, .{
             .id_extra = idx + 30100,
             .background = true,
-            .color_fill = dvui.Color{ .r = 20 + h1 / 6, .g = 25 + h2 / 8, .b = 35 + h1 / 5, .a = 255 },
-            .corner_radius = .{ .x = theme.radius.md, .y = theme.radius.md, .w = 0, .h = 0 },
+            .color_fill = .{ .color = dvui.Color{ .r = 20 + h1 / 6, .g = 25 + h2 / 8, .b = 35 + h1 / 5, .a = 255 } },
+            .corners = .{ .tl = .theme(theme.radius.md), .tr = .theme(theme.radius.md), .br = .theme(0), .bl = .theme(0) },
             .min_size_content = .{ .w = card_w, .h = poster_h },
             .max_size_content = .{ .w = card_w, .h = poster_h },
             .padding = dvui.Rect.all(0),
@@ -3740,7 +3740,7 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
                 _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
                     .id_extra = idx + 30150,
                     .expand = .both,
-                    .corner_radius = dvui.Rect.all(6),
+                    .corners = dvui.CornerRect.all(6),
                 });
             } else {
                 // Failure-latch (mirrors TmdbItem/JfItem): stop re-spawning a
@@ -3770,7 +3770,7 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
                         .id_extra = idx + 30150,
                         .gravity_x = 0.5,
                         .gravity_y = 0.5,
-                        .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 },
+                        .color_text = .{ .color = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 } },
                         .expand = .both,
                     });
             }
@@ -3778,19 +3778,19 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
             // "E{last}/{total}" progress badge, bottom-left.
             {
                 var badge: [24]u8 = undefined;
-                const bs = std.fmt.bufPrintZ(&badge, "E{d}/{d}", .{ item.last_episode, item.total_episodes }) catch "";
+                const bs = @import("opal-fmt").bufPrintZ(&badge, "E{d}/{d}", .{ item.last_episode, item.total_episodes }) catch "";
                 if (bs.len > 0) {
                     var bb = dvui.box(@src(), .{ .dir = .horizontal }, .{
                         .id_extra = idx + 30160,
                         .gravity_x = 0.02,
                         .gravity_y = 0.98,
                         .background = true,
-                        .color_fill = theme.playerGlass(220),
-                        .corner_radius = dvui.Rect.all(4),
+                        .color_fill = .{ .color = theme.playerGlass(220) },
+                        .corners = dvui.CornerRect.all(4),
                         .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
                     });
                     defer bb.deinit();
-                    _ = dvui.label(@src(), "{s}", .{bs}, .{ .id_extra = idx + 30161, .color_text = theme.colors.accent });
+                    _ = dvui.label(@src(), "{s}", .{bs}, .{ .id_extra = idx + 30161, .color_text = .{ .color = theme.colors.accent } });
                 }
             }
         }
@@ -3813,10 +3813,10 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
         if (dvui.button(@src(), safeUtf8(title), .{}, .{
             .id_extra = idx + 30500,
             .expand = .horizontal,
-            .color_text = theme.colors.text_primary,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
+            .color_text = .{ .color = theme.colors.text_primary },
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
+            .color_fill_press = .{ .color = theme.colors.bg_elevated },
             .padding = dvui.Rect.all(0),
         })) {
             jumpToAnime(item.mal_id[0..item.mal_id_len]);
@@ -3826,10 +3826,10 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
         {
             const next_ep: u32 = @as(u32, item.last_episode) + 1;
             var rb: [40]u8 = undefined;
-            const rs = std.fmt.bufPrintZ(&rb, "Continue E{d}/{d}", .{ next_ep, item.total_episodes }) catch "Continue";
+            const rs = @import("opal-fmt").bufPrintZ(&rb, "Continue E{d}/{d}", .{ next_ep, item.total_episodes }) catch "Continue";
             _ = dvui.label(@src(), "{s}", .{rs}, .{
                 .id_extra = idx + 30600,
-                .color_text = theme.colors.text_secondary,
+                .color_text = .{ .color = theme.colors.text_secondary },
                 .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
             });
         }
@@ -3852,14 +3852,14 @@ fn renderRelationsRail() void {
 
     _ = dvui.label(@src(), "Seasons & Related", .{}, .{
         .id_extra = 80001,
-        .color_text = theme.colors.text_secondary,
+        .color_text = .{ .color = theme.colors.text_secondary },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
     });
 
     if (state.app.anime.relations_loading and state.app.anime.relation_count == 0) {
         _ = dvui.label(@src(), "Loading related…", .{}, .{
             .id_extra = 80002,
-            .color_text = theme.colors.accent,
+            .color_text = .{ .color = theme.colors.accent },
         });
         return;
     }
@@ -3875,16 +3875,16 @@ fn renderRelationsRail() void {
         const rel = &state.app.anime.relations[i];
         if (rel.name_len == 0) continue;
         var lbl: [160]u8 = undefined;
-        const ls = std.fmt.bufPrintZ(&lbl, "{s}: {s}", .{
+        const ls = @import("opal-fmt").bufPrintZ(&lbl, "{s}: {s}", .{
             rel.rel_type[0..rel.rel_type_len],
             safeUtf8(rel.name[0..@min(rel.name_len, 100)]),
         }) catch continue;
         if (dvui.button(@src(), ls, .{}, .{
             .id_extra = i + 80100,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.colors.bg_surface },
+            .color_text = .{ .color = theme.colors.text_primary },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
             .margin = .{ .x = 0, .y = 0, .w = 4, .h = 4 },
         })) {
@@ -3907,7 +3907,7 @@ fn renderSearchBar() void {
         .expand = .horizontal,
         .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
         .background = true,
-        .color_fill = theme.colors.bg_app,
+        .color_fill = .{ .color = theme.colors.bg_app },
     });
     defer search_row.deinit();
 
@@ -3917,19 +3917,19 @@ fn renderSearchBar() void {
     }, .{
         .expand = .horizontal,
         .min_size_content = .{ .w = 200, .h = 20 },
-        .color_fill = theme.colors.bg_elevated,
-        .color_border = theme.colors.border_subtle,
-        .color_text = theme.colors.text_primary,
+        .color_fill = .{ .color = theme.colors.bg_elevated },
+        .color_border = .{ .color = theme.colors.border_subtle },
+        .color_text = .{ .color = theme.colors.text_primary },
         .border = dvui.Rect.all(1),
-        .corner_radius = theme.dims.rad_sm,
+        .corners = theme.dims.rad_sm,
     });
     const enter_pressed = te.enter_pressed;
     te.deinit();
 
     const clicked = dvui.button(@src(), "Search", .{}, .{
-        .color_fill = theme.colors.accent,
-        .color_text = theme.colors.text_on_accent,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = .{ .color = theme.colors.accent },
+        .color_text = .{ .color = theme.colors.text_on_accent },
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
         .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
     });
@@ -4010,7 +4010,7 @@ fn renderGallery() void {
         return;
     }
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = .{ .color = theme.colors.bg_surface } });
     defer scroll.deinit();
 
     // Responsive poster grid from the LIVE page width (one-frame lag; first
@@ -4078,7 +4078,7 @@ fn renderGallery() void {
         const busy = grid_loading_more.load(.acquire);
         if (busy) {
             dvui.spinner(@src(), .{
-                .color_text = theme.colors.accent,
+                .color_text = .{ .color = theme.colors.accent },
                 .min_size_content = theme.iconSize(.lg),
                 .gravity_x = 0.5,
                 .margin = .{ .x = 3, .y = 8, .w = 3, .h = 12 },
@@ -4105,8 +4105,8 @@ fn renderHoverMeta(item: *state.AnimeResult, idx: usize) void {
         .id_extra = idx + 1600,
         .expand = .both,
         .background = true,
-        .color_fill = theme.playerGlass(232),
-        .corner_radius = dvui.Rect.all(6),
+        .color_fill = .{ .color = theme.playerGlass(232) },
+        .corners = dvui.CornerRect.all(6),
         .padding = dvui.Rect.all(8),
     });
     defer ov.deinit();
@@ -4116,7 +4116,7 @@ fn renderHoverMeta(item: *state.AnimeResult, idx: usize) void {
     _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(item.name[0..@min(item.name_len, item.name.len)], &hover_name_buf)}, .{
         .id_extra = idx + 1601,
         .expand = .horizontal,
-        .color_text = theme.colors.text_primary,
+        .color_text = .{ .color = theme.colors.text_primary },
         .font = dvui.themeGet().font_heading,
     });
 
@@ -4133,12 +4133,12 @@ fn renderHoverMeta(item: *state.AnimeResult, idx: usize) void {
         const sc = if (pct >= 70) theme.colors.success else if (pct >= 50) theme.colors.warning else theme.colors.danger;
         var pb: [8]u8 = undefined;
         if (std.fmt.bufPrint(&pb, "{d}%", .{pct})) |ps| {
-            _ = dvui.label(@src(), "{s}", .{ps}, .{ .id_extra = idx + 1603, .color_text = sc });
+            _ = dvui.label(@src(), "{s}", .{ps}, .{ .id_extra = idx + 1603, .color_text = .{ .color = sc } });
         } else |_| {}
 
         var eb: [24]u8 = undefined;
         if (std.fmt.bufPrint(&eb, "  {d} eps", .{item.episodes})) |es| {
-            _ = dvui.label(@src(), "{s}", .{es}, .{ .id_extra = idx + 1604, .color_text = theme.colors.text_secondary });
+            _ = dvui.label(@src(), "{s}", .{es}, .{ .id_extra = idx + 1604, .color_text = .{ .color = theme.colors.text_secondary } });
         } else |_| {}
     }
 
@@ -4148,7 +4148,7 @@ fn renderHoverMeta(item: *state.AnimeResult, idx: usize) void {
         _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(item.overview[0..@min(item.overview_len, 300)], &hover_ov_buf)}, .{
             .id_extra = idx + 1605,
             .expand = .horizontal,
-            .color_text = theme.colors.text_secondary,
+            .color_text = .{ .color = theme.colors.text_secondary },
         });
     }
 }
@@ -4171,8 +4171,8 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
         .min_size_content = .{ .w = card_w, .h = poster_h + GRID_CARD_EXTRA_H },
         .max_size_content = .{ .w = card_w, .h = poster_h + GRID_CARD_EXTRA_H },
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(6),
+        .color_fill = .{ .color = theme.colors.bg_surface },
+        .corners = dvui.CornerRect.all(6),
         .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
     });
@@ -4186,8 +4186,8 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
         bw.init(@src(), .{}, .{
             .id_extra = idx + 100,
             .background = true,
-            .color_fill = dvui.Color{ .r = 20 + h1 / 6, .g = 25 + h2 / 8, .b = 35 + h1 / 5, .a = 255 },
-            .corner_radius = .{ .x = theme.radius.md, .y = theme.radius.md, .w = 0, .h = 0 },
+            .color_fill = .{ .color = dvui.Color{ .r = 20 + h1 / 6, .g = 25 + h2 / 8, .b = 35 + h1 / 5, .a = 255 } },
+            .corners = .{ .tl = .theme(theme.radius.md), .tr = .theme(theme.radius.md), .br = .theme(0), .bl = .theme(0) },
             .min_size_content = .{ .w = card_w, .h = poster_h },
             .max_size_content = .{ .w = card_w, .h = poster_h },
             .padding = dvui.Rect.all(0),
@@ -4209,7 +4209,7 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
                 _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
                     .id_extra = idx + 150,
                     .expand = .both,
-                    .corner_radius = dvui.Rect.all(6),
+                    .corners = dvui.CornerRect.all(6),
                 });
             } else {
                 if (bw.data().visible() and url.len > 0 and !anime_images.failed(url))
@@ -4219,7 +4219,7 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
                         .id_extra = idx + 150,
                         .gravity_x = 0.5,
                         .gravity_y = 0.5,
-                        .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 },
+                        .color_text = .{ .color = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 } },
                         .expand = .both,
                     });
             }
@@ -4247,10 +4247,10 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
         if (dvui.button(@src(), title, .{}, .{
             .id_extra = idx + 500,
             .expand = .horizontal,
-            .color_text = theme.colors.text_primary,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
+            .color_text = .{ .color = theme.colors.text_primary },
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
+            .color_fill_press = .{ .color = theme.colors.bg_elevated },
             .padding = dvui.Rect.all(0),
         })) {
             loadEpisodes(idx);
@@ -4267,18 +4267,18 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
 
             // Episode count
             var ep_buf: [32]u8 = undefined;
-            if (std.fmt.bufPrintZ(&ep_buf, "{d} eps", .{item.episodes})) |eps| {
-                _ = dvui.label(@src(), "{s}", .{eps}, .{ .id_extra = idx + 610, .color_text = theme.colors.text_secondary });
+            if (@import("opal-fmt").bufPrintZ(&ep_buf, "{d} eps", .{item.episodes})) |eps| {
+                _ = dvui.label(@src(), "{s}", .{eps}, .{ .id_extra = idx + 610, .color_text = .{ .color = theme.colors.text_secondary } });
             } else |_| {}
 
-            _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 620, .color_text = theme.colors.text_secondary });
+            _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 620, .color_text = .{ .color = theme.colors.text_secondary } });
 
             // Score percentage
             const pct = @as(u8, @intFromFloat(std.math.clamp(item.score * 10.0, 0.0, 100.0)));
             const sc = if (pct >= 70) theme.colors.success else if (pct >= 50) theme.colors.warning else theme.colors.danger;
             var pb: [8]u8 = undefined;
-            if (std.fmt.bufPrintZ(&pb, "{d}%", .{pct})) |ps| {
-                _ = dvui.label(@src(), "{s}", .{ps}, .{ .id_extra = idx + 310, .color_text = sc });
+            if (@import("opal-fmt").bufPrintZ(&pb, "{d}%", .{pct})) |ps| {
+                _ = dvui.label(@src(), "{s}", .{ps}, .{ .id_extra = idx + 310, .color_text = .{ .color = sc } });
             } else |_| {}
         }
 
@@ -4294,21 +4294,21 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
             var bb = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = idx + 640,
                 .background = true,
-                .color_fill = theme.colors.bg_elevated,
-                .corner_radius = dvui.Rect.all(4),
+                .color_fill = .{ .color = theme.colors.bg_elevated },
+                .corners = dvui.CornerRect.all(4),
                 .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
                 .padding = .{ .x = 5, .y = 1, .w = 5, .h = 1 },
             });
             defer bb.deinit();
             dvui.icon(@src(), "", icons.tvg.lucide.clock, .{}, .{
                 .id_extra = idx + 641,
-                .color_text = theme.colors.accent,
+                .color_text = .{ .color = theme.colors.accent },
                 .min_size_content = .{ .w = 11, .h = 11 },
                 .gravity_y = 0.5,
             });
             _ = dvui.label(@src(), "{s}", .{safeUtf8(bcast)}, .{
                 .id_extra = idx + 642,
-                .color_text = theme.colors.text_secondary,
+                .color_text = .{ .color = theme.colors.text_secondary },
                 .padding = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
             });
         }
@@ -4320,14 +4320,14 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
             const snip_len = @min(item.overview_len, 60);
             const snip = safeUtf8Buf(item.overview[0..snip_len], &snip_buf);
             const suffix: []const u8 = if (item.overview_len > 60) "..." else "";
-            if (std.fmt.bufPrintZ(&btn_buf, "{s}{s}", .{ snip, suffix })) |snip_z| {
+            if (@import("opal-fmt").bufPrintZ(&btn_buf, "{s}{s}", .{ snip, suffix })) |snip_z| {
                 if (dvui.button(@src(), snip_z, .{}, .{
                     .id_extra = idx + 650,
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = .{ .color = theme.colors.text_secondary },
                     .expand = .horizontal,
-                    .color_fill = theme.transparent,
-                    .color_fill_hover = theme.colors.bg_hover,
-                    .color_fill_press = theme.colors.bg_elevated,
+                    .color_fill = .{ .color = theme.transparent },
+                    .color_fill_hover = .{ .color = theme.colors.bg_hover },
+                    .color_fill_press = .{ .color = theme.colors.bg_elevated },
                     .padding = dvui.Rect.all(0),
                 })) {
                     item.expanded = !item.expanded;
@@ -4340,7 +4340,7 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
             var ov_buf: [512]u8 = undefined;
             _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(item.overview[0..@min(item.overview_len, ov_buf.len)], &ov_buf)}, .{
                 .id_extra = idx + 700,
-                .color_text = theme.colors.text_secondary,
+                .color_text = .{ .color = theme.colors.text_secondary },
                 .expand = .horizontal,
                 .padding = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
             });
@@ -4355,8 +4355,8 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
         if (ctext.activePoint()) |cp| {
             var fw = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(cp) }, .{
                 .id_extra = idx + 3000,
-                .color_fill = theme.colors.bg_surface,
-                .color_border = theme.colors.border_subtle,
+                .color_fill = .{ .color = theme.colors.bg_surface },
+                .color_border = .{ .color = theme.colors.border_subtle },
             });
             defer fw.deinit();
 

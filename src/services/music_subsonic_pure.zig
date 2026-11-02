@@ -517,7 +517,7 @@ pub fn identityQueryFits(raw: []const u8, capacity: usize) bool {
     return true;
 }
 test "music action rejects truncated identities but accepts percent encoded IDs" {
-    try std.testing.expect(!identityQueryFits(&([_]u8{'a'} ** 129), 128));
+    try std.testing.expect(!identityQueryFits(&(@as([129]u8, @splat('a'))), 128));
     try std.testing.expect(identityQueryFits("a%26b", 3));
     try std.testing.expect(!identityQueryFits("a%26b", 2));
     try std.testing.expect(!identityQueryFits("", 128));

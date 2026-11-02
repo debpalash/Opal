@@ -119,7 +119,7 @@ const ABS_PAGE_LIMIT: u32 = 64;
 const BOOK_CARD_TARGET_W: f32 = 150;
 const BOOK_CARD_GAP: f32 = 4;
 const BOOK_FOOTER_H: f32 = 50;
-var book_covers: [320]components.CoverSlot = [_]components.CoverSlot{.{}} ** 320;
+var book_covers: [320]components.CoverSlot = @as([320]components.CoverSlot, @splat(.{}));
 
 fn setLoginError(msg: []const u8) void {
     const len = @min(msg.len, state.app.abs.login_error.len);
@@ -477,7 +477,7 @@ var audio_mutex: @import("../core/sync.zig").Mutex = .{};
 var audio_generation = std.atomic.Value(u32).init(0);
 var audio_loading = std.atomic.Value(bool).init(false);
 var audio_job: AudioJob = .{};
-var audio_tracks: [AUDIO_CAP]pure.AudioTrack = [_]pure.AudioTrack{.{}} ** AUDIO_CAP;
+var audio_tracks: [AUDIO_CAP]pure.AudioTrack = @as([AUDIO_CAP]pure.AudioTrack, @splat(.{}));
 var audio_count: usize = 0;
 var audio_total: usize = 0;
 var audio_visible: bool = false;
@@ -499,7 +499,7 @@ const ActiveAudio = struct {
 };
 // Frame-thread owned playback plan. Browsing/hiding a selector cannot rewrite it.
 var active_audio: ?ActiveAudio = null;
-var active_tracks: [AUDIO_CAP]pure.AudioTrack = [_]pure.AudioTrack{.{}} ** AUDIO_CAP;
+var active_tracks: [AUDIO_CAP]pure.AudioTrack = @as([AUDIO_CAP]pure.AudioTrack, @splat(.{}));
 
 pub const AudioSnapshot = struct {
     visible: bool,
@@ -873,15 +873,15 @@ fn renderAudioSelection() bool {
         clearAudioSelection();
         return true;
     }
-    _ = dvui.label(@src(), "{s}", .{title_buf[0..title_len]}, .{ .color_text = theme.colors.text_primary });
+    _ = dvui.label(@src(), "{s}", .{title_buf[0..title_len]}, .{ .color_text = .{ .color = theme.colors.text_primary } });
     if (audio_loading.load(.acquire)) {
-        dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.md) });
+        dvui.spinner(@src(), .{ .color_text = .{ .color = theme.colors.accent }, .min_size_content = theme.iconSize(.md) });
         return true;
     }
-    _ = dvui.label(@src(), "Choose a track or episode · {d} available of {d}", .{ count, total }, .{ .color_text = theme.colors.text_secondary });
+    _ = dvui.label(@src(), "Choose a track or episode · {d} available of {d}", .{ count, total }, .{ .color_text = .{ .color = theme.colors.text_secondary } });
     if (complete and components.actionButton(@src(), "Play book from saved position", .primary, 91002)) _ = playWholeBook(generation);
-    if (complete) _ = dvui.label(@src(), "Book tracks advance automatically and resume across files.", .{}, .{ .color_text = theme.colors.text_secondary });
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .color_fill = theme.colors.bg_surface, .background = true });
+    if (complete) _ = dvui.label(@src(), "Book tracks advance automatically and resume across files.", .{}, .{ .color_text = .{ .color = theme.colors.text_secondary } });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .color_fill = .{ .color = theme.colors.bg_surface }, .background = true });
     defer scroll.deinit();
     for (0..count) |idx| {
         audio_mutex.lock();
@@ -1002,7 +1002,7 @@ pub fn tick() void {
 
     if (target > 1) {
         var seek_buf: [64]u8 = undefined;
-        const cmd = std.fmt.bufPrintZ(&seek_buf, "seek {d:.1} absolute", .{target}) catch return;
+        const cmd = @import("opal-fmt").bufPrintZ(&seek_buf, "seek {d:.1} absolute", .{target}) catch return;
         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
         var ts_buf: [16]u8 = undefined;
         const ts = yt_pure.formatDuration(@intFromFloat(target), &ts_buf);
@@ -1096,7 +1096,7 @@ pub fn renderContent() void {
     if (state.app.abs.login_error_len > 0) {
         var error_buf: [256]u8 = undefined;
         const error_text = safeUtf8Buf(state.app.abs.login_error[0..@min(state.app.abs.login_error_len, state.app.abs.login_error.len)], &error_buf);
-        _ = dvui.label(@src(), "{s}", .{error_text}, .{ .color_text = theme.colors.danger, .padding = dvui.Rect.all(8) });
+        _ = dvui.label(@src(), "{s}", .{error_text}, .{ .color_text = .{ .color = theme.colors.danger }, .padding = dvui.Rect.all(8) });
     }
     if (renderAudioSelection()) return;
     switch (state.app.abs.view) {
@@ -1109,7 +1109,7 @@ pub fn renderLoginForm() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = .{ .color = theme.colors.bg_surface },
     });
     defer scroll.deinit();
 
@@ -1119,9 +1119,9 @@ pub fn renderLoginForm() void {
             .padding = .{ .x = 16, .y = 20, .w = 16, .h = 16 },
         });
         defer hdr.deinit();
-        _ = dvui.label(@src(), "Audiobookshelf", .{}, .{ .color_text = theme.colors.accent });
+        _ = dvui.label(@src(), "Audiobookshelf", .{}, .{ .color_text = .{ .color = theme.colors.accent } });
         _ = dvui.label(@src(), "Connect to your self-hosted Audiobookshelf server", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = .{ .color = theme.colors.text_secondary },
             .padding = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
         });
     }
@@ -1146,7 +1146,7 @@ pub fn renderLoginForm() void {
 
     if (state.app.abs.login_error_len > 0) {
         _ = dvui.label(@src(), "{s}", .{state.app.abs.login_error[0..state.app.abs.login_error_len]}, .{
-            .color_text = theme.colors.danger,
+            .color_text = .{ .color = theme.colors.danger },
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
         });
     }
@@ -1154,16 +1154,16 @@ pub fn renderLoginForm() void {
     if (!state.app.abs.is_loading.load(.acquire)) {
         const connect = dvui.button(@src(), "Connect", .{}, .{
             .expand = .horizontal,
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.colors.accent },
+            .color_text = .{ .color = theme.colors.text_on_accent },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.sm },
         });
         if (connect or enter) authenticate();
     } else {
         _ = dvui.label(@src(), "Connecting…", .{}, .{
             .expand = .horizontal,
-            .color_text = theme.colors.text_secondary,
+            .color_text = .{ .color = theme.colors.text_secondary },
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 10, .w = 0, .h = 10 },
         });
@@ -1175,7 +1175,7 @@ pub fn renderLoginForm() void {
 fn labeledEntry(label: []const u8, buf: []u8, password: bool, id: usize) bool {
     _ = dvui.label(@src(), "{s}", .{label}, .{
         .id_extra = id,
-        .color_text = theme.colors.text_secondary,
+        .color_text = .{ .color = theme.colors.text_secondary },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
     });
     var te = dvui.textEntry(@src(), .{
@@ -1185,10 +1185,10 @@ fn labeledEntry(label: []const u8, buf: []u8, password: bool, id: usize) bool {
         .id_extra = id,
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_subtle,
+        .color_fill = .{ .color = theme.colors.bg_surface },
+        .color_border = .{ .color = theme.colors.border_subtle },
         .border = dvui.Rect.all(1),
-        .corner_radius = theme.dims.rad_sm,
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
     });
@@ -1207,7 +1207,7 @@ fn renderLibraries() void {
             sp.deinit();
         }
         if (state.app.abs.is_loading.load(.acquire)) {
-            dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.md), .gravity_y = 0.5 });
+            dvui.spinner(@src(), .{ .color_text = .{ .color = theme.colors.accent }, .min_size_content = theme.iconSize(.md), .gravity_y = 0.5 });
         }
         if (components.iconButton(@src(), icons.tvg.lucide.@"log-out", "Disconnect Audiobookshelf", false)) disconnect();
     }
@@ -1220,7 +1220,7 @@ fn renderLibraries() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = .{ .color = theme.colors.bg_surface },
     });
     defer scroll.deinit();
 
@@ -1231,9 +1231,9 @@ fn renderLibraries() void {
         if (dvui.button(@src(), name, .{}, .{
             .id_extra = i,
             .expand = .horizontal,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = theme.colors.text_primary },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
             .margin = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
         })) openLibrary(i);
@@ -1250,9 +1250,9 @@ fn renderBooks() void {
         }
         var title_buf: [96]u8 = undefined;
         const title = safeUtf8Buf(state.app.abs.selected_lib_name[0..state.app.abs.selected_lib_name_len], &title_buf);
-        _ = dvui.label(@src(), "{s}", .{title}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_heading, .expand = .horizontal, .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "{s}", .{title}, .{ .color_text = .{ .color = theme.colors.text_primary }, .font = dvui.themeGet().font_heading, .expand = .horizontal, .gravity_y = 0.5 });
         if (state.app.abs.is_loading.load(.acquire)) {
-            dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.md), .gravity_y = 0.5 });
+            dvui.spinner(@src(), .{ .color_text = .{ .color = theme.colors.accent }, .min_size_content = theme.iconSize(.md), .gravity_y = 0.5 });
         }
     }
 
@@ -1267,7 +1267,7 @@ fn renderBooks() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = .{ .color = theme.colors.bg_surface },
     });
     defer scroll.deinit();
 
@@ -1325,7 +1325,7 @@ fn renderBooks() void {
         }
         if (loading or underfilled) {
             dvui.spinner(@src(), .{
-                .color_text = theme.colors.accent,
+                .color_text = .{ .color = theme.colors.accent },
                 .min_size_content = theme.iconSize(.lg),
                 .gravity_x = 0.5,
                 .margin = dvui.Rect.all(12),
@@ -1348,9 +1348,9 @@ fn renderBookCard(i: usize, card_w: f32, poster_h: f32) void {
         .max_size_content = .{ .w = card_w, .h = poster_h + BOOK_FOOTER_H },
         .margin = dvui.Rect.all(BOOK_CARD_GAP),
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .color_fill_hover = theme.colors.bg_hover,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .color_fill = .{ .color = theme.colors.bg_surface },
+        .color_fill_hover = .{ .color = theme.colors.bg_hover },
+        .corners = dvui.CornerRect.all(theme.radius.md),
     });
     defer card.deinit();
 
@@ -1358,8 +1358,8 @@ fn renderBookCard(i: usize, card_w: f32, poster_h: f32) void {
     bw.init(@src(), .{}, .{
         .id_extra = i + 81000,
         .background = true,
-        .color_fill = theme.colors.bg_elevated,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .color_fill = .{ .color = theme.colors.bg_elevated },
+        .corners = dvui.CornerRect.all(theme.radius.md),
         .min_size_content = .{ .w = card_w, .h = poster_h },
         .max_size_content = .{ .w = card_w, .h = poster_h },
         .padding = dvui.Rect.all(0),
@@ -1381,7 +1381,7 @@ fn renderBookCard(i: usize, card_w: f32, poster_h: f32) void {
 
     _ = dvui.label(@src(), "{s}", .{title}, .{
         .id_extra = i + 83000,
-        .color_text = theme.colors.text_primary,
+        .color_text = .{ .color = theme.colors.text_primary },
         .font = dvui.themeGet().font_heading.withSize(theme.font_size.small),
         .min_size_content = .{ .w = card_w, .h = 20 },
         .max_size_content = .{ .w = card_w, .h = 20 },
@@ -1389,7 +1389,7 @@ fn renderBookCard(i: usize, card_w: f32, poster_h: f32) void {
     });
     _ = dvui.label(@src(), "{s}", .{if (author.len > 0) author else "Audiobook"}, .{
         .id_extra = i + 84000,
-        .color_text = theme.colors.text_tertiary,
+        .color_text = .{ .color = theme.colors.text_tertiary },
         .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
         .min_size_content = .{ .w = card_w, .h = 18 },
         .max_size_content = .{ .w = card_w, .h = 18 },

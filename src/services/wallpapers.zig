@@ -319,20 +319,20 @@ pub fn renderContent() void {
             var card = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .min_size_content = .{ .w = w, .h = h }, .max_size_content = .{ .w = w, .h = h }, .margin = dvui.Rect.all(4) });
             defer card.deinit();
             var button: dvui.ButtonWidget = undefined;
-            button.init(@src(), .{}, .{ .id_extra = i, .min_size_content = .{ .w = w, .h = h }, .max_size_content = .{ .w = w, .h = h }, .padding = dvui.Rect.all(0), .background = true, .color_fill = theme.colors.bg_elevated, .corner_radius = theme.dims.rad_md });
+            button.init(@src(), .{}, .{ .id_extra = i, .min_size_content = .{ .w = w, .h = h }, .max_size_content = .{ .w = w, .h = h }, .padding = dvui.Rect.all(0), .background = true, .color_fill = .{ .color = theme.colors.bg_elevated }, .corners = theme.dims.rad_md });
             button.processEvents();
             button.drawBackground();
             var stack = dvui.overlay(@src(), .{ .min_size_content = .{ .w = w, .h = h }, .max_size_content = .{ .w = w, .h = h } });
             if (images.get(row.preview.text())) |tex| {
                 const crop = @import("../ui/search_gallery_pure.zig").coverCrop(.{ .w = @floatFromInt(tex.width), .h = @floatFromInt(tex.height) }, .{ .w = w, .h = h });
-                _ = dvui.image(@src(), .{ .source = .{ .texture = tex }, .uv = .{ .x = crop.x, .y = crop.y, .w = crop.w, .h = crop.h } }, .{ .min_size_content = .{ .w = w, .h = h }, .max_size_content = .{ .w = w, .h = h }, .corner_radius = theme.dims.rad_md });
-            } else dvui.icon(@src(), "Wallpaper", icons.tvg.lucide.image, .{}, .{ .gravity_x = 0.5, .gravity_y = 0.5, .min_size_content = theme.iconSize(.lg), .color_text = theme.colors.text_tertiary });
+                _ = dvui.image(@src(), .{ .source = .{ .texture = tex }, .uv = .{ .x = crop.x, .y = crop.y, .w = crop.w, .h = crop.h } }, .{ .min_size_content = .{ .w = w, .h = h }, .max_size_content = .{ .w = w, .h = h }, .corners = theme.dims.rad_md });
+            } else dvui.icon(@src(), "Wallpaper", icons.tvg.lucide.image, .{}, .{ .gravity_x = 0.5, .gravity_y = 0.5, .min_size_content = theme.iconSize(.lg), .color_text = .{ .color = theme.colors.text_tertiary } });
             if (row.media != .image) {
-                _ = dvui.label(@src(), "{s}", .{if (row.media == .gif) "GIF" else "VIDEO"}, .{ .gravity_x = 1, .gravity_y = 0, .padding = dvui.Rect.all(6), .background = true, .color_fill = theme.playerGlass(200), .color_text = .white, .font = dvui.themeGet().font_body.withSize(11) });
+                _ = dvui.label(@src(), "{s}", .{if (row.media == .gif) "GIF" else "VIDEO"}, .{ .gravity_x = 1, .gravity_y = 0, .padding = dvui.Rect.all(6), .background = true, .color_fill = .{ .color = theme.playerGlass(200) }, .color_text = .{ .color = dvui.Color.white }, .font = dvui.themeGet().font_body.withSize(11) });
             }
             if (button.hovered()) {
-                var caption = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 1, .expand = .horizontal, .background = true, .color_fill = theme.playerGlass(210), .padding = dvui.Rect.all(8) });
-                _ = dvui.label(@src(), "{d} × {d}", .{ row.width, row.height }, .{ .font = dvui.themeGet().font_body.withSize(12), .color_text = .white });
+                var caption = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 1, .expand = .horizontal, .background = true, .color_fill = .{ .color = theme.playerGlass(210) }, .padding = dvui.Rect.all(8) });
+                _ = dvui.label(@src(), "{d} × {d}", .{ row.width, row.height }, .{ .font = dvui.themeGet().font_body.withSize(12), .color_text = .{ .color = dvui.Color.white } });
                 caption.deinit();
             }
             stack.deinit();
@@ -397,7 +397,7 @@ fn renderGallery(toolbar: anytype) void {
     }
     if (components.iconButton(@src(), icons.tvg.lucide.@"arrow-left", "Back to wallpapers · Esc", false)) closeGallery();
     if (components.iconButton(@src(), icons.tvg.lucide.@"chevron-left", "Previous · Left arrow", false)) moveGallery(-1);
-    _ = dvui.label(@src(), "{d} / {d}", .{ index + 1, total }, .{ .gravity_y = 0.5, .color_text = theme.colors.text_secondary });
+    _ = dvui.label(@src(), "{d} / {d}", .{ index + 1, total }, .{ .gravity_y = 0.5, .color_text = .{ .color = theme.colors.text_secondary } });
     if (components.iconButton(@src(), icons.tvg.lucide.@"chevron-right", "Next · Right arrow", false)) moveGallery(1);
     if (row.media == .image and components.iconButton(@src(), icons.tvg.lucide.@"maximize-2", "Fit / actual size · scroll to pan", actual_size)) {
         actual_size = !actual_size;
@@ -437,7 +437,7 @@ fn renderGallery(toolbar: anytype) void {
         if (desktop.label().len > 0) components.bodyText(@src(), desktop.label(), theme.colors.text_secondary);
     }
     // Render the small cached image immediately, then replace it with the original.
-    var canvas = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = true, .color_fill = .black });
+    var canvas = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = true, .color_fill = .{ .color = dvui.Color.black } });
     {
         const view_height = @max(1, canvas.data().contentRect().h - @as(f32, if (show_filmstrip) 80 else 0));
         var view = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .auto }, .{
@@ -461,7 +461,7 @@ fn renderGallery(toolbar: anytype) void {
             const scale = if (actual_size and original != null) 1 / dvui.windowNaturalScale() else fit;
             const size: dvui.Size = .{ .w = tw * scale, .h = th * scale };
             _ = dvui.image(@src(), .{ .source = .{ .texture = texture } }, .{ .gravity_x = 0.5, .gravity_y = 0.5, .min_size_content = size, .max_size_content = .{ .w = size.w, .h = size.h } });
-        } else dvui.icon(@src(), "Wallpaper", icons.tvg.lucide.image, .{}, .{ .gravity_x = 0.5, .gravity_y = 0.5, .color_text = theme.colors.text_tertiary });
+        } else dvui.icon(@src(), "Wallpaper", icons.tvg.lucide.image, .{}, .{ .gravity_x = 0.5, .gravity_y = 0.5, .color_text = .{ .color = theme.colors.text_tertiary } });
         view.deinit();
     }
     if (show_filmstrip) {
@@ -473,7 +473,7 @@ fn renderGallery(toolbar: anytype) void {
             const item = rows.items[i];
             mutex.unlock();
             var thumb: dvui.ButtonWidget = undefined;
-            thumb.init(@src(), .{}, .{ .id_extra = i, .min_size_content = .{ .w = 84, .h = 48 }, .max_size_content = .{ .w = 84, .h = 48 }, .padding = dvui.Rect.all(2), .margin = dvui.Rect.all(2), .border = dvui.Rect.all(2), .color_border = if (i == index) theme.colors.accent else theme.colors.bg_elevated });
+            thumb.init(@src(), .{}, .{ .id_extra = i, .min_size_content = .{ .w = 84, .h = 48 }, .max_size_content = .{ .w = 84, .h = 48 }, .padding = dvui.Rect.all(2), .margin = dvui.Rect.all(2), .border = dvui.Rect.all(2), .color_border = .{ .color = if (i == index) theme.colors.accent else theme.colors.bg_elevated } });
             thumb.processEvents();
             thumb.drawBackground();
             if (images.get(item.preview.text())) |texture| {

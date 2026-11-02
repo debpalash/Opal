@@ -430,7 +430,7 @@ pub fn renderChatBody() void {
         defer hdr.deinit();
 
         _ = dvui.icon(@src(), "", icons.tvg.lucide.cpu, .{}, .{
-            .color_text = theme.colors.accent,
+            .color_text = .{ .color = theme.colors.accent },
             .min_size_content = theme.iconSize(.sm),
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
@@ -438,15 +438,15 @@ pub fn renderChatBody() void {
             .apfel => "Apple Intelligence",
             .gemma_llama => "Gemma 4 E2B",
         }, .{}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = .{ .color = theme.colors.text_primary },
             .expand = .horizontal,
         });
 
         // Status indicator — two-state quiet text dot.
         if (server.model_status == .online) {
-            _ = dvui.label(@src(), "Online", .{}, .{ .color_text = theme.colors.success });
+            _ = dvui.label(@src(), "Online", .{}, .{ .color_text = .{ .color = theme.colors.success } });
         } else {
-            _ = dvui.label(@src(), if (server.server_running) "Starting" else "Offline", .{}, .{ .color_text = theme.colors.text_tertiary });
+            _ = dvui.label(@src(), if (server.server_running) "Starting" else "Offline", .{}, .{ .color_text = .{ .color = theme.colors.text_tertiary } });
         }
 
         // Settings gear
@@ -456,11 +456,11 @@ pub fn renderChatBody() void {
 
         // Voice toggle — plain accent toggle.
         if (dvui.button(@src(), "Voice", .{}, .{
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = if (voice.voice_mode) theme.colors.accent else theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
+            .color_fill_press = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = if (voice.voice_mode) theme.colors.accent else theme.colors.text_secondary },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
         })) {
@@ -469,11 +469,11 @@ pub fn renderChatBody() void {
 
         // Incognito toggle — plain accent toggle.
         if (dvui.button(@src(), "Incognito", .{}, .{
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = if (incognito_mode) theme.colors.accent else theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
+            .color_fill_press = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = if (incognito_mode) theme.colors.accent else theme.colors.text_secondary },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
         })) {
@@ -517,7 +517,7 @@ pub fn renderChatBody() void {
         defer status_box.deinit();
 
         _ = dvui.icon(@src(), "", icons.tvg.lucide.activity, .{}, .{
-            .color_text = theme.colors.accent,
+            .color_text = .{ .color = theme.colors.accent },
             .min_size_content = .{ .w = 14, .h = 14 },
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
@@ -526,38 +526,38 @@ pub fn renderChatBody() void {
             if (voice.conv_phase == .listening) {
                 if (voice.partial_text_len > 0) {
                     _ = dvui.label(@src(), "Listening: {s}", .{voice.partial_text[0..voice.partial_text_len]}, .{
-                        .color_text = theme.colors.text_secondary,
+                        .color_text = .{ .color = theme.colors.text_secondary },
                         .expand = .horizontal,
                     });
                 } else {
                     _ = dvui.label(@src(), "Listening…", .{}, .{
-                        .color_text = theme.colors.text_secondary,
+                        .color_text = .{ .color = theme.colors.text_secondary },
                     });
                 }
             } else if (voice.conv_phase == .transcribing) {
                 _ = dvui.label(@src(), "Transcribing…", .{}, .{
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = .{ .color = theme.colors.text_secondary },
                 });
             } else if (voice.conv_phase == .thinking) {
                 _ = dvui.label(@src(), "{s}", .{phaseLabel(phase)}, .{
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = .{ .color = theme.colors.text_secondary },
                 });
             } else if (voice.conv_phase == .speaking) {
                 _ = dvui.label(@src(), "Speaking…", .{}, .{
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = .{ .color = theme.colors.text_secondary },
                 });
             } else {
                 _ = dvui.label(@src(), "Voice Active (Ready)", .{}, .{
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = .{ .color = theme.colors.text_tertiary },
                 });
             }
         } else if (is_generating.load(.acquire)) {
             _ = dvui.label(@src(), "{s}", .{phaseLabel(phase)}, .{
-                .color_text = theme.colors.text_secondary,
+                .color_text = .{ .color = theme.colors.text_secondary },
             });
         } else if (voice.is_speaking.load(.acquire)) {
             _ = dvui.label(@src(), "Speaking…", .{}, .{
-                .color_text = theme.colors.text_secondary,
+                .color_text = .{ .color = theme.colors.text_secondary },
             });
         }
     }
@@ -579,11 +579,11 @@ pub fn renderChatBody() void {
         }, .{
             .id_extra = 9006,
             .expand = .horizontal,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .color_border = if (has_focus) theme.colors.accent else theme.colors.border_subtle,
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = theme.colors.text_primary },
+            .color_border = .{ .color = if (has_focus) theme.colors.accent else theme.colors.border_subtle },
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_md,
+            .corners = theme.dims.rad_md,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
@@ -598,9 +598,9 @@ pub fn renderChatBody() void {
 
         // Send button — the single accent affordance in this row.
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.send, .{}, .{}, .{
-            .color_fill = if (can_send) theme.colors.accent else theme.colors.bg_elevated,
-            .color_text = if (can_send) theme.colors.text_on_accent else theme.colors.text_tertiary,
-            .corner_radius = theme.dims.rad_md,
+            .color_fill = .{ .color = if (can_send) theme.colors.accent else theme.colors.bg_elevated },
+            .color_text = .{ .color = if (can_send) theme.colors.text_on_accent else theme.colors.text_tertiary },
+            .corners = theme.dims.rad_md,
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
             .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
             .border = dvui.Rect.all(0),
@@ -618,11 +618,11 @@ pub fn renderChatBody() void {
         {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.mic, .{}, .{}, .{
                 .id_extra = 9007,
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .color_text = if (voice.is_recording.load(.acquire)) theme.colors.danger else if (voice.is_transcribing.load(.acquire)) theme.colors.accent else theme.colors.text_secondary,
-                .corner_radius = theme.dims.rad_md,
+                .color_fill = .{ .color = theme.transparent },
+                .color_fill_hover = .{ .color = theme.colors.bg_hover },
+                .color_fill_press = .{ .color = theme.colors.bg_elevated },
+                .color_text = .{ .color = if (voice.is_recording.load(.acquire)) theme.colors.danger else if (voice.is_transcribing.load(.acquire)) theme.colors.accent else theme.colors.text_secondary },
+                .corners = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
                 .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
                 .border = dvui.Rect.all(0),
@@ -633,11 +633,11 @@ pub fn renderChatBody() void {
             // Conversation mode toggle (live hands-free voice loop)
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.headphones, .{}, .{}, .{
                 .id_extra = 9008,
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .color_text = if (voice.conversation_active.load(.acquire)) theme.colors.accent else theme.colors.text_secondary,
-                .corner_radius = theme.dims.rad_md,
+                .color_fill = .{ .color = theme.transparent },
+                .color_fill_hover = .{ .color = theme.colors.bg_hover },
+                .color_fill_press = .{ .color = theme.colors.bg_elevated },
+                .color_text = .{ .color = if (voice.conversation_active.load(.acquire)) theme.colors.accent else theme.colors.text_secondary },
+                .corners = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
                 .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
                 .border = dvui.Rect.all(0),
@@ -649,11 +649,11 @@ pub fn renderChatBody() void {
             const is_active = is_generating.load(.acquire) or voice.is_speaking.load(.acquire) or voice.is_recording.load(.acquire) or voice.is_transcribing.load(.acquire);
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.square, .{}, .{}, .{
                 .id_extra = 9009,
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .color_text = if (is_active) theme.colors.danger else theme.colors.text_tertiary,
-                .corner_radius = theme.dims.rad_md,
+                .color_fill = .{ .color = theme.transparent },
+                .color_fill_hover = .{ .color = theme.colors.bg_hover },
+                .color_fill_press = .{ .color = theme.colors.bg_elevated },
+                .color_text = .{ .color = if (is_active) theme.colors.danger else theme.colors.text_tertiary },
+                .corners = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
                 .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
                 .border = dvui.Rect.all(0),
@@ -667,7 +667,7 @@ pub fn renderChatBody() void {
     {
         var scroll = dvui.scrollArea(@src(), .{}, .{
             .expand = .both,
-            .color_fill = theme.colors.bg_app,
+            .color_fill = .{ .color = theme.colors.bg_app },
             .background = true,
         });
         defer scroll.deinit();
@@ -684,7 +684,7 @@ pub fn renderChatBody() void {
             // Error display (at top — most urgent). Transient semantic text only.
             if (last_error_len > 0) {
                 _ = dvui.label(@src(), "{s}", .{last_error[0..last_error_len]}, .{
-                    .color_text = theme.colors.danger,
+                    .color_text = .{ .color = theme.colors.danger },
                     .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
                 });
             }
@@ -723,7 +723,7 @@ fn renderControlPanel() void {
         defer row.deinit();
 
         _ = dvui.icon(@src(), "", icons.tvg.lucide.@"hard-drive", .{}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .min_size_content = .{ .w = 14, .h = 14 },
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
@@ -731,34 +731,34 @@ fn renderControlPanel() void {
         if (server.backend_kind == .apfel) {
             // macOS: Apple Intelligence — model is built-in
             _ = dvui.label(@src(), "Apple Intelligence (on-device)", .{}, .{
-                .color_text = theme.colors.text_primary,
+                .color_text = .{ .color = theme.colors.text_primary },
                 .expand = .horizontal,
             });
             _ = dvui.label(@src(), "Ready", .{}, .{
-                .color_text = theme.colors.success,
+                .color_text = .{ .color = theme.colors.success },
             });
         } else if (server.model_exists) {
             _ = dvui.label(@src(), "TinyLlama 1.1B  669 MB", .{}, .{
-                .color_text = theme.colors.text_primary,
+                .color_text = .{ .color = theme.colors.text_primary },
                 .expand = .horizontal,
             });
             _ = dvui.label(@src(), "Ready", .{}, .{
-                .color_text = theme.colors.success,
+                .color_text = .{ .color = theme.colors.success },
             });
         } else if (server.model_downloading) {
             _ = dvui.label(@src(), "{s}", .{server.download_progress_buf[0..server.download_progress_len]}, .{
-                .color_text = theme.colors.text_secondary,
+                .color_text = .{ .color = theme.colors.text_secondary },
                 .expand = .horizontal,
             });
         } else {
             _ = dvui.label(@src(), "Model not downloaded", .{}, .{
-                .color_text = theme.colors.text_secondary,
+                .color_text = .{ .color = theme.colors.text_secondary },
                 .expand = .horizontal,
             });
             if (dvui.button(@src(), "Download", .{}, .{
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.text_on_accent,
-                .corner_radius = theme.dims.rad_sm,
+                .color_fill = .{ .color = theme.colors.accent },
+                .color_text = .{ .color = theme.colors.text_on_accent },
+                .corners = theme.dims.rad_sm,
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             })) {
                 server.startModelDownload();
@@ -776,7 +776,7 @@ fn renderControlPanel() void {
         defer row.deinit();
 
         _ = dvui.icon(@src(), "", icons.tvg.lucide.server, .{}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .min_size_content = .{ .w = 14, .h = 14 },
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
@@ -785,38 +785,38 @@ fn renderControlPanel() void {
             // macOS: show apfel binary status
             if (server.llama_server_exists) {
                 _ = dvui.label(@src(), "apfel", .{}, .{
-                    .color_text = theme.colors.text_primary,
+                    .color_text = .{ .color = theme.colors.text_primary },
                     .expand = .horizontal,
                 });
                 _ = dvui.label(@src(), "Found", .{}, .{
-                    .color_text = theme.colors.success,
+                    .color_text = .{ .color = theme.colors.success },
                 });
             } else {
                 _ = dvui.label(@src(), "apfel not found", .{}, .{
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = .{ .color = theme.colors.text_secondary },
                     .expand = .horizontal,
                 });
                 _ = dvui.label(@src(), "brew install apfel", .{}, .{
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = .{ .color = theme.colors.text_secondary },
                 });
             }
         } else if (server.llama_server_exists) {
             _ = dvui.label(@src(), "Shimmy", .{}, .{
-                .color_text = theme.colors.text_primary,
+                .color_text = .{ .color = theme.colors.text_primary },
                 .expand = .horizontal,
             });
             _ = dvui.label(@src(), "Found", .{}, .{
-                .color_text = theme.colors.success,
+                .color_text = .{ .color = theme.colors.success },
             });
         } else {
             _ = dvui.label(@src(), "Shimmy missing", .{}, .{
-                .color_text = theme.colors.text_secondary,
+                .color_text = .{ .color = theme.colors.text_secondary },
                 .expand = .horizontal,
             });
             if (dvui.button(@src(), "Install", .{}, .{
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.accent,
-                .corner_radius = theme.dims.rad_sm,
+                .color_fill = .{ .color = theme.colors.bg_elevated },
+                .color_text = .{ .color = theme.colors.accent },
+                .corners = theme.dims.rad_sm,
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             })) {
                 server.installLlamaServer();
@@ -834,24 +834,24 @@ fn renderControlPanel() void {
         defer row.deinit();
 
         var port_buf: [8]u8 = undefined;
-        const port_str = std.fmt.bufPrintZ(&port_buf, "{d}", .{server.server_port}) catch "41592";
+        const port_str = @import("opal-fmt").bufPrintZ(&port_buf, "{d}", .{server.server_port}) catch "41592";
         var gpu_buf: [8]u8 = undefined;
-        const gpu_str = std.fmt.bufPrintZ(&gpu_buf, "{d}", .{server.gpu_layers}) catch "99";
+        const gpu_str = @import("opal-fmt").bufPrintZ(&gpu_buf, "{d}", .{server.gpu_layers}) catch "99";
 
         _ = dvui.label(@src(), "Port", .{}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
         });
         _ = dvui.label(@src(), "{s}", .{port_str}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = .{ .color = theme.colors.text_primary },
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.lg, .h = 0 },
         });
         _ = dvui.label(@src(), "GPU", .{}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
         });
         _ = dvui.label(@src(), "{s}", .{gpu_str}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = .{ .color = theme.colors.text_primary },
             .expand = .horizontal,
         });
     }
@@ -870,9 +870,9 @@ fn renderControlPanel() void {
 
         if (dvui.button(@src(), "Start", .{}, .{
             .expand = .horizontal,
-            .color_fill = if (can_start) theme.colors.accent else theme.colors.bg_elevated,
-            .color_text = if (can_start) theme.colors.text_on_accent else theme.colors.text_tertiary,
-            .corner_radius = theme.dims.rad_md,
+            .color_fill = .{ .color = if (can_start) theme.colors.accent else theme.colors.bg_elevated },
+            .color_text = .{ .color = if (can_start) theme.colors.text_on_accent else theme.colors.text_tertiary },
+            .corners = theme.dims.rad_md,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
         })) {
@@ -881,9 +881,9 @@ fn renderControlPanel() void {
 
         if (dvui.button(@src(), "Stop", .{}, .{
             .expand = .horizontal,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = if (can_stop) theme.colors.danger else theme.colors.text_tertiary,
-            .corner_radius = theme.dims.rad_md,
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = if (can_stop) theme.colors.danger else theme.colors.text_tertiary },
+            .corners = theme.dims.rad_md,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
             .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
         })) {
@@ -917,13 +917,13 @@ fn renderEmptyState() void {
             if (dvui.button(@src(), sug, .{}, .{
                 .id_extra = idx + 8000,
                 .expand = .horizontal,
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .corner_radius = theme.dims.rad_sm,
+                .color_fill = .{ .color = theme.transparent },
+                .color_fill_hover = .{ .color = theme.colors.bg_hover },
+                .color_fill_press = .{ .color = theme.colors.bg_elevated },
+                .corners = theme.dims.rad_sm,
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
                 .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = theme.spacing.xs },
-                .color_text = theme.colors.text_secondary,
+                .color_text = .{ .color = theme.colors.text_secondary },
             })) {
                 const slen = @min(sug.len, MAX_INPUT_LEN);
                 @memcpy(input_buf[0..slen], sug[0..slen]);
@@ -949,7 +949,7 @@ fn renderMessage(mi: usize) void {
         _ = dvui.label(@src(), "{s}", .{author}, .{
             .id_extra = mi + 7000,
             .expand = .horizontal,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 2 },
         });
     }
@@ -961,7 +961,7 @@ fn renderMessage(mi: usize) void {
         _ = dvui.label(@src(), "{s}", .{ph}, .{
             .id_extra = mi + 7100,
             .expand = .horizontal,
-            .color_text = theme.colors.text_secondary,
+            .color_text = .{ .color = theme.colors.text_secondary },
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
         });
         return;
@@ -1004,7 +1004,7 @@ fn renderMessage(mi: usize) void {
     dvui.labelEx(@src(), "{s}", .{wrapped[0..wpos]}, .{ .ellipsize = false }, .{
         .id_extra = mi + 7100,
         .expand = .horizontal,
-        .color_text = if (is_user) theme.colors.text_secondary else theme.colors.text_primary,
+        .color_text = .{ .color = if (is_user) theme.colors.text_secondary else theme.colors.text_primary },
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
     });
 
@@ -1032,13 +1032,13 @@ fn renderCatalogRail() void {
             var lrow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 9300 });
             defer lrow.deinit();
             dvui.spinner(@src(), .{
-                .color_text = theme.colors.accent,
+                .color_text = .{ .color = theme.colors.accent },
                 .min_size_content = .{ .w = 12, .h = 12 },
                 .gravity_y = 0.5,
                 .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
             });
             _ = dvui.label(@src(), "Fetching the catalog…", .{}, .{
-                .color_text = theme.colors.text_tertiary,
+                .color_text = .{ .color = theme.colors.text_tertiary },
                 .gravity_y = 0.5,
             });
             state.wakeUi();
@@ -1136,10 +1136,10 @@ pub fn renderInlineResults() void {
             .expand = .horizontal,
             // Recommended row carries the only quiet accent edge (left).
             .background = is_recommended,
-            .color_fill = if (is_recommended) theme.colors.bg_elevated else theme.transparent,
-            .color_border = theme.colors.accent,
+            .color_fill = .{ .color = if (is_recommended) theme.colors.bg_elevated else theme.transparent },
+            .color_border = .{ .color = theme.colors.accent },
             .border = if (is_recommended) .{ .x = 2, .y = 0, .w = 0, .h = 0 } else dvui.Rect.all(0),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
         });
@@ -1157,7 +1157,7 @@ pub fn renderInlineResults() void {
             _ = dvui.label(@src(), "{s}", .{name}, .{
                 .id_extra = ci + 9800,
                 .expand = .horizontal,
-                .color_text = theme.colors.text_primary,
+                .color_text = .{ .color = theme.colors.text_primary },
             });
 
             // One muted metadata line: pct · source · quality · seeds.
@@ -1192,7 +1192,7 @@ pub fn renderInlineResults() void {
 
                 _ = dvui.label(@src(), "{s}", .{meta_buf[0..w]}, .{
                     .id_extra = ci + 9900,
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = .{ .color = theme.colors.text_secondary },
                 });
             }
         }
@@ -1200,11 +1200,11 @@ pub fn renderInlineResults() void {
         // Queue — borderless quiet action.
         if (resolver.isRemoteQueueable(item) and dvui.buttonIcon(@src(), "", icons.tvg.lucide.plus, .{}, .{}, .{
             .id_extra = ci + 10400,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
+            .color_fill_press = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = theme.colors.text_secondary },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = theme.spacing.xs, .h = theme.spacing.xs },
             .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
             .min_size_content = .{ .w = 14, .h = 14 },
@@ -1222,11 +1222,11 @@ pub fn renderInlineResults() void {
         };
         if (dvui.buttonIcon(@src(), "", action_icon, .{}, .{}, .{
             .id_extra = ci + 10100,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.accent,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
+            .color_fill_press = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = theme.colors.accent },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = theme.spacing.xs, .h = theme.spacing.xs },
             .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
             .min_size_content = .{ .w = 14, .h = 14 },

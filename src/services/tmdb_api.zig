@@ -654,7 +654,7 @@ const PosterJob = struct {
     w: u32 = 0,
     h: u32 = 0,
 };
-var poster_jobs: [8]PosterJob = .{PosterJob{}} ** 8;
+var poster_jobs: [8]PosterJob = @splat(PosterJob{});
 
 pub fn drainPosterResults() void {
     const lists = [_]*std.ArrayListUnmanaged(state.TmdbItem){

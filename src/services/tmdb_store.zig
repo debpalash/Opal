@@ -207,7 +207,7 @@ pub fn migrateFromTsv() void {
     var __cfg_buf_0: [512]u8 = undefined;
     const home = @import("../core/paths.zig").configDir(&__cfg_buf_0);
     var path_buf: [512]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buf, "{s}/tmdb_lists.tsv", .{home}) catch return;
+    const path = @import("opal-fmt").bufPrintZ(&path_buf, "{s}/tmdb_lists.tsv", .{home}) catch return;
 
     const file = @import("../core/io_global.zig").openFileAbsolute(path, .{}) catch return;
     defer file.close(@import("../core/io_global.zig").io());
@@ -262,7 +262,7 @@ pub fn migrateOldDb() void {
     var __cfg_buf_1: [512]u8 = undefined;
     const home = @import("../core/paths.zig").configDir(&__cfg_buf_1);
     var path_buf: [512]u8 = undefined;
-    const old_db_path = std.fmt.bufPrintZ(&path_buf, "{s}/tmdb.db", .{home}) catch return;
+    const old_db_path = @import("opal-fmt").bufPrintZ(&path_buf, "{s}/tmdb.db", .{home}) catch return;
     // Just delete it — data was already in tmdb_lists.tsv which we migrated above
     @import("../core/io_global.zig").deleteFileAbsolute(old_db_path) catch {};
 }

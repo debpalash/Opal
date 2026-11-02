@@ -221,7 +221,7 @@ test "an unknown agent layout and empty input are refused for a shim, not guesse
     const argv = [_][]const u8{"codex"};
     try std.testing.expectEqual(@as(?Refusal, .empty_command), windowsPlan(&plan, "", &argv));
     // Every refusal has words for the person.
-    inline for (@typeInfo(Refusal).@"enum".fields) |f| {
+    inline for (comptime @import("opal-reflect").fields(Refusal)) |f| {
         try std.testing.expect(@as(Refusal, @enumFromInt(f.value)).message().len > 20);
     }
 }

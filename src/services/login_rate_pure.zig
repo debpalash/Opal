@@ -42,7 +42,7 @@ pub const Slot = struct {
 };
 
 pub const Table = struct {
-    slots: [SLOTS]Slot = [_]Slot{.{}} ** SLOTS,
+    slots: [SLOTS]Slot = @as([SLOTS]Slot, @splat(.{})),
     /// Shared by new usernames while every named slot is still live.
     overflow: Slot = .{},
 };

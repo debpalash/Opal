@@ -162,7 +162,7 @@ pub fn measuredRows(heights: []const f32, estimate: f32, y: f32, viewport_h: f32
     return .{ .first = first, .last = last, .before = before, .after = after };
 }
 test "measured queue window bounds drawing beyond 200 rows" {
-    const heights = [_]f32{60} ** 500;
+    const heights = @as([500]f32, @splat(60));
     const w = measuredRows(&heights, 60, 12000, 300, 2);
     try std.testing.expectEqual(@as(usize, 198), w.first);
     try std.testing.expectEqual(@as(usize, 207), w.last);
@@ -185,7 +185,7 @@ test "measured queue window handles variable heights and unknown rows" {
 }
 
 test "measured queue window preserves total height across resize and deletion" {
-    const heights = [_]f32{0} ** 300;
+    const heights = @as([300]f32, @splat(0));
     for ([_]f32{ 60, 96 }) |estimate| {
         const w = measuredRows(&heights, estimate, 6000, 480, 2);
         const drawn = @as(f32, @floatFromInt(w.last - w.first)) * estimate;

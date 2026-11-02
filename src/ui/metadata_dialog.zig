@@ -36,8 +36,8 @@ pub fn renderMetadataDialog() void {
     }, .{
         .min_size_content = dialog_size,
         .max_size_content = dvui.Options.MaxSize.size(dialog_size),
-        .color_fill = theme.colors.bg_elevated,
-        .corner_radius = theme.dims.rad_lg,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .corners = theme.dims.rad_lg,
     });
     defer win.deinit();
     win.autoPosition();
@@ -57,7 +57,7 @@ pub fn renderMetadataDialog() void {
 
     if (!state.app.pending_has_metadata) {
         var waiting = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
-        _ = dvui.label(@src(), "Fetching Torrent Metadata…", .{}, .{ .expand = .horizontal, .color_text = theme.colors.text_primary, .margin = dvui.Rect.all(theme.spacing.md) });
+        _ = dvui.label(@src(), "Fetching Torrent Metadata…", .{}, .{ .expand = .horizontal, .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary), .margin = dvui.Rect.all(theme.spacing.md) });
 
         if (@import("builtin").is_test) test_waiting_rect = waiting.data().rect;
         waiting.deinit();
@@ -65,7 +65,7 @@ pub fn renderMetadataDialog() void {
         if (@import("builtin").is_test) test_footer_rect = footer.data().rect;
         defer footer.deinit();
         // Ghost Cancel — text-only danger, no resting fill.
-        if (dvui.button(@src(), "Cancel", .{}, .{ .color_fill = TRANSPARENT, .color_text = theme.colors.danger, .padding = theme.dims.pad_sm })) {
+        if (dvui.button(@src(), "Cancel", .{}, .{ .color_fill = @import("color_compat.zig").wrap(TRANSPARENT), .color_text = @import("color_compat.zig").wrap(theme.colors.danger), .padding = theme.dims.pad_sm })) {
             c.mpv.torrent_remove(state.torrentSession(), state.app.pending_magnet_tid);
             state.app.pending_magnet_tid = -1;
         }
@@ -80,12 +80,12 @@ pub fn renderMetadataDialog() void {
     } else c.mpv.torrent_get_name(state.torrentSession(), state.app.pending_magnet_tid, &t_name, 256);
     const name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse 255;
 
-    _ = dvui.label(@src(), "Pre-Download Filter", .{}, .{ .color_text = theme.colors.text_primary });
+    _ = dvui.label(@src(), "Pre-Download Filter", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary) });
     var title = dvui.textLayout(@src(), .{}, .{ .expand = .horizontal, .background = false });
-    title.addText(@import("../core/text.zig").safeUtf8(t_name[0..name_len]), .{ .color_text = theme.colors.text_secondary });
+    title.addText(@import("../core/text.zig").safeUtf8(t_name[0..name_len]), .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary) });
     title.deinit();
 
-    var scroll = dvui.scrollArea(@src(), .{ .horizontal = .none }, .{ .expand = .both, .min_size_content = .{ .w = 0, .h = 0 }, .max_size_content = dvui.Options.MaxSize.height(@max(80, dialog_size.h - 180)), .background = true, .color_fill = theme.colors.bg_surface });
+    var scroll = dvui.scrollArea(@src(), .{ .horizontal = .none }, .{ .expand = .both, .min_size_content = .{ .w = 0, .h = 0 }, .max_size_content = dvui.Options.MaxSize.height(@max(80, dialog_size.h - 180)), .background = true, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface) });
 
     var f_list = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = theme.dims.pad_sm });
 
@@ -117,12 +117,12 @@ pub fn renderMetadataDialog() void {
             }
         }
         const selected = &state.app.pending_files_selection[@as(usize, @intCast(i))];
-        _ = dvui.checkbox(@src(), selected, "", .{ .color_fill = if (selected.*) theme.colors.accent else theme.colors.bg_surface, .color_border = theme.colors.border_subtle, .color_text = theme.colors.text_on_accent });
+        _ = dvui.checkbox(@src(), selected, "", .{ .color_fill = @import("color_compat.zig").wrap(if (selected.*) theme.colors.accent else theme.colors.bg_surface), .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle), .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent) });
 
         var f_buf: [300]u8 = undefined;
-        if (std.fmt.bufPrintZ(&f_buf, "{s} ({d:.1} MB)", .{ safe_name, sz_mb })) |n| {
+        if (@import("opal-fmt").bufPrintZ(&f_buf, "{s} ({d:.1} MB)", .{ safe_name, sz_mb })) |n| {
             var text = dvui.textLayout(@src(), .{}, .{ .expand = .horizontal, .background = false });
-            text.addText(n, .{ .color_text = theme.colors.text_primary, .font = theme.mediaTitleFont(safe_name, dvui.themeGet().font_body) });
+            text.addText(n, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary), .font = theme.mediaTitleFont(safe_name, dvui.themeGet().font_body) });
             text.deinit();
         } else |_| {}
 
@@ -136,13 +136,13 @@ pub fn renderMetadataDialog() void {
     defer footer.deinit();
 
     // Ghost Cancel — text-only danger.
-    if (dvui.button(@src(), "Cancel", .{}, .{ .color_fill = TRANSPARENT, .color_text = theme.colors.danger, .padding = .{ .x = theme.spacing.md, .y = 6, .w = theme.spacing.md, .h = 6 } })) {
+    if (dvui.button(@src(), "Cancel", .{}, .{ .color_fill = @import("color_compat.zig").wrap(TRANSPARENT), .color_text = @import("color_compat.zig").wrap(theme.colors.danger), .padding = .{ .x = theme.spacing.md, .y = 6, .w = theme.spacing.md, .h = 6 } })) {
         c.mpv.torrent_remove(state.torrentSession(), state.app.pending_magnet_tid);
         state.app.pending_magnet_tid = -1;
     }
 
     // Primary action — the single accent affordance of the dialog.
-    if (dvui.button(@src(), "Start Download", .{}, .{ .color_fill = theme.colors.accent, .color_text = theme.colors.text_on_accent, .padding = .{ .x = theme.spacing.md, .y = 6, .w = theme.spacing.md, .h = 6 }, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 } })) {
+    if (dvui.button(@src(), "Start Download", .{}, .{ .color_fill = @import("color_compat.zig").wrap(theme.colors.accent), .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent), .padding = .{ .x = theme.spacing.md, .y = 6, .w = theme.spacing.md, .h = 6 }, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 } })) {
         var fi: i32 = 0;
         const shown_dl = @min(f_count, @as(@TypeOf(f_count), @intCast(state.app.pending_files_selection.len)));
         while (fi < shown_dl) : (fi += 1) {

@@ -41,7 +41,7 @@ var running_kid: bool = false;
 
 const BackoffSlot = struct { id: [pure.ID_MAX]u8 = std.mem.zeroes([pure.ID_MAX]u8), id_len: u8 = 0, b: pure.Backoff = .{} };
 /// Guarded by `mutex`.
-var backoffs: [pure.MAX_PROFILES]BackoffSlot = [_]BackoffSlot{.{}} ** pure.MAX_PROFILES;
+var backoffs: [pure.MAX_PROFILES]BackoffSlot = @as([pure.MAX_PROFILES]BackoffSlot, @splat(.{}));
 
 var restart_requested = std.atomic.Value(bool).init(false);
 var picker_needed = std.atomic.Value(bool).init(false);
@@ -303,7 +303,7 @@ fn seedProfileDb(dir: []const u8, kid: bool) void {
     const db = @import("../core/db.zig");
     const c = db.c;
     var path_buf: [700]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buf, "{s}/opal.db", .{dir}) catch return;
+    const path = @import("opal-fmt").bufPrintZ(&path_buf, "{s}/opal.db", .{dir}) catch return;
     var h: ?*db.Sqlite3 = null;
     if (c.sqlite3_open_v2(path.ptr, &h, c.SQLITE_OPEN_READWRITE | c.SQLITE_OPEN_CREATE, null) != c.SQLITE_OK) {
         if (h) |bad| _ = c.sqlite3_close_v2(bad);

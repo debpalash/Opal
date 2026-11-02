@@ -8,7 +8,7 @@ const builtin = @import("builtin");
 ///  - Release: std.heap.smp_allocator — the thread-safe allocator built for
 ///    ReleaseFast. The DebugAllocator's bookkeeping showed up in production
 ///    CPU samples on every hot path (posters, JSON, resolver churn).
-const debug_mode = builtin.mode == .Debug;
+const debug_mode = builtin.mode == .debug;
 
 var gpa_instance = if (debug_mode) std.heap.DebugAllocator(.{
     .safety = true, // use-after-free / double-free detection

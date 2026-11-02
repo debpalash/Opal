@@ -29,15 +29,15 @@ pub fn resolveWhisperBin() ?[]const u8 {
 /// then the multilingual one, then any tiny English model.
 pub fn resolveWhisperModel(config_dir: []const u8, lang: []const u8, size: []const u8, buf: *[512]u8) ?[]const u8 {
     if (std.mem.eql(u8, lang, "en")) {
-        const p = std.fmt.bufPrintZ(buf, "{s}/models/ggml-{s}.en.bin", .{ config_dir, size }) catch return null;
+        const p = @import("opal-fmt").bufPrintZ(buf, "{s}/models/ggml-{s}.en.bin", .{ config_dir, size }) catch return null;
         if (io.cwdAccess(p, .{})) |_| return p else |_| {}
     }
     {
-        const p = std.fmt.bufPrintZ(buf, "{s}/models/ggml-{s}.bin", .{ config_dir, size }) catch return null;
+        const p = @import("opal-fmt").bufPrintZ(buf, "{s}/models/ggml-{s}.bin", .{ config_dir, size }) catch return null;
         if (io.cwdAccess(p, .{})) |_| return p else |_| {}
     }
     {
-        const p = std.fmt.bufPrintZ(buf, "{s}/models/ggml-tiny.en.bin", .{config_dir}) catch return null;
+        const p = @import("opal-fmt").bufPrintZ(buf, "{s}/models/ggml-tiny.en.bin", .{config_dir}) catch return null;
         if (io.cwdAccess(p, .{})) |_| return p else |_| {}
     }
     return null;

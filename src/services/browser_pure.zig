@@ -290,8 +290,8 @@ pub fn historyMatchScore(query: []const u8, url: []const u8, title: []const u8) 
     var np = url;
     if (std.mem.indexOf(u8, np, "://")) |p| np = np[p + 3 ..];
     if (std.ascii.startsWithIgnoreCase(np, query)) return 90;
-    if (std.ascii.indexOfIgnoreCase(url, query) != null) return 50;
-    if (title.len > 0 and std.ascii.indexOfIgnoreCase(title, query) != null) return 40;
+    if (std.ascii.findIgnoreCase(url, query) != null) return 50;
+    if (title.len > 0 and std.ascii.findIgnoreCase(title, query) != null) return 40;
     return 0;
 }
 

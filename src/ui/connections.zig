@@ -83,21 +83,21 @@ pub fn render() void {
             .min_size_content = .{ .w = card_width, .h = 184 },
             .max_size_content = .{ .w = card_width, .h = std.math.floatMax(f32) },
             .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .corner_radius = theme.dims.rad_md,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .corners = theme.dims.rad_md,
             .border = dvui.Rect.all(1),
-            .color_border = tint.opacity(if (connected) 0.5 else 0.22),
+            .color_border = @import("color_compat.zig").wrap(tint.opacity(if (connected) 0.5 else 0.22)),
             .padding = dvui.Rect.all(16),
             .margin = dvui.Rect.all(4),
         });
         var logo_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .h = 12 } });
         surfaces.iconTile(@src(), if (provider.brand) |brand| brands.icon(brand) else provider.icon, tint, 30);
-        if (provider.id == .jellyfin) dvui.icon(@src(), "Emby", brands.icon(.emby), .{}, .{ .min_size_content = theme.iconSize(.sm), .color_text = tint, .gravity_y = 0.5, .margin = .{ .x = 8 } });
+        if (provider.id == .jellyfin) dvui.icon(@src(), "Emby", brands.icon(.emby), .{}, .{ .min_size_content = theme.iconSize(.sm), .color_text = @import("color_compat.zig").wrap(tint), .gravity_y = 0.5, .margin = .{ .x = 8 } });
         var fill = dvui.box(@src(), .{}, .{ .expand = .horizontal });
         fill.deinit();
         surfaces.badge(@src(), if (connected) (if (provider.id == .music) "Configured" else "Connected") else "Set up", if (connected) theme.colors.success else theme.colors.text_secondary);
         logo_row.deinit();
-        dvui.labelNoFmt(@src(), provider.name, .{}, .{ .font = dvui.themeGet().font_heading, .color_text = theme.colors.text_primary, .padding = dvui.Rect.all(0), .margin = .{ .h = 6 } });
+        dvui.labelNoFmt(@src(), provider.name, .{}, .{ .font = dvui.themeGet().font_heading, .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary), .padding = dvui.Rect.all(0), .margin = .{ .h = 6 } });
         components.bodyText(@src(), provider.detail, theme.colors.text_secondary);
         var server_buf: [256]u8 = undefined;
         const server = switch (provider.id) {
@@ -129,7 +129,7 @@ pub fn render() void {
             const end = std.mem.indexOfAnyPos(u8, server, start, "/?#") orelse server.len;
             const authority = server[start..end];
             const host = if (std.mem.lastIndexOfScalar(u8, authority, '@')) |offset| authority[offset + 1 ..] else authority;
-            dvui.labelNoFmt(@src(), host, .{}, .{ .color_text = theme.colors.text_tertiary });
+            dvui.labelNoFmt(@src(), host, .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary) });
         }
         var space = dvui.box(@src(), .{}, .{ .expand = .vertical });
         space.deinit();
@@ -147,15 +147,15 @@ pub fn render() void {
         .min_size_content = .{ .w = card_width, .h = 184 },
         .max_size_content = .{ .w = card_width, .h = std.math.floatMax(f32) },
         .background = true,
-        .color_fill = theme.colors.accent.opacity(0.08),
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.accent.opacity(0.08)),
         .border = dvui.Rect.all(1),
-        .color_border = theme.colors.accent.opacity(0.25),
-        .corner_radius = theme.dims.rad_md,
+        .color_border = @import("color_compat.zig").wrap(theme.colors.accent.opacity(0.25)),
+        .corners = theme.dims.rad_md,
         .padding = dvui.Rect.all(16),
         .margin = dvui.Rect.all(4),
     });
     surfaces.iconTile(@src(), icons.tvg.lucide.layers, theme.colors.accent, 30);
-    dvui.labelNoFmt(@src(), "One library", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = theme.colors.text_primary, .padding = dvui.Rect.all(0), .margin = .{ .y = 12, .h = 6 } });
+    dvui.labelNoFmt(@src(), "One library", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary), .padding = dvui.Rect.all(0), .margin = .{ .y = 12, .h = 6 } });
     components.bodyText(@src(), "Browse all connected libraries.", theme.colors.text_secondary);
     var fill = dvui.box(@src(), .{}, .{ .expand = .vertical });
     fill.deinit();

@@ -1432,13 +1432,13 @@ fn updateFrameTexture() void {
 
     if (frame_texture != null and frame_w == uw and frame_h == uh) {
         // Same dims — in-place update, no texture churn.
-        dvui.Texture.update(&frame_texture.?, pma, .linear) catch {
+        dvui.Texture.update(&frame_texture.?, pma) catch {
             frame_texture.?.destroyLater();
-            frame_texture = dvui.textureCreate(pma, uw, uh, .linear, .rgba_32) catch null;
+            frame_texture = dvui.textureCreate(pma, .{ .width = uw, .height = uh, .format = .rgba_32, .interpolation = .linear, .wrap_u = .clamp, .wrap_v = .clamp }) catch null;
         };
     } else {
         if (frame_texture) |old| old.destroyLater();
-        frame_texture = dvui.textureCreate(pma, uw, uh, .linear, .rgba_32) catch null;
+        frame_texture = dvui.textureCreate(pma, .{ .width = uw, .height = uh, .format = .rgba_32, .interpolation = .linear, .wrap_u = .clamp, .wrap_v = .clamp }) catch null;
     }
     frame_w = uw;
     frame_h = uh;
@@ -1558,14 +1558,14 @@ pub fn renderContent() void {
             .expand = .horizontal,
             .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
             .background = true,
-            .color_fill = theme.colors.bg_surface,
+            .color_fill = .{ .color = theme.colors.bg_surface },
         });
         defer url_row.deinit();
 
         const icon_btn_style = dvui.Options{
-            .color_fill = theme.transparent,
-            .color_text = theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.transparent },
+            .color_text = .{ .color = theme.colors.text_secondary },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 3, .y = 2, .w = 3, .h = 2 },
             .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
         };
@@ -1590,14 +1590,14 @@ pub fn renderContent() void {
             if (b.is_loading.load(.acquire) or bridge_starting.load(.acquire)) {
                 dvui.spinner(@src(), .{
                     .id_extra = 99,
-                    .color_text = theme.colors.accent,
+                    .color_text = .{ .color = theme.colors.accent },
                     .min_size_content = .{ .w = 14, .h = 14 },
                     .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
                     .gravity_y = 0.5,
                 });
             } else if (bridge_ready.load(.acquire)) {
                 dvui.icon(@src(), "browser-ready", icons.tvg.lucide.@"circle-check", .{}, .{
-                    .color_text = theme.colors.accent,
+                    .color_text = .{ .color = theme.colors.accent },
                     .min_size_content = .{ .w = 14, .h = 14 },
                     .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
                 });
@@ -1611,11 +1611,11 @@ pub fn renderContent() void {
         te.init(@src(), .{ .text = .{ .buffer = &b.url_buf } }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 200, .h = 18 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_border = theme.colors.border_strong,
-            .color_text = theme.colors.text_primary,
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .color_border = .{ .color = theme.colors.border_strong },
+            .color_text = .{ .color = theme.colors.text_primary },
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_xl,
+            .corners = theme.dims.rad_xl,
             .margin = .{ .x = 3, .y = 0, .w = 3, .h = 0 },
             .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
         });
@@ -1679,9 +1679,9 @@ pub fn renderContent() void {
 
         // Go (play icon)
         const clicked_go = dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
-            .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.colors.accent },
+            .color_text = .{ .color = dvui.Color.white },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 4, .y = 3, .w = 4, .h = 3 },
             .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
         });
@@ -1703,7 +1703,7 @@ pub fn renderContent() void {
             var star_style = icon_btn_style;
             star_style.id_extra = 119;
             star_style.data_out = &star_wd;
-            if (bookmarked) star_style.color_text = theme.colors.warning;
+            if (bookmarked) star_style.color_text = .{ .color = theme.colors.warning };
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.star, .{}, .{}, star_style)) {
                 toggleBookmark();
             }
@@ -1759,7 +1759,7 @@ pub fn renderContent() void {
             var rd_style = icon_btn_style;
             rd_style.id_extra = 125;
             rd_style.data_out = &rd_wd;
-            if (reader_open) rd_style.color_text = theme.colors.accent;
+            if (reader_open) rd_style.color_text = .{ .color = theme.colors.accent };
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"book-open", .{}, .{}, rd_style)) {
                 if (reader_open) {
                     reader_open = false;
@@ -1779,12 +1779,12 @@ pub fn renderContent() void {
             .expand = .horizontal,
             .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
             .background = true,
-            .color_fill = theme.colors.bg_surface,
+            .color_fill = .{ .color = theme.colors.bg_surface },
         });
         defer frow.deinit();
 
         dvui.icon(@src(), "find", icons.tvg.lucide.search, .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = .{ .color = theme.colors.text_secondary },
             .min_size_content = .{ .w = 13, .h = 13 },
             .gravity_y = 0.5,
             .margin = .{ .x = 2, .y = 0, .w = 6, .h = 0 },
@@ -1792,11 +1792,11 @@ pub fn renderContent() void {
 
         var fte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &find_buf }, .placeholder = "Find in page…" }, .{
             .min_size_content = .{ .w = 260, .h = 16 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = theme.colors.text_primary },
             .border = dvui.Rect.all(1),
-            .color_border = theme.colors.border_strong,
-            .corner_radius = theme.dims.rad_sm,
+            .color_border = .{ .color = theme.colors.border_strong },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
             .gravity_y = 0.5,
         });
@@ -1807,9 +1807,9 @@ pub fn renderContent() void {
         fte.deinit();
 
         const nav_btn_style = dvui.Options{
-            .color_fill = theme.transparent,
-            .color_text = theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.transparent },
+            .color_text = .{ .color = theme.colors.text_secondary },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 3, .y = 2, .w = 3, .h = 2 },
             .gravity_y = 0.5,
         };
@@ -1830,14 +1830,14 @@ pub fn renderContent() void {
             if (cnt == 0) {
                 _ = dvui.label(@src(), "No matches", .{}, .{
                     .id_extra = 132,
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = .{ .color = theme.colors.text_tertiary },
                     .gravity_y = 0.5,
                     .padding = .{ .x = 6, .y = 0, .w = 6, .h = 0 },
                 });
             } else if (cnt > 0) {
                 _ = dvui.label(@src(), "{d} match{s}", .{ cnt, if (cnt == 1) "" else "es" }, .{
                     .id_extra = 133,
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = .{ .color = theme.colors.text_secondary },
                     .gravity_y = 0.5,
                     .padding = .{ .x = 6, .y = 0, .w = 6, .h = 0 },
                 });
@@ -1855,10 +1855,10 @@ pub fn renderContent() void {
     if (b.title_len > 0) {
         var tbuf: [256]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(b.title[0..b.title_len], &tbuf)}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = .{ .color = theme.colors.text_primary },
             .padding = .{ .x = 8, .y = 2, .w = 8, .h = 2 },
             .background = true,
-            .color_fill = theme.colors.bg_surface,
+            .color_fill = .{ .color = theme.colors.bg_surface },
             .expand = .horizontal,
         });
     }
@@ -1885,7 +1885,7 @@ pub fn renderContent() void {
         var img_box = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .both,
             .background = true,
-            .color_fill = theme.colors.bg_deep,
+            .color_fill = .{ .color = theme.colors.bg_deep },
         });
         defer img_box.deinit();
 
@@ -2016,13 +2016,13 @@ pub fn renderContent() void {
         var empty = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .both,
             .background = true,
-            .color_fill = theme.colors.bg_deep,
+            .color_fill = .{ .color = theme.colors.bg_deep },
             .padding = .{ .x = 0, .y = 12, .w = 0, .h = 0 },
         });
         defer empty.deinit();
 
         _ = dvui.label(@src(), "Opal Browser", .{}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = .{ .color = theme.colors.text_primary },
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
         });
@@ -2033,20 +2033,20 @@ pub fn renderContent() void {
                 .cloakbrowser => "Anti-detect Chromium",
             } }, .{
                 .id_extra = 3,
-                .color_text = theme.colors.accent,
+                .color_text = .{ .color = theme.colors.accent },
                 .gravity_x = 0.5,
                 .padding = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
             });
             _ = dvui.label(@src(), "Real browser rendering · Cloudflare bypass · Full JS support", .{}, .{
                 .id_extra = 6,
-                .color_text = theme.colors.text_secondary,
+                .color_text = .{ .color = theme.colors.text_secondary },
                 .gravity_x = 0.5,
                 .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
             });
         } else if (bridge_starting.load(.acquire)) {
             _ = dvui.label(@src(), "Starting the {s} browser engine...", .{engineDisplayName(active_engine)}, .{
                 .id_extra = 3,
-                .color_text = theme.colors.text_secondary,
+                .color_text = .{ .color = theme.colors.text_secondary },
                 .gravity_x = 0.5,
                 .padding = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
             });
@@ -2056,13 +2056,13 @@ pub fn renderContent() void {
 
         _ = dvui.label(@src(), "Enter a URL above to browse — or type a search", .{}, .{
             .id_extra = 5,
-            .color_text = theme.colors.text_secondary,
+            .color_text = .{ .color = theme.colors.text_secondary },
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
         });
         _ = dvui.label(@src(), "Videos auto-route to MPV · Comics to viewer · Web to browser", .{}, .{
             .id_extra = 7,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .gravity_x = 0.5,
         });
 
@@ -2084,7 +2084,7 @@ fn renderEngineStatus() void {
         var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 10, .gravity_x = 0.5 });
         defer prow.deinit();
         dvui.spinner(@src(), .{
-            .color_text = theme.colors.accent,
+            .color_text = .{ .color = theme.colors.accent },
             .min_size_content = .{ .w = 13, .h = 13 },
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
@@ -2095,7 +2095,7 @@ fn renderEngineStatus() void {
         install_lock.unlock();
         _ = dvui.label(@src(), "{s}", .{msg}, .{
             .id_extra = 11,
-            .color_text = theme.colors.text_secondary,
+            .color_text = .{ .color = theme.colors.text_secondary },
             .gravity_y = 0.5,
         });
         return;
@@ -2104,7 +2104,7 @@ fn renderEngineStatus() void {
     if (!engineInstalled()) {
         _ = dvui.label(@src(), "Browser engine not installed", .{}, .{
             .id_extra = 3,
-            .color_text = theme.colors.text_secondary,
+            .color_text = .{ .color = theme.colors.text_secondary },
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
         });
@@ -2115,7 +2115,7 @@ fn renderEngineStatus() void {
             install_lock.unlock();
             _ = dvui.label(@src(), "{s}", .{msg}, .{
                 .id_extra = 12,
-                .color_text = theme.colors.danger,
+                .color_text = .{ .color = theme.colors.danger },
                 .gravity_x = 0.5,
                 .padding = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
             });
@@ -2124,9 +2124,9 @@ fn renderEngineStatus() void {
             .id_extra = 13,
             .gravity_x = 0.5,
             .margin = .{ .x = 0, .y = 8, .w = 0, .h = 8 },
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.colors.accent },
+            .color_text = .{ .color = theme.colors.text_on_accent },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 14, .y = 6, .w = 14, .h = 6 },
         })) {
             installEngine();
@@ -2136,7 +2136,7 @@ fn renderEngineStatus() void {
             .cloakbrowser => "Headless Chromium (CloakBrowser) rendered inside this pane — anti-bot, full JS",
         }}, .{
             .id_extra = 14,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
         });
@@ -2145,13 +2145,13 @@ fn renderEngineStatus() void {
 
     _ = dvui.label(@src(), "Browser engine not started", .{}, .{
         .id_extra = 3,
-        .color_text = theme.colors.text_secondary,
+        .color_text = .{ .color = theme.colors.text_secondary },
         .gravity_x = 0.5,
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
     });
     _ = dvui.label(@src(), "Enter a URL above to launch {s}", .{engineDisplayName(active_engine)}, .{
         .id_extra = 6,
-        .color_text = theme.colors.text_tertiary,
+        .color_text = .{ .color = theme.colors.text_tertiary },
         .gravity_x = 0.5,
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
     });
@@ -2164,7 +2164,7 @@ fn renderBookmarksSection() void {
 
     _ = dvui.label(@src(), "Bookmarks", .{}, .{
         .id_extra = 30,
-        .color_text = theme.colors.text_secondary,
+        .color_text = .{ .color = theme.colors.text_secondary },
         .gravity_x = 0.5,
         .padding = .{ .x = 0, .y = 16, .w = 0, .h = 4 },
     });
@@ -2183,11 +2183,11 @@ fn renderBookmarksSection() void {
         if (dvui.button(@src(), safe_disp, .{}, .{
             .id_extra = bi + 31,
             .gravity_x = 0.5,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_text = theme.colors.warning,
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
+            .color_text = .{ .color = theme.colors.warning },
             .border = dvui.Rect.all(0),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
         })) {
             clicked = bi;
@@ -2207,7 +2207,7 @@ fn renderQuickLaunch(b: *@TypeOf(state.app.browser)) void {
 
     _ = dvui.label(@src(), "Recent", .{}, .{
         .id_extra = 40,
-        .color_text = theme.colors.text_secondary,
+        .color_text = .{ .color = theme.colors.text_secondary },
         .gravity_x = 0.5,
         .padding = .{ .x = 0, .y = 16, .w = 0, .h = 4 },
     });
@@ -2237,11 +2237,11 @@ fn renderQuickLaunch(b: *@TypeOf(state.app.browser)) void {
         if (dvui.button(@src(), safe_disp, .{}, .{
             .id_extra = shown + 41,
             .gravity_x = 0.5,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_text = theme.colors.text_secondary,
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
+            .color_text = .{ .color = theme.colors.text_secondary },
             .border = dvui.Rect.all(0),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
         })) {
             clicked = hi;
@@ -2279,7 +2279,7 @@ fn renderReaderOverlay() void {
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_app,
+        .color_fill = .{ .color = theme.colors.bg_app },
     });
     defer box.deinit();
 
@@ -2290,18 +2290,18 @@ fn renderReaderOverlay() void {
         });
         defer hrow.deinit();
         _ = dvui.label(@src(), "Reader", .{}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = .{ .color = theme.colors.text_primary },
             .gravity_y = 0.5,
         });
         var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
         spacer.deinit();
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
             .id_extra = 140,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
+            .color_fill_press = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = theme.colors.text_secondary },
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 3, .y = 2, .w = 3, .h = 2 },
             .gravity_y = 0.5,
         })) {
@@ -2315,7 +2315,7 @@ fn renderReaderOverlay() void {
     if (reader_len == 0) {
         _ = dvui.label(@src(), "Extracting page text…", .{}, .{
             .id_extra = 141,
-            .color_text = theme.colors.text_secondary,
+            .color_text = .{ .color = theme.colors.text_secondary },
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 20, .w = 0, .h = 0 },
         });
@@ -2332,7 +2332,7 @@ fn renderReaderOverlay() void {
         .padding = .{ .x = 16, .y = 10, .w = 16, .h = 16 },
     });
     tl.addText(safeUtf8Buf(reader_buf[0..reader_len], &S.safe_buf), .{
-        .color_text = theme.colors.text_primary,
+        .color_text = .{ .color = theme.colors.text_primary },
     });
     tl.deinit();
 }
@@ -2342,7 +2342,7 @@ fn renderLoadingBar() void {
     var track = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_elevated,
+        .color_fill = .{ .color = theme.colors.bg_elevated },
         .min_size_content = .{ .w = 0, .h = 3 },
         .max_size_content = .{ .w = std.math.floatMax(f32), .h = 3 },
     });
@@ -2354,8 +2354,8 @@ fn renderLoadingBar() void {
     const seg_w = track_w * 0.28;
     var fill = dvui.box(@src(), .{}, .{
         .background = true,
-        .color_fill = theme.colors.accent,
-        .corner_radius = dvui.Rect.all(2),
+        .color_fill = .{ .color = theme.colors.accent },
+        .corners = dvui.CornerRect.all(2),
         .margin = .{ .x = frac * (track_w - seg_w), .y = 0, .w = 0, .h = 0 },
         .min_size_content = .{ .w = seg_w, .h = 3 },
         .max_size_content = .{ .w = seg_w, .h = 3 },
@@ -2696,8 +2696,8 @@ pub fn playDirect(request: PlaybackRequest) void {
 
     const link_health = @import("link_health.zig");
     const candidates = [_][]const u8{ request.url, request.fallback_url, request.fallback_url_2 };
-    var statuses = [_]link_health.Status{.unknown} ** 3;
-    var present = [_]bool{false} ** 3;
+    var statuses = @as([3]link_health.Status, @splat(.unknown));
+    var present = @as([3]bool, @splat(false));
     // Header-dependent streams cannot use an anonymous probe's verdict.
     const anonymous = request.headers.len == 0 and request.prepared_header_fields.len == 0 and request.user_agent.len == 0;
     for (candidates, 0..) |url, i| {

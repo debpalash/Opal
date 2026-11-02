@@ -114,7 +114,7 @@ def test_interaction_states():
     if "color_fill_hover" not in cp or "confirmDangerButton" not in cp:
         return "fail", "components missing hover fills / confirm button"
     # stateFill() resolves rest/hover/pressed after clicked() reports hover.
-    if "options.color_fill = tk.bg_hover()" not in cp and "options.color_fill = stateFill(" not in cp:
+    if "options.color_fill = tk.bg_hover()" not in cp and 'options.color_fill = @import("color_compat.zig").wrap(stateFill(' not in cp:
         return "fail", "post-clicked hover repaint missing in components"
     if "navRowInteract" not in sh:
         return "fail", "shell nav rows missing hover/focus/keyboard interaction"
@@ -193,8 +193,8 @@ def test_responsive_shell_tiers():
             and "fitWindowSize(" in _src("src/ui/command_palette.zig")
             and "fitWindowSize(" in _src("src/ui/metadata_dialog.zig"),
         "sidebar follows theme and bounded layout": "sidebar_layout.layout(live_width" in sh
-            and "fn renderSidebar(" in sh and "color_fill = theme.colors.bg_app" in sh
-            and "color_fill = if (active) theme.colors.bg_elevated" in sh,
+            and "fn renderSidebar(" in sh and 'color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app)' in sh
+            and 'color_fill = @import("color_compat.zig").wrap(if (active) theme.colors.bg_elevated' in sh,
 
     }
     missing = [name for name, ok in checks.items() if not ok]

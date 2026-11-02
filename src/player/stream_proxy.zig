@@ -55,7 +55,7 @@ const Stream = struct {
     listener: ?ListenerT = null,
 };
 
-var streams: [MAX_STREAMS]Stream = [_]Stream{.{}} ** MAX_STREAMS;
+var streams: [MAX_STREAMS]Stream = @as([MAX_STREAMS]Stream, @splat(.{}));
 var streams_mutex = sync.Mutex{};
 var next_stream_id: u32 = 1;
 var port_cursor: u16 = PORT_RANGE_START;
@@ -209,7 +209,7 @@ pub fn startProxy(torrent_id: i32, file_idx: i32) ?Handle {
     streams_mutex.unlock();
 
     var msg_buf: [96]u8 = undefined;
-    const msg = std.fmt.bufPrintZ(&msg_buf, "Stream proxy #{d} on :{d}", .{ handle.id, handle.port }) catch "Stream proxy started";
+    const msg = @import("opal-fmt").bufPrintZ(&msg_buf, "Stream proxy #{d} on :{d}", .{ handle.id, handle.port }) catch "Stream proxy started";
     logs.pushLog("info", "proxy", msg, false);
     return handle;
 }

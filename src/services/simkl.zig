@@ -137,7 +137,7 @@ pub fn startPinAuth() bool {
 }
 
 fn apiUrl(path: []const u8, client_id: []const u8, out: []u8) ?[:0]const u8 {
-    return std.fmt.bufPrintZ(out, "{s}{s}?client_id={s}&app-name=opal&app-version={s}", .{ SIMKL_API, path, client_id, APP_VERSION }) catch null;
+    return @import("opal-fmt").bufPrintZ(out, "{s}{s}?client_id={s}&app-name=opal&app-version={s}", .{ SIMKL_API, path, client_id, APP_VERSION }) catch null;
 }
 
 fn pinAuthWorker(generation: u32) void {

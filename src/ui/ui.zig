@@ -170,8 +170,8 @@ pub fn renderWorkspaceModals() void {
             .open_flag = &state.app.ws_save_open,
         }, .{
             .min_size_content = dialog_size,
-            .color_fill = theme.colors.bg_surface,
-            .corner_radius = dvui.Rect.all(theme.radius.lg),
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .corners = dvui.CornerRect.all(theme.radius.lg),
         });
         defer win.deinit();
         win.dragAreaSet(dvui.windowHeader("Save Workspace", "", &state.app.ws_save_open));
@@ -190,7 +190,7 @@ pub fn renderWorkspaceModals() void {
             defer body.deinit();
 
             _ = dvui.label(@src(), "Workspace name:", .{}, .{
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                 .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xs },
             });
 
@@ -199,11 +199,11 @@ pub fn renderWorkspaceModals() void {
                 .placeholder = "e.g. Evening movies",
             }, .{
                 .expand = .horizontal,
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.text_primary,
-                .color_border = theme.colors.border_subtle,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
+                .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
                 .border = dvui.Rect.all(1),
-                .corner_radius = theme.dims.rad_md,
+                .corners = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.sm, .y = 6, .w = theme.spacing.sm, .h = 6 },
             });
             const enter_pressed = te.enter_pressed;
@@ -218,9 +218,9 @@ pub fn renderWorkspaceModals() void {
             defer btn_row.deinit();
 
             if (dvui.button(@src(), "Save", .{}, .{
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.text_on_accent,
-                .corner_radius = theme.dims.rad_md,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
+                .corners = theme.dims.rad_md,
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.lg, .y = 6, .w = theme.spacing.lg, .h = 6 },
             }) or enter_pressed) {
@@ -237,13 +237,13 @@ pub fn renderWorkspaceModals() void {
             }
 
             if (dvui.button(@src(), "Cancel", .{}, .{
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .color_text = theme.colors.text_secondary,
-                .corner_radius = theme.dims.rad_md,
+                .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+                .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+                .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
+                .corners = theme.dims.rad_md,
                 .border = dvui.Rect.all(1),
-                .color_border = theme.colors.border_subtle,
+                .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
                 .padding = .{ .x = theme.spacing.lg, .y = 6, .w = theme.spacing.lg, .h = 6 },
             })) {
                 state.app.ws_save_open = false;
@@ -261,8 +261,8 @@ pub fn renderWorkspaceModals() void {
             .open_flag = &state.app.ws_load_open,
         }, .{
             .min_size_content = dialog_size,
-            .color_fill = theme.colors.bg_surface,
-            .corner_radius = dvui.Rect.all(theme.radius.lg),
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .corners = dvui.CornerRect.all(theme.radius.lg),
         });
         defer win.deinit();
         win.dragAreaSet(dvui.windowHeader("Load Workspace", "", &state.app.ws_load_open));
@@ -280,12 +280,12 @@ pub fn renderWorkspaceModals() void {
 
             if (state.app.ws_count == 0) {
                 _ = dvui.label(@src(), "No saved workspaces yet.", .{}, .{
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                     .margin = .{ .x = 0, .y = 12, .w = 0, .h = 4 },
                     .gravity_x = 0.5,
                 });
                 _ = dvui.label(@src(), "Save one first with the save button.", .{}, .{
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                     .gravity_x = 0.5,
                     .margin = .{ .x = 0, .y = 0, .w = 0, .h = 12 },
                 });
@@ -311,11 +311,11 @@ pub fn renderWorkspaceModals() void {
                     if (dvui.button(@src(), row_label, .{}, .{
                         .id_extra = wi,
                         .expand = .horizontal,
-                        .color_fill = theme.colors.bg_surface,
-                        .color_text = if (armed) theme.colors.danger else theme.colors.text_primary,
-                        .color_border = theme.colors.border_subtle,
+                        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+                        .color_text = @import("color_compat.zig").wrap(if (armed) theme.colors.danger else theme.colors.text_primary),
+                        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
                         .border = dvui.Rect.all(1),
-                        .corner_radius = theme.dims.rad_md,
+                        .corners = theme.dims.rad_md,
                         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
                         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
                     })) {

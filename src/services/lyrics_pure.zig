@@ -471,7 +471,7 @@ test "cleared lyric selection rejects stale worker publication" {
 }
 
 test "Indian lyrics retain long UTF-8 lines without splitting a character" {
-    const text = "संगीत की पंक्ति " ** 20;
+    const text = @import("opal-repeat").bytes("संगीत की पंक्ति ", 20);
     var rows: [1]LyricLine = undefined;
     try std.testing.expectEqual(@as(usize, 1), parseLrc("[00:01]" ++ text, &rows));
     try std.testing.expect(std.unicode.utf8ValidateSlice(rows[0].slice()));
@@ -479,7 +479,7 @@ test "Indian lyrics retain long UTF-8 lines without splitting a character" {
 }
 
 test "oversized multibyte lyrics truncate at a UTF-8 boundary" {
-    const text = "अ" ** 400;
+    const text = @import("opal-repeat").bytes("अ", 400);
     var rows: [1]LyricLine = undefined;
     try std.testing.expectEqual(@as(usize, 1), parseLrc("[00:01]" ++ text, &rows));
     try std.testing.expect(std.unicode.utf8ValidateSlice(rows[0].slice()));

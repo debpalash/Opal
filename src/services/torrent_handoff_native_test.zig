@@ -19,7 +19,7 @@ test "Native torrent handoff worker consumes real GPU poster" {
     @import("../core/workers.zig").init();
     defer @import("../core/workers.zig").markQuitting();
     const io = @import("../core/io_global.zig");
-    var backend = try dvui.backend.initWindow(.{ .io = io.io(), .allocator = alloc, .size = .{ .w = 320, .h = 240 }, .vsync = false, .title = "Offline torrent handoff regression", .hidden = true });
+    var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-fixture", .persist_window_geometry = false, .size = .{ .w = 320, .h = 240 }, .vsync = false, .title = "Offline torrent handoff regression", .hidden = true });
     defer backend.deinit();
     var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
     defer window.deinit();
@@ -28,7 +28,7 @@ test "Native torrent handoff worker consumes real GPU poster" {
     defer alloc.destroy(fixture);
     try window.begin(1);
     const pixel = [_]dvui.Color.PMA{.{ .r = 255, .g = 64, .b = 32, .a = 255 }};
-    fixture.loading_poster_tex = try dvui.textureCreate(&pixel, 1, 1, .linear, .rgba_32);
+    fixture.loading_poster_tex = try dvui.textureCreate(&pixel, .{ .width = 1, .height = 1, .format = .rgba_32, .interpolation = .linear, .wrap_u = .clamp, .wrap_v = .clamp });
     state.drainPendingPlay();
     try state.app.players.append(alloc, fixture);
     defer {

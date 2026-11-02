@@ -169,9 +169,9 @@ fn cleanup() void {
 
 fn draw() !void {
     draw_count += 1;
-    var panel = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_app });
+    var panel = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = true, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app) });
     defer panel.deinit();
-    _ = dvui.label(@src(), "{s}", .{if (mode == .torrent) "Synthetic cached transfer UI fixture — no torrent session" else "Offline media layout fixture"}, .{ .color_text = theme.colors.text_secondary, .padding = dvui.Rect.all(16) });
+    _ = dvui.label(@src(), "{s}", .{if (mode == .torrent) "Synthetic cached transfer UI fixture — no torrent session" else "Offline media layout fixture"}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .padding = dvui.Rect.all(16) });
     var space = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     if (mode != .dock) {
         if (mode == .more or mode == .torrent) footer.open_picker = .more;

@@ -5,10 +5,10 @@ const std = @import("std");
 const dvui = @import("dvui");
 
 pub const Brand = enum { youtube, youtubemusic, plex, jellyfin, emby, audiobookshelf, openverse, trakt, github, firefoxbrowser, googlechrome, brave, safari };
-const count = @typeInfo(Brand).@"enum".fields.len;
+const count = @typeInfo(Brand).@"enum".field_names.len;
 const artwork = blk: {
     var entries: [count][]const u8 = undefined;
-    for (@typeInfo(Brand).@"enum".fields, 0..) |field, i| entries[i] = @embedFile("brands/" ++ field.name ++ ".tvg");
+    for (@import("opal-reflect").fields(Brand), 0..) |field, i| entries[i] = @embedFile("brands/" ++ field.name ++ ".tvg");
     break :blk entries;
 };
 

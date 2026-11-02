@@ -45,7 +45,7 @@ const mime_groups = [_]MimeGroup{
 // ── Background-thread state ────────────────────────────────
 const AssocState = struct {
     mutex: @import("../core/sync.zig").Mutex = .{},
-    status: [mime_groups.len]bool = [_]bool{false} ** mime_groups.len,
+    status: [mime_groups.len]bool = @as([mime_groups.len]bool, @splat(false)),
     checking: bool = false,
     last_check_ms: i64 = 0,
     action_pending: bool = false,
@@ -309,7 +309,7 @@ fn unregisterGroupBlocking(mimes: []const []const u8) void {
     const allocator = @import("../core/alloc.zig").allocator;
     const home = @import("../core/paths.zig").homeDir();
     var pb: [512]u8 = undefined;
-    const mp = std.fmt.bufPrintZ(&pb, "{s}/.config/mimeapps.list", .{home}) catch return;
+    const mp = @import("opal-fmt").bufPrintZ(&pb, "{s}/.config/mimeapps.list", .{home}) catch return;
     const data = @import("../core/io_global.zig").cwdReadFileAlloc(mp, allocator, 256 * 1024) catch return;
     defer allocator.free(data);
     var out = std.ArrayListUnmanaged(u8).empty;
@@ -336,10 +336,10 @@ fn ensureDesktopFileBlocking() void {
     var exb: [512]u8 = undefined;
     const exe = @import("../core/io_global.zig").selfExePath(&exb) catch return;
     var db: [512]u8 = undefined;
-    const dp = std.fmt.bufPrintZ(&db, "{s}/.local/share/applications", .{home}) catch return;
+    const dp = @import("opal-fmt").bufPrintZ(&db, "{s}/.local/share/applications", .{home}) catch return;
     @import("../core/io_global.zig").cwdMakePath(dp) catch {};
     var fb: [512]u8 = undefined;
-    const fp = std.fmt.bufPrintZ(&fb, "{s}/opal.desktop", .{dp}) catch return;
+    const fp = @import("opal-fmt").bufPrintZ(&fb, "{s}/opal.desktop", .{dp}) catch return;
     const ml = "video/mp4;video/x-matroska;video/x-msvideo;video/webm;video/quicktime;video/mpeg;video/mp2t;video/ogg;video/x-flv;video/x-ms-wmv;video/x-ms-asf;video/3gpp;video/3gpp2;" ++
         "audio/mpeg;audio/flac;audio/ogg;audio/wav;audio/x-wav;audio/aac;audio/mp4;audio/x-m4a;audio/opus;audio/webm;audio/x-ms-wma;audio/x-aiff;" ++
         "application/x-bittorrent;x-scheme-handler/magnet;" ++
@@ -384,7 +384,7 @@ pub fn render() void {
         else
             "Make Opal the default app (via xdg-mime).";
         _ = dvui.label(@src(), desc, .{}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .margin = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = theme.spacing.md },
         });
     }
@@ -400,9 +400,9 @@ pub fn render() void {
         defer brow.deinit();
 
         if (dvui.button(@src(), if (busy) "Working…" else "Register All", .{}, .{
-            .color_fill = if (busy) theme.colors.bg_elevated else theme.colors.accent,
-            .color_text = if (busy) theme.colors.text_secondary else theme.colors.text_on_accent,
-            .corner_radius = theme.dims.rad_md,
+            .color_fill = @import("color_compat.zig").wrap(if (busy) theme.colors.bg_elevated else theme.colors.accent),
+            .color_text = @import("color_compat.zig").wrap(if (busy) theme.colors.text_secondary else theme.colors.text_on_accent),
+            .corners = theme.dims.rad_md,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         })) {
@@ -420,7 +420,7 @@ pub fn render() void {
 
         if (busy) {
             _ = dvui.label(@src(), "  checking…", .{}, .{
-                .color_text = theme.colors.text_tertiary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                 .gravity_y = 0.5,
             });
         }
@@ -450,7 +450,7 @@ pub fn render() void {
 
             _ = dvui.label(@src(), "{s}", .{grp.label}, .{
                 .id_extra = grp.id_base + 2,
-                .color_text = theme.colors.text_primary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .gravity_y = 0.5,
             });
 
@@ -468,7 +468,7 @@ pub fn render() void {
                 const sl: []const u8 = if (is_reg) "Default" else "Not set";
                 _ = dvui.label(@src(), "{s}", .{sl}, .{
                     .id_extra = grp.id_base + 3,
-                    .color_text = if (is_reg) theme.colors.success else theme.colors.text_tertiary,
+                    .color_text = @import("color_compat.zig").wrap(if (is_reg) theme.colors.success else theme.colors.text_tertiary),
                     .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
                     .gravity_y = 0.5,
                 });
@@ -477,9 +477,9 @@ pub fn render() void {
             if (!is_reg) {
                 if (dvui.button(@src(), "Register", .{}, .{
                     .id_extra = grp.id_base + 4,
-                    .color_fill = if (pending) theme.colors.bg_elevated else theme.colors.accent,
-                    .color_text = if (pending) theme.colors.text_secondary else theme.colors.text_on_accent,
-                    .corner_radius = theme.dims.rad_md,
+                    .color_fill = @import("color_compat.zig").wrap(if (pending) theme.colors.bg_elevated else theme.colors.accent),
+                    .color_text = @import("color_compat.zig").wrap(if (pending) theme.colors.text_secondary else theme.colors.text_on_accent),
+                    .corners = theme.dims.rad_md,
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                     .min_size_content = .{ .w = 76, .h = 0 },
                     .gravity_y = 0.5,
@@ -489,9 +489,9 @@ pub fn render() void {
             } else {
                 if (dvui.button(@src(), "Remove", .{}, .{
                     .id_extra = grp.id_base + 4,
-                    .color_fill = TRANSPARENT,
-                    .color_text = if (pending) theme.colors.text_tertiary else theme.colors.danger,
-                    .corner_radius = theme.dims.rad_md,
+                    .color_fill = @import("color_compat.zig").wrap(TRANSPARENT),
+                    .color_text = @import("color_compat.zig").wrap(if (pending) theme.colors.text_tertiary else theme.colors.danger),
+                    .corners = theme.dims.rad_md,
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                     .min_size_content = .{ .w = 76, .h = 0 },
                     .gravity_y = 0.5,
@@ -503,7 +503,7 @@ pub fn render() void {
 
         _ = dvui.label(@src(), "{s}", .{grp.desc}, .{
             .id_extra = grp.id_base + 5,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
         });
     }

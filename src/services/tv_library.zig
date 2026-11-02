@@ -944,7 +944,7 @@ pub fn renderContent() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_app,
+        .color_fill = .{ .color = theme.colors.bg_app },
         .gravity_y = 0,
     });
     defer scroll.deinit();
@@ -992,7 +992,7 @@ fn renderControlBar() void {
     }
     page_controls.divider(@src(), 51);
     if (isSyncing()) {
-        dvui.spinner(@src(), .{ .min_size_content = theme.iconSize(.sm), .color_text = theme.colors.accent, .gravity_y = 0.5 });
+        dvui.spinner(@src(), .{ .min_size_content = theme.iconSize(.sm), .color_text = .{ .color = theme.colors.accent }, .gravity_y = 0.5 });
     } else if (page_controls.item(@src(), .{ .id = 52, .label = "Refresh library", .icon = icons.tvg.lucide.@"refresh-cw" })) resync();
 }
 
@@ -1000,8 +1000,8 @@ fn renderEmpty() void {
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .color_fill = .{ .color = theme.colors.bg_surface },
+        .corners = dvui.CornerRect.all(theme.radius.md),
         .padding = dvui.Rect.all(theme.spacing.lg),
         .margin = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.lg },
     });
@@ -1009,21 +1009,21 @@ fn renderEmpty() void {
 
     _ = dvui.label(@src(), "Nothing here yet", .{}, .{
         .id_extra = 62000,
-        .color_text = theme.colors.text_primary,
+        .color_text = .{ .color = theme.colors.text_primary },
         .font = dvui.themeGet().font_heading,
     });
     _ = dvui.label(@src(), "Save a show or movie and your next episode and progress will appear here.", .{}, .{
         .id_extra = 62001,
-        .color_text = theme.colors.text_tertiary,
+        .color_text = .{ .color = theme.colors.text_tertiary },
         .padding = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.md },
     });
 
     if (dvui.button(@src(), "Browse movies & TV", .{}, .{
         .id_extra = 62002,
         .background = true,
-        .color_fill = theme.colors.accent,
-        .color_text = theme.colors.text_on_accent,
-        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .color_fill = .{ .color = theme.colors.accent },
+        .color_text = .{ .color = theme.colors.text_on_accent },
+        .corners = dvui.CornerRect.all(theme.radius.sm),
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
     })) {
         state.app.browse_source = .TMDB;
@@ -1086,13 +1086,13 @@ fn renderSectionHeading(title: []const u8, count: usize, suffix: []const u8) voi
 
     _ = dvui.label(@src(), "{s}", .{title}, .{
         .id_extra = heading_id,
-        .color_text = theme.colors.text_primary,
+        .color_text = .{ .color = theme.colors.text_primary },
         .font = dvui.themeGet().font_body.withSize(theme.font_size.title),
         .gravity_y = 0.5,
     });
     _ = dvui.label(@src(), "{d} {s}", .{ count, suffix }, .{
         .id_extra = heading_id,
-        .color_text = theme.colors.text_tertiary,
+        .color_text = .{ .color = theme.colors.text_tertiary },
         .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
         .gravity_y = 0.5,
         .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
@@ -1135,7 +1135,7 @@ pub fn renderHomeEpisodes() bool {
 
     _ = dvui.label(@src(), "Continue watching", .{}, .{
         .font = dvui.themeGet().font_heading,
-        .color_text = theme.colors.text_primary,
+        .color_text = .{ .color = theme.colors.text_primary },
         .padding = dvui.Rect.all(theme.spacing.xs),
     });
     var rail = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
@@ -1227,23 +1227,23 @@ fn renderFilteredEmpty() void {
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .color_fill = .{ .color = theme.colors.bg_surface },
+        .corners = dvui.CornerRect.all(theme.radius.md),
         .padding = dvui.Rect.all(theme.spacing.lg),
         .margin = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.lg },
     });
     defer box.deinit();
 
     _ = dvui.label(@src(), "No titles match these filters", .{}, .{
-        .color_text = theme.colors.text_primary,
+        .color_text = .{ .color = theme.colors.text_primary },
         .font = dvui.themeGet().font_heading,
     });
     if (dvui.button(@src(), "Clear filters", .{}, .{
-        .color_fill = theme.colors.bg_elevated,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_text = theme.colors.text_primary,
+        .color_fill = .{ .color = theme.colors.bg_elevated },
+        .color_fill_hover = .{ .color = theme.colors.bg_hover },
+        .color_text = .{ .color = theme.colors.text_primary },
         .border = dvui.Rect.all(0),
-        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .corners = dvui.CornerRect.all(theme.radius.sm),
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
         .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
     })) {

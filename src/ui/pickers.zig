@@ -40,10 +40,10 @@ const dropup = @import("dropup_pure.zig");
 /// Per-picker rect, kept across frames because dvui's FloatingWindowWidget wants a
 /// mutable pointer. Recomputed from the chip anchor every frame, so a panel tracks
 /// its chip if the control bar moves (e.g. entering fullscreen).
-var dropup_rects: [11]dvui.Rect = [_]dvui.Rect{.{}} ** 11;
+var dropup_rects: [11]dvui.Rect = @as([11]dvui.Rect, @splat(.{}));
 /// Physical bounds from the last rendered frame. Mouse events are physical,
 /// while FloatingWindowWidget placement uses logical coordinates.
-var dropup_screen_rects: [11]dvui.Rect.Physical = [_]dvui.Rect.Physical{.{}} ** 11;
+var dropup_screen_rects: [11]dvui.Rect.Physical = @as([11]dvui.Rect.Physical, @splat(.{}));
 
 pub fn renderQualityPickerPopover(active_p: *player.MediaPlayer) void {
     if (footer.open_picker != .quality) return;
@@ -110,10 +110,10 @@ pub fn beginDropUp(
         .min_size_content = .{ .w = w, .h = h },
         .max_size_content = .{ .w = w, .h = h },
         .background = true,
-        .color_fill = theme.colors.bg_elevated,
-        .color_border = theme.colors.border_subtle,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
         .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .corners = dvui.CornerRect.all(theme.radius.md),
         .padding = dvui.Rect.all(theme.spacing.xs),
     });
     dropup_screen_rects[i] = fw.data().borderRectScale().r;
@@ -131,14 +131,14 @@ pub fn dropUpTitle(src: std.builtin.SourceLocation, icon: []const u8, text: []co
     defer title.deinit();
 
     dvui.icon(@src(), "drop-up-title", icon, .{}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .min_size_content = .{ .w = 16, .h = 16 },
         .max_size_content = .{ .w = 16, .h = 16 },
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
     });
     _ = dvui.label(@src(), "{s}", .{text}, .{
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .font = dvui.themeGet().font_body.withSize(theme.font_size.body),
         .gravity_y = 0.5,
     });
@@ -160,8 +160,8 @@ pub fn pickerOption(
         .id_extra = id_extra,
         .expand = .horizontal,
         .background = true,
-        .color_fill = if (selected) theme.colors.bg_surface else transparent,
-        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .color_fill = @import("color_compat.zig").wrap(if (selected) theme.colors.bg_surface else transparent),
+        .corners = dvui.CornerRect.all(theme.radius.sm),
         // 34px content + 1px top/bottom margin = a 36px option rhythm.
         .min_size_content = .{ .w = 0, .h = 34 },
         .max_size_content = .{ .w = std.math.floatMax(f32), .h = 34 },
@@ -171,7 +171,7 @@ pub fn pickerOption(
 
     var activated = dvui.clicked(row.data(), .{ .hovered = &hovered });
     const rid = row.data().id;
-    dvui.tabIndexSet(rid, null);
+    dvui.tabIndexSet(rid, null, null);
     const focused = dvui.focusedWidgetId() == rid;
     if (focused) {
         for (dvui.events()) |*e| {
@@ -181,13 +181,13 @@ pub fn pickerOption(
             }
         }
     }
-    row.data().options.color_fill = if (hovered) theme.colors.bg_hover else if (selected) theme.colors.bg_surface else transparent;
+    row.data().options.color_fill = @import("color_compat.zig").wrap(if (hovered) theme.colors.bg_hover else if (selected) theme.colors.bg_surface else transparent);
     row.drawBackground();
     if (focused) row.data().focusBorder();
 
     dvui.icon(@src(), "picker-leading", icon, .{}, .{
         .id_extra = id_extra,
-        .color_text = if (selected) theme.colors.accent else theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(if (selected) theme.colors.accent else theme.colors.text_secondary),
         .min_size_content = .{ .w = 16, .h = 16 },
         .max_size_content = .{ .w = 16, .h = 16 },
         .gravity_y = 0.5,
@@ -195,7 +195,7 @@ pub fn pickerOption(
     });
     _ = dvui.label(@src(), "{s}", .{label}, .{
         .id_extra = id_extra,
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .font = theme.mediaTitleFont(label, dvui.themeGet().font_body.withSize(theme.font_size.small)),
         .gravity_y = 0.5,
     });
@@ -206,7 +206,7 @@ pub fn pickerOption(
     if (selected) {
         dvui.icon(@src(), "picker-selected", icons.tvg.lucide.check, .{}, .{
             .id_extra = id_extra,
-            .color_text = theme.colors.accent,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
             .min_size_content = .{ .w = 14, .h = 14 },
             .max_size_content = .{ .w = 14, .h = 14 },
             .gravity_y = 0.5,
@@ -288,10 +288,10 @@ pub fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
     var i: usize = 0;
     while (i < @as(usize, @intCast(@max(@as(i64, 0), ch_count)))) : (i += 1) {
         var qtitle_buf: [64]u8 = undefined;
-        const title_q = std.fmt.bufPrintZ(&qtitle_buf, "chapter-list/{d}/title", .{i}) catch continue;
+        const title_q = @import("opal-fmt").bufPrintZ(&qtitle_buf, "chapter-list/{d}/title", .{i}) catch continue;
         const title_c = c.mpv.mpv_get_property_string(active_p.mpv_ctx, title_q.ptr);
         var qtime_buf: [64]u8 = undefined;
-        const time_q = std.fmt.bufPrintZ(&qtime_buf, "chapter-list/{d}/time", .{i}) catch continue;
+        const time_q = @import("opal-fmt").bufPrintZ(&qtime_buf, "chapter-list/{d}/time", .{i}) catch continue;
         var ch_time: f64 = 0;
         _ = c.mpv.mpv_get_property(active_p.mpv_ctx, time_q.ptr, c.mpv.MPV_FORMAT_DOUBLE, &ch_time);
         const safe = @max(0.0, if (std.math.isNan(ch_time)) 0.0 else ch_time);
@@ -300,19 +300,19 @@ pub fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
         var label_buf: [128]u8 = undefined;
         const label = if (title_c != null) blk: {
             const title_span = std.mem.span(title_c);
-            const s = std.fmt.bufPrintZ(&label_buf, "{d:0>2}:{d:0>2}:{d:0>2}  {s}", .{
+            const s = @import("opal-fmt").bufPrintZ(&label_buf, "{d:0>2}:{d:0>2}:{d:0>2}  {s}", .{
                 t_sec / 3600, (t_sec % 3600) / 60, t_sec % 60, title_span,
             }) catch "";
             c.mpv.mpv_free(@ptrCast(title_c));
             break :blk s;
-        } else (std.fmt.bufPrintZ(&label_buf, "{d:0>2}:{d:0>2}:{d:0>2}  Chapter {d}", .{
+        } else (@import("opal-fmt").bufPrintZ(&label_buf, "{d:0>2}:{d:0>2}:{d:0>2}  Chapter {d}", .{
             t_sec / 3600, (t_sec % 3600) / 60, t_sec % 60, i + 1,
         }) catch "");
 
         const is_current = i == @as(usize, @intCast(@max(0, current_ch)));
         if (pickerOption(@src(), i, icons.tvg.lucide.bookmark, label, is_current)) {
             var cmd_buf: [32]u8 = undefined;
-            if (std.fmt.bufPrintZ(&cmd_buf, "set chapter {d}", .{i})) |cmd| {
+            if (@import("opal-fmt").bufPrintZ(&cmd_buf, "set chapter {d}", .{i})) |cmd| {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cmd.ptr);
             } else |_| {}
             footer.open_picker = .none;
@@ -345,7 +345,7 @@ pub fn renderAspectPickerPopover(active_p: *player.MediaPlayer) void {
             std.mem.eql(u8, state.app.video_aspect_buf[0..state.app.video_aspect_len], m);
         if (pickerOption(@src(), k, icons.tvg.lucide.ratio, labels[k], is_cur)) {
             var cmd: [64]u8 = undefined;
-            if (std.fmt.bufPrintZ(&cmd, "set video-aspect-override \"{s}\"", .{m})) |cstr| {
+            if (@import("opal-fmt").bufPrintZ(&cmd, "set video-aspect-override \"{s}\"", .{m})) |cstr| {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cstr.ptr);
             } else |_| {}
             @memset(state.app.video_aspect_buf[0..], 0);
@@ -402,7 +402,7 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
     var i: i64 = 0;
     while (i < count) : (i += 1) {
         var tq_buf: [64]u8 = undefined;
-        const tq = std.fmt.bufPrintZ(&tq_buf, "track-list/{d}/type", .{i}) catch continue;
+        const tq = @import("opal-fmt").bufPrintZ(&tq_buf, "track-list/{d}/type", .{i}) catch continue;
         const tc = c.mpv.mpv_get_property_string(active_p.mpv_ctx, tq.ptr);
         if (tc == null) continue;
         const matches = std.mem.eql(u8, std.mem.span(tc), track_type);
@@ -410,12 +410,12 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
         if (!matches) continue;
 
         var id_buf: [64]u8 = undefined;
-        const idq = std.fmt.bufPrintZ(&id_buf, "track-list/{d}/id", .{i}) catch continue;
+        const idq = @import("opal-fmt").bufPrintZ(&id_buf, "track-list/{d}/id", .{i}) catch continue;
         var t_id: i64 = 0;
         _ = c.mpv.mpv_get_property(active_p.mpv_ctx, idq.ptr, c.mpv.MPV_FORMAT_INT64, &t_id);
 
         var sel_buf: [64]u8 = undefined;
-        const sq = std.fmt.bufPrintZ(&sel_buf, "track-list/{d}/selected", .{i}) catch continue;
+        const sq = @import("opal-fmt").bufPrintZ(&sel_buf, "track-list/{d}/selected", .{i}) catch continue;
         const sc = c.mpv.mpv_get_property_string(active_p.mpv_ctx, sq.ptr);
         const is_selected = sc != null and std.mem.eql(u8, std.mem.span(sc), "yes");
         if (sc != null) c.mpv.mpv_free(@ptrCast(sc));
@@ -425,7 +425,7 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
         var track_lang_buf: [16]u8 = std.mem.zeroes([16]u8);
         var track_lang_len: usize = 0;
         var qlang_buf: [64]u8 = undefined;
-        const lq = std.fmt.bufPrintZ(&qlang_buf, "track-list/{d}/lang", .{i}) catch continue;
+        const lq = @import("opal-fmt").bufPrintZ(&qlang_buf, "track-list/{d}/lang", .{i}) catch continue;
         const lc = c.mpv.mpv_get_property_string(active_p.mpv_ctx, lq.ptr);
         if (lc != null) {
             const lang = std.mem.span(lc);
@@ -435,7 +435,7 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
             c.mpv.mpv_free(@ptrCast(lc));
         } else {
             var qtitle_buf: [64]u8 = undefined;
-            const tlq = std.fmt.bufPrintZ(&qtitle_buf, "track-list/{d}/title", .{i}) catch continue;
+            const tlq = @import("opal-fmt").bufPrintZ(&qtitle_buf, "track-list/{d}/title", .{i}) catch continue;
             const tlc = c.mpv.mpv_get_property_string(active_p.mpv_ctx, tlq.ptr);
             if (tlc != null) {
                 row_name = std.fmt.bufPrint(&name_buf, "{s}", .{std.mem.span(tlc)}) catch "Err";
@@ -455,7 +455,7 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
         )) {
             var cmd: [64]u8 = undefined;
             const prop = if (kind == .audio) "aid" else "sid";
-            if (std.fmt.bufPrintZ(&cmd, "set {s} {d}", .{ prop, t_id })) |cstr| {
+            if (@import("opal-fmt").bufPrintZ(&cmd, "set {s} {d}", .{ prop, t_id })) |cstr| {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cstr.ptr);
             } else |_| {}
             // Picking a track cancels a deliberate "no audio" intent.
@@ -483,7 +483,7 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
 
     if (rows_rendered == 0) {
         _ = dvui.label(@src(), "{s}", .{if (kind == .audio) "No alternate audio tracks in this file." else "No subtitle tracks yet."}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .gravity_x = 0.5,
             .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = theme.spacing.xs },
         });
@@ -506,11 +506,11 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
         if (dvui.button(@src(), "Find subtitles online…", .{}, .{
             .id_extra = 990,
             .expand = .horizontal,
-            .color_fill = theme.transparent,
-            .color_text = theme.colors.accent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
+            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .corners = dvui.CornerRect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
         })) {
             footer.closePickers();
@@ -589,7 +589,7 @@ pub fn renderAudioDevicePickerPopover(active_p: *player.MediaPlayer) void {
 
     if (dev_count == 0) {
         _ = dvui.label(@src(), "No output devices reported yet.", .{}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .gravity_x = 0.5,
             .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = theme.spacing.xs },
         });
@@ -614,7 +614,7 @@ pub fn renderLangPickerPopover() void {
     defer scroll.deinit();
 
     _ = dvui.label(@src(), "Searches re-run in the language you pick.", .{}, .{
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = theme.spacing.xs },
     });
 
@@ -706,7 +706,7 @@ fn renderMpvPlaylist(p: *player.MediaPlayer) void {
     dropUpTitle(@src(), icons.tvg.lucide.list, "Playlist");
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = false });
     defer scroll.deinit();
-    if (playlist_len == 0) _ = dvui.label(@src(), "Playlist unavailable or exceeds 1024 tracks", .{}, .{ .color_text = theme.colors.text_secondary, .font = dvui.themeGet().font_body.withSize(theme.font_size.small) });
+    if (playlist_len == 0) _ = dvui.label(@src(), "Playlist unavailable or exceeds 1024 tracks", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .font = dvui.themeGet().font_body.withSize(theme.font_size.small) });
     for (playlist_entries[0..playlist_len], 0..) |entry, i| {
         const widget_key = @import("footer_pure.zig").playlistWidgetKey(entry.id) orelse continue;
         const title = entry.label[0..entry.len];
@@ -721,7 +721,7 @@ fn renderMpvPlaylist(p: *player.MediaPlayer) void {
             break;
         }
     }
-    if (playback.playlist_count > 128) _ = dvui.label(@src(), "Showing first 128 tracks", .{}, .{ .color_text = theme.colors.text_secondary, .font = dvui.themeGet().font_body.withSize(theme.font_size.small) });
+    if (playback.playlist_count > 128) _ = dvui.label(@src(), "Showing first 128 tracks", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .font = dvui.themeGet().font_body.withSize(theme.font_size.small) });
     if (!open) footer.closePickers();
 }
 
@@ -757,7 +757,7 @@ pub fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
         const size = c.mpv.torrent_get_file_size(state.torrentSession(), active_p.current_torrent_id, @intCast(i));
         const size_mb = @as(f64, @floatFromInt(size)) / 1024.0 / 1024.0;
         var lbl_buf: [320]u8 = undefined;
-        const label = std.fmt.bufPrintZ(&lbl_buf, "{s}  ({d:.1} MB)", .{ std.mem.sliceTo(&name_buf, 0), size_mb }) catch "File";
+        const label = @import("opal-fmt").bufPrintZ(&lbl_buf, "{s}  ({d:.1} MB)", .{ std.mem.sliceTo(&name_buf, 0), size_mb }) catch "File";
         const is_sel = active_p.selected_file_idx == @as(i32, @intCast(i));
         if (pickerOption(@src(), i, icons.tvg.lucide.list, label, is_sel)) {
             if (active_p.selected_file_idx != @as(i32, @intCast(i))) {

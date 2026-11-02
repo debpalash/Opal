@@ -10,7 +10,7 @@ pub const Kind = enum { magnet, torrent_file };
 
 pub const Entry = struct {
     kind: Kind = .magnet,
-    source: [MAX_SOURCE + 1]u8 = [_]u8{0} ** (MAX_SOURCE + 1),
+    source: [MAX_SOURCE + 1]u8 = @as([(MAX_SOURCE + 1)]u8, @splat(0)),
     len: usize = 0,
 
     pub fn slice(self: *const Entry) []const u8 {
@@ -19,7 +19,7 @@ pub const Entry = struct {
 };
 
 pub const Queue = struct {
-    slots: [CAPACITY]Entry = [_]Entry{.{}} ** CAPACITY,
+    slots: [CAPACITY]Entry = @as([CAPACITY]Entry, @splat(.{})),
     head: usize = 0,
     count: usize = 0,
 
@@ -83,7 +83,7 @@ test "queue preserves FIFO order and kind across wraparound" {
 test "queue rejects empty and overlong sources without mutating state" {
     var q: Queue = .{};
     try std.testing.expect(!q.push(.magnet, ""));
-    const too_long = [_]u8{'x'} ** (MAX_SOURCE + 1);
+    const too_long = @as([(MAX_SOURCE + 1)]u8, @splat('x'));
     try std.testing.expect(!q.push(.magnet, &too_long));
     try std.testing.expectEqual(@as(usize, 0), q.count);
 }

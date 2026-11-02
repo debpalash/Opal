@@ -77,7 +77,7 @@ const Conn = struct {
         var dbpath: [512]u8 = undefined;
         var cpath: [512]u8 = undefined;
         const path = @import("../core/paths.zig").zigzagDbFile(&dbpath);
-        const zpath = std.fmt.bufPrintZ(&cpath, "{s}", .{path}) catch return null;
+        const zpath = @import("opal-fmt").bufPrintZ(&cpath, "{s}", .{path}) catch return null;
         var handle: ?*db.Sqlite3 = null;
         if (db.c.sqlite3_open_v2(zpath.ptr, &handle, db.c.SQLITE_OPEN_READWRITE | db.c.SQLITE_OPEN_FULLMUTEX, null) != db.c.SQLITE_OK) {
             if (handle) |h| _ = db.c.sqlite3_close_v2(h);
@@ -180,9 +180,9 @@ fn ensureVecTables(conn: *Conn, dim: usize) bool {
     _ = conn.exec("DROP TABLE IF EXISTS recall_vec");
     _ = conn.exec("DROP TABLE IF EXISTS recall_moments_vec");
     var sql: [192]u8 = undefined;
-    const a = std.fmt.bufPrintZ(&sql, "CREATE VIRTUAL TABLE recall_vec USING vec0(embedding float[{d}] distance_metric=cosine)", .{dim}) catch return false;
+    const a = @import("opal-fmt").bufPrintZ(&sql, "CREATE VIRTUAL TABLE recall_vec USING vec0(embedding float[{d}] distance_metric=cosine)", .{dim}) catch return false;
     if (!conn.exec(a.ptr)) return false;
-    const b = std.fmt.bufPrintZ(&sql, "CREATE VIRTUAL TABLE recall_moments_vec USING vec0(embedding float[{d}] distance_metric=cosine)", .{dim}) catch return false;
+    const b = @import("opal-fmt").bufPrintZ(&sql, "CREATE VIRTUAL TABLE recall_moments_vec USING vec0(embedding float[{d}] distance_metric=cosine)", .{dim}) catch return false;
     if (!conn.exec(b.ptr)) return false;
     _ = conn.exec("UPDATE recall_docs SET embedded=0");
     _ = conn.exec("UPDATE recall_moments SET embedded=0");

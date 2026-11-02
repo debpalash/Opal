@@ -23,10 +23,10 @@ pub const Health = struct {
     fallback: bool = false,
     checked_ms: i64 = 0,
 };
-const Record = struct { id: [32]u8 = .{0} ** 32, len: usize = 0, serial: u64 = 0, health: Health = .{}, streak: repair.Streak = .{} };
+const Record = struct { id: [32]u8 = @splat(0), len: usize = 0, serial: u64 = 0, health: Health = .{}, streak: repair.Streak = .{} };
 const Entry = struct { key: u64 = 0, stamp: i64 = 0, body: ?[]u8 = null, status: u16 = 0 };
-var records: [128]Record = [_]Record{.{}} ** 128;
-var cache: [8]Entry = [_]Entry{.{}} ** 8;
+var records: [128]Record = @as([128]Record, @splat(.{}));
+var cache: [8]Entry = @as([8]Entry, @splat(.{}));
 var mutex: sync.Mutex = .{};
 var serial: u64 = 0;
 var config_hash: u64 = 0;
@@ -261,7 +261,7 @@ pub fn deinit() void {
         if (entry.body) |body| alloc.free(body);
         entry.* = .{};
     }
-    records = [_]Record{.{}} ** 128;
+    records = @as([128]Record, @splat(.{}));
     config_hash = 0;
     net_ok_ms = 0;
     serial = 0;

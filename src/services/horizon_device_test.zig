@@ -67,8 +67,8 @@ test "Horizon device validation recap excludes future and unwatched episodes bef
     const result = try waitReady();
     try std.testing.expect(!result.cached);
     const text = result.text[0..result.text_len];
-    try std.testing.expect(std.ascii.indexOfIgnoreCase(text, "compass") != null);
-    for ([_][]const u8{ "CANARY", "dragon", "father", "vanishes" }) |spoiler| try std.testing.expect(std.ascii.indexOfIgnoreCase(text, spoiler) == null);
+    try std.testing.expect(std.ascii.findIgnoreCase(text, "compass") != null);
+    for ([_][]const u8{ "CANARY", "dragon", "father", "vanishes" }) |spoiler| try std.testing.expect(std.ascii.findIgnoreCase(text, spoiler) == null);
     // Wait for the worker's deferred busy release before requesting cache.
     io.sleep(100 * std.time.ns_per_ms);
     recap.onMediaChange();

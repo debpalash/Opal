@@ -24,7 +24,7 @@ const Answer = struct {
     outcome: pure.Outcome = .{},
     body: ?[]u8 = null,
 };
-var answers: [pure.MAX_QUEUE]Answer = [_]Answer{.{}} ** pure.MAX_QUEUE;
+var answers: [pure.MAX_QUEUE]Answer = @as([pure.MAX_QUEUE]Answer, @splat(.{}));
 
 pub const Fetched = struct {
     outcome: pure.Outcome,
@@ -171,7 +171,7 @@ pub const Text = struct {
 const DENIED_SLOTS = 8;
 const DENIED_TTL_S: i64 = 120;
 const Denied = struct { hash: u64 = 0, until: i64 = 0 };
-var denied: [DENIED_SLOTS]Denied = [_]Denied{.{}} ** DENIED_SLOTS;
+var denied: [DENIED_SLOTS]Denied = @as([DENIED_SLOTS]Denied, @splat(.{}));
 var denied_next: usize = 0;
 
 fn hostHash(url: []const u8) u64 {

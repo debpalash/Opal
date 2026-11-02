@@ -12,7 +12,7 @@ run:
 	SDL_VIDEODRIVER=wayland zig build -fsys=sdl2 run
 
 release:
-	zig build -fsys=sdl2 -Doptimize=ReleaseSafe
+	zig build -fsys=sdl2 -Doptimize=safe
 
 clean:
 	rm -rf zig-out .zig-cache

@@ -62,6 +62,6 @@ fn activePlayer() ?*@import("../player/player.zig").MediaPlayer {
 fn seekRelative(seconds: i8) void {
     const p = activePlayer() orelse return;
     var buf: [32]u8 = undefined;
-    const cmd = @import("std").fmt.bufPrintZ(&buf, "seek {d}", .{seconds}) catch return;
+    const cmd = @import("opal-fmt").bufPrintZ(&buf, "seek {d}", .{seconds}) catch return;
     _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
 }

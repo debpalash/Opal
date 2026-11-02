@@ -35,8 +35,8 @@ const MAX_WATCH = 32;
 const CHECKPOINT_MS: i64 = 10_000;
 var last_checkpoint_ms: i64 = 0;
 
-var ids: [MAX_WATCH]i32 = [_]i32{-1} ** MAX_WATCH;
-var watches: [MAX_WATCH]pure.Watch = [_]pure.Watch{.{}} ** MAX_WATCH;
+var ids: [MAX_WATCH]i32 = @as([MAX_WATCH]i32, @splat(-1));
+var watches: [MAX_WATCH]pure.Watch = @as([MAX_WATCH]pure.Watch, @splat(.{}));
 
 const TH = pure.Thresholds{};
 

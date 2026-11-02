@@ -746,7 +746,7 @@ test "validItemId accepts ABS ids, rejects injection" {
     try std.testing.expect(!validItemId("../secret"));
     try std.testing.expect(!validItemId("id/file"));
     try std.testing.expect(!validItemId("id?token=x"));
-    try std.testing.expect(!validItemId("a" ** 65));
+    try std.testing.expect(!validItemId(@import("opal-repeat").bytes("a", 65)));
 }
 
 test "multifile book resume selects boundary file and relative time" {

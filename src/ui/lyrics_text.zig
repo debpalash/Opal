@@ -22,7 +22,7 @@ pub fn line(text: []const u8, id: usize, color: dvui.Color) void {
             var h: u32 = 0;
             const pixels = opal_lyrics_raster(text.ptr, text.len, width, size, scale, rgb, &w, &h) orelse break :blk null;
             defer opal_lyrics_raster_free(pixels);
-            const tex = dvui.Texture.create(pixels[0 .. @as(usize, w) * h], w, h, .linear, .rgba_32) catch break :blk null;
+            const tex = dvui.Texture.create(pixels[0 .. @as(usize, w) * h], .{ .width = w, .height = h, .format = .rgba_32, .interpolation = .linear, .wrap_u = .clamp, .wrap_v = .clamp }) catch break :blk null;
             dvui.textureAddToCache(key, tex);
             break :blk tex;
         };
@@ -36,5 +36,5 @@ pub fn line(text: []const u8, id: usize, color: dvui.Color) void {
             return;
         }
     }
-    _ = dvui.label(@src(), "{s}", .{text}, .{ .id_extra = id, .color_text = color, .expand = .horizontal });
+    _ = dvui.label(@src(), "{s}", .{text}, .{ .id_extra = id, .color_text = @import("color_compat.zig").wrap(color), .expand = .horizontal });
 }

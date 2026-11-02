@@ -63,17 +63,17 @@ test "production row projection bounds metadata and sanitizes provider rating" {
     std.mem.doNotOptimizeAway(&provider_rating);
     var item = .{
         .id = @as(i32, 42),
-        .title = [_]u8{1} ** 128,
+        .title = @as([128]u8, @splat(1)),
         .title_len = @as(usize, 999),
-        .imdb_id = [_]u8{1} ** 16,
+        .imdb_id = @as([16]u8, @splat(1)),
         .imdb_id_len = @as(usize, 999),
-        .year = [_]u8{1} ** 8,
+        .year = @as([8]u8, @splat(1)),
         .year_len = @as(usize, 999),
-        .media_type = [_]u8{1} ** 8,
+        .media_type = @as([8]u8, @splat(1)),
         .media_type_len = @as(usize, 999),
-        .overview = [_]u8{1} ** 512,
+        .overview = @as([512]u8, @splat(1)),
         .overview_len = @as(usize, 999),
-        .poster_path = [_]u8{1} ** 256,
+        .poster_path = @as([256]u8, @splat(1)),
         .poster_path_len = @as(usize, 999),
         .rating = provider_rating,
     };

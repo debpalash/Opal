@@ -24,7 +24,7 @@ pub fn accept(stamps: []Stamp, cursor: *usize, identity_hash: u64, sequence: u64
 }
 
 test "newer save makes a late older worker stale" {
-    var stamps: [4]Stamp = [_]Stamp{.{}} ** 4;
+    var stamps: [4]Stamp = @as([4]Stamp, @splat(.{}));
     var cursor: usize = 0;
     try std.testing.expect(accept(&stamps, &cursor, 42, 2));
     try std.testing.expect(!accept(&stamps, &cursor, 42, 1));
@@ -32,7 +32,7 @@ test "newer save makes a late older worker stale" {
 }
 
 test "different media identities advance independently" {
-    var stamps: [2]Stamp = [_]Stamp{.{}} ** 2;
+    var stamps: [2]Stamp = @as([2]Stamp, @splat(.{}));
     var cursor: usize = 0;
     try std.testing.expect(accept(&stamps, &cursor, 10, 5));
     try std.testing.expect(accept(&stamps, &cursor, 20, 2));
@@ -41,7 +41,7 @@ test "different media identities advance independently" {
 }
 
 test "bounded table rotates without treating an empty hash as occupied" {
-    var stamps: [1]Stamp = [_]Stamp{.{}} ** 1;
+    var stamps: [1]Stamp = @as([1]Stamp, @splat(.{}));
     var cursor: usize = 0;
     try std.testing.expect(accept(&stamps, &cursor, 0, 1));
     try std.testing.expect(!accept(&stamps, &cursor, 0, 1));

@@ -36,9 +36,9 @@ fn setup() !void {
     metadata.setFixtureForTest(.{ .name = "Offline torrent metadata fixture with a long multilingual release title", .files = &files });
 }
 fn draw() !void {
-    var background = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = true, .color_fill = @import("theme.zig").colors.bg_app });
+    var background = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = true, .color_fill = @import("color_compat.zig").wrap(@import("theme.zig").colors.bg_app) });
     defer background.deinit();
-    _ = dvui.label(@src(), "Offline global modal renderer fixture — no download or workspace file operation", .{}, .{ .color_text = @import("theme.zig").colors.text_secondary });
+    _ = dvui.label(@src(), "Offline global modal renderer fixture — no download or workspace file operation", .{}, .{ .color_text = @import("color_compat.zig").wrap(@import("theme.zig").colors.text_secondary) });
     switch (current) {
         .onboarding => @import("onboarding.zig").render(),
         .workspace_save, .workspace_load_empty, .workspace_load_populated => @import("ui.zig").renderWorkspaceModals(),

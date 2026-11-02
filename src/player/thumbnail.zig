@@ -55,7 +55,7 @@ pub fn startGeneration(thumb: *ThumbnailState, file_path: []const u8, duration_s
     // paths.cacheFile maps to %LOCALAPPDATA%\opal\cache on Windows.
     var root_buf: [512]u8 = undefined;
     const root = @import("../core/paths.zig").cacheFile(&root_buf, "thumbs");
-    const dir_str = std.fmt.bufPrintZ(&thumb.dir_buf, "{s}/{x}", .{ root, hash }) catch return;
+    const dir_str = @import("opal-fmt").bufPrintZ(&thumb.dir_buf, "{s}/{x}", .{ root, hash }) catch return;
     thumb.dir_len = dir_str.len;
 
     // Create directory (makePath, not makeDir — the cache root may not exist yet).
@@ -76,10 +76,10 @@ pub fn startGeneration(thumb: *ThumbnailState, file_path: []const u8, duration_s
     // Spawn ffmpeg in background
     // ffmpeg -i <file> -vf "fps=1/10,scale=160:-1" -q:v 5 <dir>/thumb_%04d.jpg
     var output_pattern: [384]u8 = undefined;
-    const pattern = std.fmt.bufPrintZ(&output_pattern, "{s}/thumb_%04d.jpg", .{dir_str}) catch return;
+    const pattern = @import("opal-fmt").bufPrintZ(&output_pattern, "{s}/thumb_%04d.jpg", .{dir_str}) catch return;
 
     var fps_buf: [16]u8 = undefined;
-    const fps_str = std.fmt.bufPrintZ(&fps_buf, "fps=1/{d},scale={d}:-1", .{ thumb_interval, thumb_width }) catch return;
+    const fps_str = @import("opal-fmt").bufPrintZ(&fps_buf, "fps=1/{d},scale={d}:-1", .{ thumb_interval, thumb_width }) catch return;
 
     const argv = [_][]const u8{
         "ffmpeg",
@@ -147,6 +147,6 @@ pub fn getThumbPath(thumb: *const ThumbnailState, percent: f64, out_buf: *[384]u
     if (frame_idx == 0) frame_idx = 1;
 
     const dir = thumb.dir_buf[0..thumb.dir_len];
-    const path = std.fmt.bufPrintZ(out_buf, "{s}/thumb_{d:0>4}.jpg", .{ dir, frame_idx }) catch return null;
+    const path = @import("opal-fmt").bufPrintZ(out_buf, "{s}/thumb_{d:0>4}.jpg", .{ dir, frame_idx }) catch return null;
     return path;
 }

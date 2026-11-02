@@ -69,7 +69,7 @@ pub const Entry = struct {
 
 /// Fixed-size, no allocation — same convention as the state structs.
 pub const List = struct {
-    items: [MAX_TRACKERS]Entry = [_]Entry{.{}} ** MAX_TRACKERS,
+    items: [MAX_TRACKERS]Entry = @as([MAX_TRACKERS]Entry, @splat(.{})),
     count: usize = 0,
 
     pub fn at(self: *const List, i: usize) []const u8 {

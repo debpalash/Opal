@@ -17,7 +17,7 @@
 //! be behind `if (!build_options.headless)` instead — widening this file means
 //! the desktop and server builds have started to diverge.
 //!
-//! Signatures are pinned to dvui 0.5.0-dev; a dvui bump that changes one shows
+//! Signatures are pinned to dvui 0.6.0-dev; a dvui bump that changes one shows
 //! up as a desktop-build error, not a silent headless drift.
 
 const std = @import("std");
@@ -27,9 +27,7 @@ const std = @import("std");
 /// are served over HTTP (`/poster`), so headless genuinely needs the decoder.
 /// build.zig compiles dvui's own vendored `stb_image_impl.c` for this — same
 /// source as the desktop build, so there's no behavior drift between the two.
-pub const c = @cImport({
-    @cInclude("stb_image.h");
-});
+pub const c = @import("opal-native-c");
 
 /// `state.dvui_win: ?*dvui.Window` — only ever passed back to `refresh`, which
 /// is a no-op here, so the pointee is never dereferenced.

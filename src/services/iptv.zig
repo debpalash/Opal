@@ -852,7 +852,7 @@ pub fn renderContent() void {
 
     if (state.app.iptv.fetch_error) {
         _ = dvui.label(@src(), "Failed to fetch — check your connection", .{}, .{
-            .color_text = theme.colors.danger,
+            .color_text = .{ .color = theme.colors.danger },
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
         });
     }
@@ -869,7 +869,7 @@ fn themedSelect(id: usize, labels: []const []const u8, cur: usize, width: f32) ?
     var result: ?usize = null;
     var m = dvui.menu(@src(), .horizontal, .{
         .id_extra = id,
-        .color_fill = theme.transparent,
+        .color_fill = .{ .color = theme.transparent },
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
     });
@@ -880,10 +880,10 @@ fn themedSelect(id: usize, labels: []const []const u8, cur: usize, width: f32) ?
         .id_extra = id,
         .min_size_content = .{ .w = width, .h = 0 },
         .background = true,
-        .color_fill = theme.colors.bg_elevated,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_text = theme.colors.text_primary,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = .{ .color = theme.colors.bg_elevated },
+        .color_fill_hover = .{ .color = theme.colors.bg_hover },
+        .color_text = .{ .color = theme.colors.text_primary },
+        .corners = theme.dims.rad_sm,
         .gravity_y = 0.5,
         .padding = .{ .x = 8, .y = 5, .w = 6, .h = 5 },
     })) |r| {
@@ -892,17 +892,17 @@ fn themedSelect(id: usize, labels: []const []const u8, cur: usize, width: f32) ?
         var vm = dvui.menu(@src(), .vertical, .{
             .id_extra = id,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
+            .color_fill = .{ .color = theme.colors.bg_surface },
             .border = dvui.Rect.all(1),
-            .color_border = theme.colors.border_subtle,
-            .corner_radius = theme.dims.rad_sm,
+            .color_border = .{ .color = theme.colors.border_subtle },
+            .corners = theme.dims.rad_sm,
         });
         defer vm.deinit();
         for (labels, 0..) |lb, i| {
             if (dvui.menuItemLabel(@src(), lb, .{}, .{
                 .id_extra = i,
                 .expand = .horizontal,
-                .color_text = if (i == cur) theme.colors.accent else theme.colors.text_primary,
+                .color_text = .{ .color = if (i == cur) theme.colors.accent else theme.colors.text_primary },
             })) |_| {
                 result = i;
             }
@@ -958,9 +958,9 @@ fn renderToolbar() void {
         }, .{
             .expand = .horizontal,
             .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = theme.colors.text_primary },
+            .corners = theme.dims.rad_sm,
             .gravity_y = 0.5,
         });
         const entered = te.enter_pressed;
@@ -971,9 +971,9 @@ fn renderToolbar() void {
         // dynamic update, not a stuck search.
         if (std.mem.sliceTo(&state.app.iptv.search_buf, 0).len > 0) {
             if (dvui.buttonIcon(@src(), "iptvclear", icons.tvg.lucide.x, .{}, .{}, .{
-                .color_text = theme.colors.text_secondary,
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
+                .color_text = .{ .color = theme.colors.text_secondary },
+                .color_fill = .{ .color = theme.transparent },
+                .color_fill_hover = .{ .color = theme.colors.bg_hover },
                 .border = dvui.Rect.all(0),
                 .min_size_content = theme.iconSize(.sm),
                 .margin = .{ .x = 4, .y = 0, .w = 4, .h = 0 },
@@ -996,7 +996,7 @@ fn renderToolbar() void {
     if (inert) return;
 
     if (state.app.iptv.is_loading.load(.acquire)) {
-        _ = dvui.label(@src(), "...", .{}, .{ .color_text = theme.colors.warning, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 } });
+        _ = dvui.label(@src(), "...", .{}, .{ .color_text = .{ .color = theme.colors.warning }, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 } });
     }
 
     // Quick-filter chips.
@@ -1081,7 +1081,7 @@ const ChannelPoster = struct {
     failed: bool = false,
     url_hash: u64 = 0,
 };
-var channel_posters: [pure.RENDER_WINDOW]ChannelPoster = [_]ChannelPoster{.{}} ** pure.RENDER_WINDOW;
+var channel_posters: [pure.RENDER_WINDOW]ChannelPoster = @as([pure.RENDER_WINDOW]ChannelPoster, @splat(.{}));
 
 /// Fill the card's logo area from the channel's logo URL via the shared poster
 /// daemon. Falls back to the tv glyph while loading, when the channel has no
@@ -1117,14 +1117,14 @@ fn renderLogo(i: usize, ch: *const pure.IptvChannel) void {
         _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
             .id_extra = i + 1000,
             .expand = .both,
-            .corner_radius = dvui.Rect.all(8),
+            .corners = dvui.CornerRect.all(8),
         });
     } else if (logo.len > 0 and !slot.failed) {
         components.coverSkeleton(@src(), i + 1000, 8);
     } else {
         _ = dvui.icon(@src(), "", icons.tvg.lucide.tv, .{}, .{
             .id_extra = i + 1000,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .gravity_x = 0.5,
             .gravity_y = 0.5,
             .expand = .both,
@@ -1155,8 +1155,8 @@ fn renderCard(i: usize, card_w: f32) void {
         bw.init(@src(), .{}, .{
             .id_extra = i + 2000,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(8),
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .corners = dvui.CornerRect.all(8),
             .min_size_content = .{ .w = card_w, .h = card_w },
             .max_size_content = .{ .w = card_w, .h = card_w },
             .padding = dvui.Rect.all(0),
@@ -1189,9 +1189,9 @@ fn renderCard(i: usize, card_w: f32) void {
                 .id_extra = i + 8000,
                 .min_size_content = .{ .w = 8, .h = 8 },
                 .max_size_content = .{ .w = 8, .h = 8 },
-                .corner_radius = dvui.Rect.all(4),
+                .corners = dvui.CornerRect.all(4),
                 .background = true,
-                .color_fill = statusColor(st),
+                .color_fill = .{ .color = statusColor(st) },
                 .gravity_y = 0.5,
                 .margin = .{ .x = 2, .y = 0, .w = 4, .h = 0 },
             });
@@ -1200,7 +1200,7 @@ fn renderCard(i: usize, card_w: f32) void {
 
         _ = dvui.label(@src(), "{s}", .{name}, .{
             .id_extra = i + 3000,
-            .color_text = theme.colors.text_primary,
+            .color_text = .{ .color = theme.colors.text_primary },
             .expand = .horizontal,
             .gravity_y = 0.5,
             .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
@@ -1208,9 +1208,9 @@ fn renderCard(i: usize, card_w: f32) void {
         const faved = isFav(ch.url[0..@min(ch.url_len, ch.url.len)]);
         if (dvui.buttonIcon(@src(), "iptvfav", icons.tvg.lucide.star, .{}, .{}, .{
             .id_extra = i + 7000,
-            .color_text = if (faved) theme.colors.warning else theme.colors.text_tertiary,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
+            .color_text = .{ .color = if (faved) theme.colors.warning else theme.colors.text_tertiary },
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
             .border = dvui.Rect.all(0),
             .min_size_content = theme.iconSize(.sm),
             .padding = dvui.Rect.all(4),
@@ -1254,7 +1254,7 @@ fn renderCard(i: usize, card_w: f32) void {
         var safe_meta: [96]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(meta_buf[0..mw.end], &safe_meta)}, .{
             .id_extra = i + 4000,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .expand = .horizontal,
             .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         });
@@ -1285,7 +1285,7 @@ fn renderResults() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = .{ .color = theme.colors.bg_surface },
     });
     defer scroll.deinit();
 
@@ -1298,7 +1298,7 @@ fn renderResults() void {
             if (working_only) " working" else "",
         }) catch "Live TV channels";
         _ = dvui.label(@src(), "{s}", .{heading}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = .{ .color = theme.colors.text_secondary },
             .padding = .{ .x = 8, .y = 8, .w = 8, .h = 2 },
         });
     }

@@ -746,7 +746,7 @@ test "encodeWithMask reproduces the reference for a forced mask (v2, mask 3 rows
 
 test "too long is an error, not a truncated code" {
     var m: Matrix = .{};
-    const long = [_]u8{'a'} ** 214;
+    const long = @as([214]u8, @splat('a'));
     try std.testing.expectError(error.TooLong, encode(&long, &m));
 }
 
