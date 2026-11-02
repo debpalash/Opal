@@ -1,7 +1,7 @@
 {
-  "status": "macOS validated; cross-platform CI pending",
+  "status": "Zig 0.17/DVUI 0.6 migration validated on Linux, macOS and Windows",
   "base_commit": "e3167cd",
-  "branch": "next/zig-0.17-dvui-0.6",
+  "branch": "main",
   "compiler_tested": "0.17.0",
   "dependency_pins": {
     "dvui": "4ed19f847fd0ec6ec97f9600316d86c0e0cd255c",
@@ -42,7 +42,18 @@
     "toast_overlay_scales": [
       1,
       1.5
-    ]
+    ],
+    "cross_platform_ci": {
+      "run": "https://github.com/debpalash/Opal/actions/runs/41390798430",
+      "head_commit": "b5220d49aba4e81eebc4a82775b5d18fd7547b7c",
+      "merged_commit": "4ae2bdd7b2f5782c85116ca048d9f9b553f2cb2f",
+      "jobs_passed": 13,
+      "linux_compat_launch_distributions": [
+        "Ubuntu 20.04",
+        "Ubuntu 22.04",
+        "Debian 12"
+      ]
+    }
   },
   "last_full_build": {
     "result": "passed",
@@ -51,7 +62,6 @@
     "target": "native Apple silicon macOS"
   },
   "remaining_work": [
-    "Run Linux/Windows CI and validate native runtime on those platforms.",
     "Physical Bluetooth reconnect/channel routing and overnight idle soak."
   ],
   "reproduce": "ZIG=/path/to/zig-0.17 scripts/check-zig17-upgrade.sh --full",
@@ -62,7 +72,6 @@
     "dvui": "lifecycle, corner, color/gradient, texture and input APIs adapted",
     "verification": "Full feature suite passes, native UI captures pass, terminal and bundled player live tests pass.",
     "limitations": [
-      "Run Linux/Windows CI and validate native runtime on those platforms.",
       "Physical Bluetooth reconnect/channel routing and overnight idle soak."
     ]
   },
@@ -74,6 +83,6 @@
     "result": "4 bundled player live tests passed with isolated profiles",
     "stalled_media_shutdown_seconds": 0.13,
     "loaded_media_shutdown_seconds": 0.177,
-    "scope": "native startup, stalled media shutdown, WAV playback, session persistence, generated H.264/AAC playback, pause and bidirectional seek"
+    "scope": "native startup, stalled media shutdown, WAV playback, session persistence, generated video/AAC playback, pause and bidirectional seek"
   }
 }

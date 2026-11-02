@@ -10,6 +10,15 @@ Add a section BEFORE tagging; a missing one ships a release that says so.
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
+## v0.9.1 — 2026-11-02
+
+- **More reliable audio output recovery.** Recover playback when an output device disconnects or a forced device refuses to open, while preserving each player's audio-disable preference.
+- **Quicker closing.** Cancel catalog retry waits during shutdown and hide the window promptly when quitting.
+- **Clearer audio switching.** A compact output-device prompt follows the app theme and keeps playback paused until you resume.
+- **Cleaner rendering.** Toasts overlay the page correctly without triggering a red diagnostic border, including at larger UI scales.
+- **Streaming and media robustness.** Size the startup buffer from the file's bitrate and handle malformed AVI/MP4 metadata more safely.
+- **Updated native toolkit.** Move to Zig 0.17 and DVUI 0.6-dev, with verified desktop UI, playback and packaging checks on macOS, Windows and Linux. Building from source now requires Zig 0.17.x.
+
 ## v0.9.0 — 2026-10-29
 
 - **Wallpapers in Opal.** Browse Wallhaven and configured gallery-dl sources with infinite scrolling, open full-resolution images in a gallery, navigate with the keyboard, and hide the thumbnail strip for more viewing space.
