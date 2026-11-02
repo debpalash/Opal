@@ -47,7 +47,8 @@ pub fn processGlobalInputs() void {
         if (e.evt == .key and e.evt.key.action == .down) {
             const key = e.evt.key.code;
             const mod = e.evt.key.mod;
-            if (!e.handled and dvui.focusedWidgetId() == null and !mod.control() and !mod.command() and !mod.alt() and @import("../services/wallpapers.zig").galleryKey(key)) {
+            const wallpapers = @import("../services/wallpapers.zig");
+            if (!e.handled and wallpapers.capturesKeyboard() and !mod.control() and !mod.command() and !mod.alt() and !mod.shift() and wallpapers.galleryKey(key)) {
                 e.handled = true;
                 continue;
             }
@@ -59,7 +60,13 @@ pub fn processGlobalInputs() void {
             // so a single Escape doesn't nuke everything at once.
             if (key == .escape) {
                 const footer = @import("footer.zig");
-                if (dvui.focusedWidgetId() != null) {
+                if (state.app.command_palette_open) {
+                    @import("command_palette.zig").close();
+                    e.handled = true;
+                } else if (state.app.cheatsheet_open) {
+                    state.app.cheatsheet_open = false;
+                    e.handled = true;
+                } else if (dvui.focusedWidgetId() != null) {
                     dvui.focusWidget(null, null, null);
                 } else if (footer.pickerOpen()) {
                     // Every footer popover shares one dismissal path, including
@@ -78,10 +85,24 @@ pub fn processGlobalInputs() void {
                 continue;
             }
 
+            // The launcher must work from a search field and its own query.
+            if (key == .k and (mod.control() or mod.command()) and !mod.shift() and !mod.alt()) {
+                @import("command_palette.zig").toggle();
+                e.handled = true;
+                dvui.refresh(null, @src(), null);
+                continue;
+            }
+
             // Ctrl+shortcuts always work (Cmd on macOS via the platform-aware
             // "ctrl/cmd" keybind — Ctrl still accepted everywhere).
             const ctrl_or_cmd = mod.control() or mod.matchBind("ctrl/cmd");
             if (ctrl_or_cmd) {
+                if (state.app.page_shell_enabled and !state.app.command_palette_open and !state.app.cheatsheet_open and !mod.shift() and !mod.alt() and (key == .left_bracket or key == .right_bracket)) {
+                    if (key == .left_bracket) state.app.router.goBack() else state.app.router.goForward();
+                    e.handled = true;
+                    dvui.refresh(null, @src(), null);
+                    continue;
+                }
                 if (key == .comma) {
                     state.app.settings_open = !state.app.settings_open;
                     dvui.refresh(null, @src(), null);
@@ -122,7 +143,7 @@ pub fn processGlobalInputs() void {
             }
 
             // ── If a text entry is focused, suppress single-key shortcuts ──
-            if (dvui.focusedWidgetId() != null) {
+            if (dvui.focusedWidgetId() != null or state.app.command_palette_open or state.app.cheatsheet_open or wallpapers.capturesKeyboard()) {
                 continue;
             }
 
@@ -132,17 +153,6 @@ pub fn processGlobalInputs() void {
             // sheet unreachable in the default page-shell UI.
             if (key == .i and mod.shift() and !mod.control() and !mod.alt()) {
                 state.app.cheatsheet_open = !state.app.cheatsheet_open;
-                dvui.refresh(null, @src(), null);
-                continue;
-            }
-
-            // Ctrl/Cmd+K = command palette. Also outside the no-modifier switch
-            // below, for the same reason the cheat sheet is: that switch only
-            // runs for unmodified keys, so a binding placed there is dead code.
-            // Both modifiers are accepted so the muscle memory works whichever
-            // platform the user came from.
-            if (key == .k and (mod.control() or mod.command()) and !mod.shift() and !mod.alt()) {
-                state.app.command_palette_open = !state.app.command_palette_open;
                 dvui.refresh(null, @src(), null);
                 continue;
             }

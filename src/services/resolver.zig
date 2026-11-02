@@ -195,11 +195,11 @@ fn currentCacheScope() CacheScope {
 pub fn sourceOn(bit: SourceBit) bool {
     const m = source_mask.load(.acquire);
     if (m & ALL_SOURCE_BITS == 0) return true; // empty mask = all on
-    return (m >> @intFromEnum(bit)) & 1 == 1;
+    return (m >> @backingInt(bit)) & 1 == 1;
 }
 
 pub fn toggleSource(bit: SourceBit) void {
-    _ = source_mask.fetchXor(@as(u16, 1) << @intFromEnum(bit), .acq_rel);
+    _ = source_mask.fetchXor(@as(u16, 1) << @backingInt(bit), .acq_rel);
 }
 
 /// Atomic accessor for is_resolving (UI reads, workers clear via checkAllDone).
@@ -627,7 +627,7 @@ pub fn unlockRemoteSnapshot() void {
 
 pub fn actionKey(item: *const ResolvedItem) u64 {
     var hash = std.hash.Wyhash.init(0x6f70_616c_7365_6172);
-    const source_byte = [_]u8{@intCast(@intFromEnum(item.source))};
+    const source_byte = [_]u8{@intCast(@backingInt(item.source))};
     hash.update(&source_byte);
     if (item.source == .plugin and item.plugin_id_len > 0) {
         hash.update(item.plugin_id[0..item.plugin_id_len]);
@@ -674,7 +674,7 @@ pub fn copySearchSnapshot(out: []ResolvedItem, known_revision: u64) SearchSnapsh
 }
 
 pub fn searchView(item: *const ResolvedItem) search_view.Item {
-    const source: search_view.Source = @enumFromInt(@intFromEnum(item.source));
+    const source: search_view.Source = @fromBackingInt(@intCast(@backingInt(item.source)));
     const url = item.url[0..@min(item.url_len, item.url.len)];
     const torrent = item.source == .torrent or std.mem.startsWith(u8, url, "magnet:?");
     const playable = !torrent and switch (item.source) {
@@ -1480,7 +1480,7 @@ fn serializeRows(rows: []const ResolvedItem, out: []u8) ?[]u8 {
         w.blob(it.detail[0..@min(it.detail_len, it.detail.len)]);
         w.blob(it.provider.name());
         w.blob(it.url[0..@min(it.url_len, it.url.len)]);
-        w.u8v(@intFromEnum(it.source));
+        w.u8v(@backingInt(it.source));
         w.u8v(it.quality);
         w.u16v(it.seeds);
         w.u32v(@truncate(it.size_bytes));
@@ -1549,7 +1549,7 @@ fn deserializeInto(bytes: []const u8) usize {
         copyField(&it.url, &it.url_len, url);
         const src_tag = r.u8v() orelse break;
         const src_fields = @typeInfo(SourceType).@"enum".field_names.len;
-        it.source = if (src_tag < src_fields) @enumFromInt(src_tag) else .torrent;
+        it.source = if (src_tag < src_fields) @fromBackingInt(@intCast(src_tag)) else .torrent;
         it.quality = r.u8v() orelse break;
         it.seeds = r.u16v() orelse break;
         const size_lo = r.u32v() orelse break;
@@ -4658,7 +4658,8 @@ fn resolveAnimeCatalog(q: [256]u8, qlen: usize) void {
 fn resolveMangaCatalog(q: [256]u8, qlen: usize) void {
     defer {
         if (generationIsCurrent(worker_gen)) {
-            resolveComicFury(q[0..qlen]);
+            resolveWesternComics(q[0..qlen]);
+            if (generationIsCurrent(worker_gen)) resolveComicFury(q[0..qlen]);
             if (generationIsCurrent(worker_gen)) resolveInstalledWebcomics(q[0..qlen]);
         }
         finishWorker(&status_manga_catalog, .done);
@@ -4693,7 +4694,7 @@ fn resolveInstalledWebcomics(query: []const u8) void {
     const comics = @import("webcomic_sources.zig");
     const rows = alloc.alloc(comics.Item, 6) catch return;
     defer alloc.free(rows);
-    for ([_]comics.Provider{ .xkcd, .smbc }) |provider| {
+    for ([_]comics.Provider{ .xkcd, .smbc, .poorlydrawnlines }) |provider| {
         if (!generationIsCurrent(worker_gen)) return;
         var base_buf: [512]u8 = undefined;
         const base = @import("../core/source_config.zig").copyValue(@tagName(provider), "base", &base_buf) orelse continue;
@@ -4707,8 +4708,28 @@ fn resolveInstalledWebcomics(query: []const u8) void {
             copyField(&item.url, &item.url_len, row.route[0..row.route_len]);
             copyField(&item.poster_url, &item.poster_url_len, row.image[0..row.image_len]);
             copyField(&item.summary, &item.summary_len, row.summary[0..row.summary_len]);
-            copyField(&item.author, &item.author_len, if (provider == .xkcd) "Randall Munroe" else "Zach Weinersmith");
-            copyField(&item.detail, &item.detail_len, if (provider == .xkcd) "xkcd · Read full comic" else "SMBC · Recent publisher comics");
+            copyField(&item.author, &item.author_len, provider.author());
+            copyField(&item.detail, &item.detail_len, provider.label());
+            _ = pushResult(item);
+        }
+    }
+}
+fn resolveWesternComics(query: []const u8) void {
+    const western = @import("western_comics.zig");
+    const rows = alloc.alloc(western.pure.Item, 12) catch return;
+    defer alloc.free(rows);
+    for (std.enums.values(western.Provider)) |provider| {
+        // Experimental XOXO remains available through its explicit Browse
+        // filter; its currently broken image origin must not pollute Search.
+        if (provider == .xoxo) continue;
+        if (!generationIsCurrent(worker_gen)) return;
+        const count = western.search(provider, query, 1, workerCancellation(), rows);
+        for (rows[0..count]) |*row| {
+            var item: ResolvedItem = .{ .source = .comics, .provider = search_view.Provider.init(@tagName(provider)) };
+            copyField(&item.name, &item.name_len, row.title.get());
+            copyField(&item.url, &item.url_len, row.route.get());
+            copyField(&item.poster_url, &item.poster_url_len, row.cover.get());
+            copyField(&item.detail, &item.detail_len, provider.label());
             _ = pushResult(item);
         }
     }
@@ -4811,6 +4832,9 @@ fn validRoyalRoad(body: []const u8) bool {
 fn validNovelFire(body: []const u8) bool {
     return readingListingValid(.novelfire, body);
 }
+fn validReadNovelFull(body: []const u8) bool {
+    return @import("expanded_reading_pure.zig").novelListingHtml(body, "readnovelfull") != null;
+}
 fn validStandardEbooks(body: []const u8) bool {
     return readingListingValid(.standardebooks, body);
 }
@@ -4836,6 +4860,7 @@ fn resolveInstalledReading(query: []const u8) void {
         const response = @import("source_request.zig").request(@tagName(source), url, buf, &headers, .{ .base = base, .ttl_ms = 30_000, .validate = switch (source) {
             .royalroad => validRoyalRoad,
             .novelfire => validNovelFire,
+            .readnovelfull => validReadNovelFull,
             .standardebooks => validStandardEbooks,
             .wuxiaclick => validWuxiaClick,
         }, .transport = .{ .timeout_secs = 10, .user_agent = "Mozilla/5.0", .impersonate = false, .cancel_epoch = workerCancellation() } });
@@ -4867,6 +4892,7 @@ fn resolveInstalledReading(query: []const u8) void {
             copyField(&item.detail, &item.detail_len, switch (source) {
                 .royalroad => "Royal Road · Read work",
                 .novelfire => "NovelFire · Read work",
+                .readnovelfull => "ReadNovelFull · Read work",
                 .standardebooks => "Standard Ebooks · Read work",
                 .wuxiaclick => "WuxiaClick · Read work",
             });

@@ -467,16 +467,15 @@ fn novelProvider(wave: *NovelWave, src: NovelSource) void {
         .gutenberg => fetchGutenberg(q, gen, 0, wave.gutenberg_cursor),
         .openlibrary => fetchOpenLibrary(q, gen, 0, wave.page),
         .internet_archive => fetchInternetArchive(q, gen, 0, wave.page),
-        .royalroad, .novelfire => fetchExpandedNovel(q, gen, 0, wave.page, src),
+        .royalroad, .novelfire, .readnovelfull => fetchExpandedNovel(q, gen, 0, wave.page, src),
         .standardebooks, .wuxiaclick => fetchReadingProvider(q, gen, 0, wave.page, src),
         .madara_novel => fetchMadaraNovel(q, gen, 0, wave.page),
         .lightnovelwp => fetchLightnovelwp(q, gen, 0, wave.page),
         .readwn => fetchReadwn(q, gen, 0),
-        .readnovelfull => 0,
     };
     _ = wave.added.fetchAdd(n, .acq_rel);
     if (n > 0) switch (src) {
-        .royalroad, .novelfire, .standardebooks, .wuxiaclick => wave.expanded_more.store(true, .release),
+        .royalroad, .novelfire, .readnovelfull, .standardebooks, .wuxiaclick => wave.expanded_more.store(true, .release),
         else => {},
     };
     parse_mutex.lock();
@@ -494,12 +493,12 @@ fn runNovelWave(job: SearchJob, page: u32) usize {
     wave.wiki_offset = if (page == 1) 0 else wiki_next_offset;
     wave.gutenberg_cursor = if (page == 1) 1 else gutenberg_next;
     parse_mutex.unlock();
-    var jobs: [11]NovelSource = undefined;
+    var jobs: [12]NovelSource = undefined;
     var count: usize = 0;
     // Installed providers get the first fan-out lanes. Default public catalogs
     // can be slow or unavailable, especially behind a proxy; they must not
     // delay the user's configured source from publishing its first rows.
-    inline for (.{ NovelSource.royalroad, NovelSource.novelfire, NovelSource.standardebooks, NovelSource.wuxiaclick, NovelSource.madara_novel, NovelSource.lightnovelwp, NovelSource.readwn, NovelSource.wikisource, NovelSource.gutenberg, NovelSource.openlibrary, NovelSource.internet_archive }) |src| {
+    inline for (.{ NovelSource.royalroad, NovelSource.novelfire, NovelSource.readnovelfull, NovelSource.standardebooks, NovelSource.wuxiaclick, NovelSource.madara_novel, NovelSource.lightnovelwp, NovelSource.readwn, NovelSource.wikisource, NovelSource.gutenberg, NovelSource.openlibrary, NovelSource.internet_archive }) |src| {
         const active = switch (src) {
             .wikisource => page == 1 or wiki_more.load(.acquire),
             .gutenberg => page == 1 or gutenberg_more.load(.acquire),
@@ -601,13 +600,14 @@ fn fetchExpandedNovel(query: []const u8, gen: u32, start_hint: usize, page: u32,
     const start = novelAppendStart(gen, start_hint);
     if (!search_request.isCurrent(gen)) return 0;
     const listing = expanded.novelListingHtml(body, id) orelse return 0;
-    var it = expanded.html.AnchorIter{ .html = listing, .path = if (src == .royalroad) "/fiction/" else "/book/" };
+    var it = expanded.html.AnchorIter{ .html = listing, .path = if (src == .readnovelfull) "/" else if (src == .royalroad) "/fiction/" else "/book/" };
     var n: usize = 0;
     while (it.next()) |item| {
         if (start + n >= @min(MAX_RESULTS, start + PAGE_SIZE)) break;
         if (std.mem.indexOf(u8, item.url, "/chapter") != null or std.mem.endsWith(u8, item.url, "/random")) continue;
         var abs_buf: [1024]u8 = undefined;
         const abs = expanded.html.sourceUrl(&abs_buf, base, item.url) orelse continue;
+        if (src == .readnovelfull and !expanded.readNovelFullWork(abs, base)) continue;
         var title_buf: [256]u8 = undefined;
         const title = cleanTitle(item.title, &title_buf);
         if (title.len == 0) continue;
@@ -1068,7 +1068,7 @@ pub fn openNovel(idx: usize) void {
 
     // Snapshot the selected work (source + title + URL) BEFORE spawning — the
     // search grid can be reordered by a fresh search while chapters load.
-    open_source = @enumFromInt(row.source);
+    open_source = @fromBackingInt(@intCast(row.source));
 
     const tlen = @min(row.title_len, state.app.novels.work_title.len);
     @memcpy(state.app.novels.work_title[0..tlen], row.title_buf[0..tlen]);
@@ -1124,7 +1124,7 @@ fn chaptersWorker(job: ReaderJob) void {
         .madara_novel => chaptersMadara(job),
         .lightnovelwp => chaptersLightnovelwp(job),
         .readwn => chaptersReadwn(job),
-        .readnovelfull => {}, // not shipped in v1
+        .readnovelfull => chaptersReadNovelFull(job),
         .internet_archive, .openlibrary => chaptersInternetArchive(job),
         .gutenberg => chaptersGutenberg(job),
         .royalroad, .novelfire => chaptersExpanded(job),
@@ -1163,6 +1163,35 @@ fn chaptersReadingProvider(job: ReaderJob) void {
     ch_total = window.total;
     ch_has_more = window.has_more;
     if (window.count == 0) state.app.novels.fetch_error = true;
+}
+
+fn chaptersReadNovelFull(job: ReaderJob) void {
+    var base_buf: [512]u8 = undefined;
+    const base = source_config.copyValue("readnovelfull", "base", &base_buf) orelse return;
+    const work = job.url[0..job.url_len];
+    if (!expanded.readNovelFullWork(work, base)) return;
+    const detail = fetchReaderBody(work, 4 * 1024 * 1024, job.generation, false) orelse return;
+    defer alloc.free(detail);
+    var address: [1024]u8 = undefined;
+    const url = expanded.readNovelFullChaptersUrl(&address, base, detail) orelse return;
+    const body = fetchReaderBody(url, 4 * 1024 * 1024, job.generation, false) orelse return;
+    defer alloc.free(body);
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (chapters_gen.load(.acquire) != job.generation) return;
+    var it: expanded.html.AnchorIter = .{ .html = body, .path = "/chapter-" };
+    var count: usize = 0;
+    while (it.next()) |item| {
+        var owned: [1024]u8 = undefined;
+        const chapter = expanded.readNovelFullChapter(&owned, base, work, item.url) orelse continue;
+        var title: [256]u8 = undefined;
+        const name = cleanTitle(item.title, &title);
+        if (name.len == 0) continue;
+        addChapter(count, name, chapter);
+        count += 1;
+    }
+    finishChapterWindow(count, false);
+    if (count == 0) state.app.novels.fetch_error = true;
 }
 
 fn chaptersExpanded(job: ReaderJob) void {
@@ -2283,6 +2312,7 @@ fn novelSourceLabel(source: NovelSource) []const u8 {
         .openlibrary => "Open Library",
         .royalroad => "Royal Road",
         .novelfire => "NovelFire",
+        .readnovelfull => "ReadNovelFull",
         .standardebooks => "Standard Ebooks",
         .wuxiaclick => "WuxiaClick",
         else => "Connected source",
@@ -2300,7 +2330,7 @@ fn novelSourceIcon(source: NovelSource) []const u8 {
 fn renderNovelCard(item: ListRow, index: usize, card_width: f32) void {
     var name_buf: [256]u8 = undefined;
     const name = safeUtf8Buf(item.title(), &name_buf);
-    const source: NovelSource = @enumFromInt(item.source);
+    const source: NovelSource = @fromBackingInt(@intCast(item.source));
 
     var bw: dvui.ButtonWidget = undefined;
     bw.init(@src(), .{}, .{

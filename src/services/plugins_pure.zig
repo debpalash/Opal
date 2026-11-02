@@ -233,6 +233,7 @@ pub const Category = enum {
     comics,
     metadata,
     other,
+    novels,
 
     /// Fixed display order, most-used first. Lower sorts earlier.
     pub fn order(self: Category) u8 {
@@ -241,8 +242,9 @@ pub const Category = enum {
             .stremio => 1,
             .anime => 2,
             .comics => 3,
-            .metadata => 4,
-            .other => 5,
+            .novels => 4,
+            .metadata => 5,
+            .other => 6,
         };
     }
 
@@ -252,6 +254,7 @@ pub const Category = enum {
             .stremio => "Stremio add-ons",
             .anime => "Anime",
             .comics => "Comics & Manga",
+            .novels => "Novels & Books",
             .metadata => "Metadata",
             .other => "Other",
         };
@@ -266,13 +269,14 @@ pub fn categoryOf(kind: []const u8) Category {
     if (eq(kind, "stremio")) return .stremio;
     if (eq(kind, "anime")) return .anime;
     if (eq(kind, "comics") or eq(kind, "manga")) return .comics;
+    if (eq(kind, "novels") or eq(kind, "novel") or eq(kind, "books")) return .novels;
     if (eq(kind, "metadata")) return .metadata;
     return .other;
 }
 
 /// Categories in display order — callers iterate this so the ordering lives in
 /// one tested place (not re-sorted at each call site).
-pub const ordered_categories = [_]Category{ .torrent, .stremio, .anime, .comics, .metadata, .other };
+pub const ordered_categories = [_]Category{ .torrent, .stremio, .anime, .comics, .novels, .metadata, .other };
 
 /// Case-insensitive substring test. Empty needle matches everything (a blank
 /// search box shows the full list).
@@ -303,6 +307,8 @@ test "categoryOf maps known kinds, folds manga into comics, keeps unknowns" {
     try std.testing.expectEqual(Category.anime, categoryOf("anime"));
     try std.testing.expectEqual(Category.comics, categoryOf("comics"));
     try std.testing.expectEqual(Category.comics, categoryOf("manga"));
+    try std.testing.expectEqual(Category.novels, categoryOf("novels"));
+    try std.testing.expectEqual(Category.novels, categoryOf("Books"));
     try std.testing.expectEqual(Category.metadata, categoryOf("metadata"));
     try std.testing.expectEqual(Category.torrent, categoryOf("Torrent")); // case-insensitive
     try std.testing.expectEqual(Category.other, categoryOf("weirdnewtype"));
@@ -316,7 +322,7 @@ test "ordered_categories is the strictly-sorted, complete set" {
         const o = @as(i32, c.order());
         try std.testing.expect(o > prev); // strictly increasing
         prev = o;
-        seen[@intFromEnum(c)] = true;
+        seen[@backingInt(c)] = true;
     }
     for (seen) |s| try std.testing.expect(s); // every category present
 }

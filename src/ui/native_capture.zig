@@ -58,7 +58,13 @@ pub fn capture(width: u32, height: u32, name: []const u8, setup: ?Draw, draw: Dr
         window.endRendering(.{});
         picture.stop();
         recording = false;
-        if (frame == 7) {
+        if (frame == 7 and io.getenv("OPAL_NATIVE_CAPTURE_DIR") == null) {
+            // Validate the real GPU result without encoding a PNG that will
+            // immediately be discarded. Artifact runs still encode below.
+            const pixels = try dvui.textureReadTarget(window.lifo(), picture.texture);
+            defer window.lifo().free(pixels);
+            try std.testing.expectEqual(@as(usize, picture.texture.width) * picture.texture.height, pixels.len);
+        } else if (frame == 7) {
             var png: std.Io.Writer.Allocating = try .initCapacity(alloc, 128 * 1024);
             defer png.deinit();
             // Screenshots are review artifacts; avoid expensive compression

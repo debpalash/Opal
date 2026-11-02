@@ -23,6 +23,9 @@ var failures: usize = 0;
 var generation: std.atomic.Value(u32) = .init(0);
 var loaded = false;
 var selected: Source = .all;
+var media_filter: pure.MediaFilter = .all;
+var favorites: std.ArrayList(pure.Row) = .empty;
+const max_favorites = 128;
 var query: pure.Field(1024) = .{};
 var page: u32 = 1;
 var more = true;
@@ -35,6 +38,13 @@ var motion: @import("../ui/media_preview.zig").Player = .{};
 var apply_options = false;
 var fill_desktop = true;
 var configured = false;
+var reset_scroll = true;
+var test_visible_cards: usize = 0;
+var test_intersecting_cards: usize = 0;
+var test_render_ms: i64 = 0;
+pub fn nativeStatsForTest() struct { total: usize, visible: usize, intersecting: usize, render_ms: i64 } {
+    return .{ .total = count, .visible = test_visible_cards, .intersecting = test_intersecting_cards, .render_ms = test_render_ms };
+}
 var templates: [4096]u8 = @splat(0);
 var browser_index: usize = 0;
 const browsers = [_][]const u8{ "No browser cookies", "chrome", "firefox", "safari", "edge", "brave" };
@@ -68,8 +78,47 @@ fn configure() void {
         break;
     };
     _ = gallery.binary(); // Resolve on owner thread before parallel jobs.
+    loadFavorites();
 }
-const Job = struct { gen: u32, source: Source, url: pure.Field(4096) = .{}, browser: pure.Field(32) = .{}, page: u32 = 1 };
+
+fn loadFavorites() void {
+    const data = alloc.alloc(u8, 1024 * 1024) catch return;
+    defer alloc.free(data);
+    const len = readSetting("wallpaper_favorites", data);
+    if (len == 0) return;
+    const saved = alloc.alloc(pure.Row, max_favorites) catch return;
+    defer alloc.free(saved);
+    const n = pure.parse(alloc, .saved, data[0..len], saved) catch return;
+    favorites.appendSlice(alloc, saved[0..n]) catch {};
+}
+fn favoriteIndex(row: *const pure.Row) ?usize {
+    for (favorites.items, 0..) |*saved, i| if (std.mem.eql(u8, saved.original.text(), row.original.text())) return i;
+    return null;
+}
+fn toggleFavorite(row: pure.Row) void {
+    const index = favoriteIndex(&row);
+    if (index) |i| {
+        _ = favorites.orderedRemove(i);
+    } else {
+        if (favorites.items.len >= max_favorites) {
+            state.showToast("Saved wallpapers are full. Remove one before adding another.");
+            return;
+        }
+        favorites.append(alloc, row) catch return;
+    }
+    const fields = alloc.alloc(pure.SavedRow, favorites.items.len) catch return;
+    defer alloc.free(fields);
+    for (favorites.items, 0..) |*saved, i| fields[i] = pure.SavedRow.from(saved);
+    const json = std.json.Stringify.valueAlloc(alloc, fields, .{}) catch return;
+    defer alloc.free(json);
+    if (!saveSetting("wallpaper_favorites", json)) {
+        if (index) |i| favorites.insert(alloc, i, row) catch {} else _ = favorites.pop();
+        state.showToast("Could not save wallpapers");
+        return;
+    }
+    state.showToast(if (index != null) "Wallpaper removed from Saved" else "Wallpaper saved");
+}
+const Job = struct { gen: u32, source: Source, url: pure.Field(4096) = .{}, browser: pure.Field(32) = .{}, page: u32 = 1, filter: pure.MediaFilter = .all };
 fn finish(job: Job, result: []const pure.Row, failed: bool) void {
     mutex.lock();
     defer mutex.unlock();
@@ -77,6 +126,7 @@ fn finish(job: Job, result: []const pure.Row, failed: bool) void {
     if (failed) failures += 1;
     const before = count;
     for (result) |row| {
+        if (!pure.accepts(job.filter, row.media)) continue;
         var duplicate = false;
         for (rows.items[0..count]) |*old| if (std.mem.eql(u8, old.original.text(), row.original.text())) {
             duplicate = true;
@@ -90,11 +140,11 @@ fn finish(job: Job, result: []const pure.Row, failed: bool) void {
             count = rows.items.len;
         }
     }
-    if (result.len >= 24 and count > before) more = true;
+    if ((result.len >= 24 or job.source == .mixkit or job.source == .commons) and count > before) more = true;
     pending -|= 1;
     state.wakeUi();
 }
-const Batch = struct { jobs: [17]Job, len: usize };
+const Batch = struct { jobs: [19]Job, len: usize };
 fn runBatch(batch: *Batch) void {
     defer alloc.destroy(batch);
     @import("browse_fanout.zig").run(Job, batch.jobs[0..batch.len], {}, performJob, .{
@@ -116,8 +166,8 @@ fn worker(job: Job) void {
     var private_url: [8192]u8 = undefined;
     defer @memset(&private_url, 0);
     const request_url = if (job.source == .wallhaven) authenticatedWallhavenUrl(job.url.text(), &private_url) else job.url.text();
-    const body = if (job.source == .wallhaven)
-        @import("reliable_fetch.zig").fetch(request_url, buffer, .{ .timeout_secs = 8, .connect_timeout_secs = 3, .impersonate = false, .cancel_epoch = cancel, .secret_url = true })
+    const body = if (job.source != .gallery)
+        @import("reliable_fetch.zig").fetch(request_url, buffer, .{ .timeout_secs = 8, .connect_timeout_secs = 3, .impersonate = false, .cancel_epoch = cancel, .secret_url = true, .user_agent = @import("../core/app_meta.zig").user_agent_with_url })
     else blk: {
         var range_buf: [40]u8 = undefined;
         const range = std.fmt.bufPrint(&range_buf, "{d}-{d}", .{ (job.page - 1) * 24 + 1, job.page * 24 }) catch unreachable;
@@ -195,17 +245,45 @@ pub fn search(text: []const u8) void {
     start(false);
 }
 fn start(append: bool) void {
+    if (!append) reset_scroll = true;
     const gen = generation.fetchAdd(1, .acq_rel) +% 1;
-    var jobs: [17]Job = undefined;
+    var jobs: [19]Job = undefined;
     var n: usize = 0;
     const is_url = pure.publicUrl(query.text());
-    if (!is_url and (selected == .all or selected == .wallhaven)) {
+    if (selected == .saved) {
+        mutex.lock();
+        defer mutex.unlock();
+        rows.clearRetainingCapacity();
+        for (favorites.items) |row| {
+            if (pure.accepts(media_filter, row.media) and @import("webcomic_sources_pure.zig").matches(row.title.text(), query.text())) rows.append(alloc, row) catch {};
+        }
+        count = rows.items.len;
+        pending = 0;
+        failures = 0;
+        more = false;
+        loaded = true;
+        return;
+    }
+    if (!is_url and media_filter != .videos and (selected == .all or selected == .wallhaven)) {
         var encoded: [3072]u8 = undefined;
         const q = @import("../core/http.zig").urlEncode(query.text(), &encoded);
         jobs[n] = .{ .gen = gen, .source = .wallhaven, .page = page };
         var url: [4096]u8 = undefined;
         jobs[n].url.set(std.fmt.bufPrint(&url, "https://wallhaven.cc/api/v1/search?q={s}&purity=100&sorting={s}&page={d}", .{ q, if (query.len == 0) "toplist" else "relevance", page }) catch "");
         n += 1;
+    }
+    if (!is_url and media_filter != .images) {
+        for ([_]Source{ .mixkit, .commons }) |source| {
+            if (selected != .all and selected != source) continue;
+            // Keep Commons' large general archive out of the mixed landing
+            // feed; the Videos filter and its source option expose it fully.
+            if (source == .commons and selected == .all and media_filter == .all) continue;
+            var url: [4096]u8 = undefined;
+            const target = pure.videoSearchUrl(source, query.text(), page, &url) orelse continue;
+            jobs[n] = .{ .gen = gen, .source = source, .page = page };
+            jobs[n].url.set(target);
+            n += 1;
+        }
     }
     if ((is_url or selected == .gallery or (selected == .all and query.len > 0)) and gallery.available()) {
         var lines = std.mem.splitScalar(u8, std.mem.sliceTo(&templates, 0), '\n');
@@ -220,6 +298,7 @@ fn start(append: bool) void {
             if (is_url) break;
         }
     }
+    for (jobs[0..n]) |*job| job.filter = media_filter;
     mutex.lock();
     if (!append) {
         rows.clearRetainingCapacity();
@@ -253,6 +332,14 @@ fn download(row: pure.Row) void {
     if (@import("downloads.zig").startUrl(row.original.text())) state.showToast("Wallpaper added to Downloads") else state.showToast("Choose a download folder in Settings");
 }
 pub fn renderContent() void {
+    const render_start = if (@import("builtin").is_test) io.monotonicMilliTimestamp() else 0;
+    if (@import("builtin").is_test) {
+        test_visible_cards = 0;
+        test_intersecting_cards = 0;
+    }
+    defer if (@import("builtin").is_test) {
+        test_render_ms = io.monotonicMilliTimestamp() - render_start;
+    };
     configure();
     desktop.poll();
     if (!loaded) search("");
@@ -262,20 +349,37 @@ pub fn renderContent() void {
         renderGallery(&toolbar);
         return;
     }
-    for ([_]Source{ .all, .wallhaven, .gallery }) |source| {
-        const name: []const u8 = switch (source) {
-            .all => "All",
-            .wallhaven => "Wallhaven",
-            .gallery => "gallery-dl",
-            else => unreachable,
-        };
-        if (filters.item(@src(), .{ .id = @intFromEnum(source), .label = name, .presentation = .label, .active = selected == source })) {
-            selected = source;
-            page = 1;
-            start(false);
-        }
+    const source_ids = [_]Source{ .all, .wallhaven, .mixkit, .commons, .gallery, .saved };
+    const source_names = [_][]const u8{ "All sources", "Wallhaven", "Mixkit videos", "Wikimedia videos", "Gallery sites", "Saved" };
+    var source_choice: usize = 0;
+    for (source_ids, 0..) |source, i| if (selected == source) {
+        source_choice = i;
+    };
+    const select_opts = dvui.Options{
+        .color_fill = .{ .color = theme.colors.bg_elevated },
+        .color_fill_hover = .{ .color = theme.colors.bg_hover },
+        .color_fill_press = .{ .color = theme.colors.bg_pressed },
+        .color_text = .{ .color = theme.colors.text_primary },
+        .color_border = .{ .color = theme.colors.border_subtle },
+        .corners = theme.dims.rad_sm,
+        .gravity_y = 0.5,
+    };
+    if (dvui.dropdown(@src(), &source_names, .{ .choice = &source_choice }, .{}, select_opts)) {
+        selected = source_ids[source_choice];
+        if (selected == .mixkit or selected == .commons) media_filter = .videos;
+        if (selected == .wallhaven) media_filter = .images;
+        page = 1;
+        start(false);
     }
-    for ([_]Source{ .pexels, .unsplash }) |source| if (filters.item(@src(), .{ .id = @intFromEnum(source), .label = if (source == .pexels) "Pexels" else "Unsplash", .icon = icons.tvg.lucide.@"external-link", .presentation = .icon_label })) external(source);
+    const media_names = [_][]const u8{ "All media", "Images", "Videos & GIFs" };
+    var media_choice: usize = @backingInt(media_filter);
+    if (dvui.dropdown(@src(), &media_names, .{ .choice = &media_choice }, .{}, select_opts)) {
+        media_filter = @fromBackingInt(@intCast(media_choice));
+        if ((selected == .wallhaven and media_filter == .videos) or ((selected == .mixkit or selected == .commons) and media_filter == .images)) selected = .all;
+        page = 1;
+        start(false);
+    }
+    for ([_]Source{ .pexels, .unsplash }) |source| if (filters.item(@src(), .{ .id = @backingInt(source), .label = if (source == .pexels) "Pexels" else "Unsplash", .icon = icons.tvg.lucide.@"external-link", .presentation = if (toolbar.compact) .icon else .icon_label })) external(source);
     if (components.iconButton(@src(), icons.tvg.lucide.@"refresh-cw", "Refresh wallpapers", false)) {
         page = 1;
         start(false);
@@ -293,13 +397,29 @@ pub fn renderContent() void {
     }
     toolbar.deinit();
     if (total == 0) {
-        if (busy) components.coverSkeletonGrid(@src(), 95000, 3, 240, 150, 28, 3) else components.emptyState(icons.tvg.lucide.image, "No wallpapers found", if (failed > 0) "Source unavailable. Retry or check Connect." else "Search for a theme or paste a gallery link.");
+        if (busy) {
+            components.coverSkeletonGrid(@src(), 95000, 3, 240, 150, 28, 3);
+        } else if (selected == .saved) {
+            if (components.emptyStateCta(icons.tvg.lucide.heart, "No saved wallpapers", "Open a wallpaper and select Save to keep it here.", "Browse wallpapers")) {
+                selected = .all;
+                query.set("");
+                page = 1;
+                start(false);
+            }
+        } else if (components.emptyStateCta(icons.tvg.lucide.image, "No wallpapers found", if (failed > 0) "Source unavailable. Try again or choose another source." else "Try another theme, or switch between images and videos.", "Try again")) {
+            page = 1;
+            start(false);
+        }
         return;
     }
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
     defer scroll.deinit();
+    if (reset_scroll) {
+        scroll.si.scrollToOffset(.vertical, 0);
+        reset_scroll = false;
+    }
     const width = @max(240, scroll.data().contentRect().w);
-    const cols: usize = @max(1, @as(usize, @intFromFloat(width / 340)));
+    const cols: usize = @max(1, @as(usize, @intFromFloat(width / 280)));
     const w = (width / @as(f32, @floatFromInt(cols))) - 8;
     const h = w * 9 / 16;
     const pitch = h + 8;
@@ -313,6 +433,7 @@ pub fn renderContent() void {
         var line = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = r, .expand = .horizontal });
         defer line.deinit();
         for (r * cols..@min(total, (r + 1) * cols)) |i| {
+            if (@import("builtin").is_test) test_visible_cards += 1;
             mutex.lock();
             const row = rows.items[i];
             mutex.unlock();
@@ -322,6 +443,10 @@ pub fn renderContent() void {
             button.init(@src(), .{}, .{ .id_extra = i, .min_size_content = .{ .w = w, .h = h }, .max_size_content = .{ .w = w, .h = h }, .padding = dvui.Rect.all(0), .background = true, .color_fill = .{ .color = theme.colors.bg_elevated }, .corners = theme.dims.rad_md });
             button.processEvents();
             button.drawBackground();
+            if (@import("builtin").is_test) {
+                const intersection = button.data().borderRectScale().r.intersect(scroll.data().contentRectScale().r);
+                if (intersection.w > 0 and intersection.h > 0) test_intersecting_cards += 1;
+            }
             var stack = dvui.overlay(@src(), .{ .min_size_content = .{ .w = w, .h = h }, .max_size_content = .{ .w = w, .h = h } });
             if (images.get(row.preview.text())) |tex| {
                 const crop = @import("../ui/search_gallery_pure.zig").coverCrop(.{ .w = @floatFromInt(tex.width), .h = @floatFromInt(tex.height) }, .{ .w = w, .h = h });
@@ -330,9 +455,13 @@ pub fn renderContent() void {
             if (row.media != .image) {
                 _ = dvui.label(@src(), "{s}", .{if (row.media == .gif) "GIF" else "VIDEO"}, .{ .gravity_x = 1, .gravity_y = 0, .padding = dvui.Rect.all(6), .background = true, .color_fill = .{ .color = theme.playerGlass(200) }, .color_text = .{ .color = dvui.Color.white }, .font = dvui.themeGet().font_body.withSize(11) });
             }
-            if (button.hovered()) {
+            if (button.hovered() or dvui.focusedWidgetId() == button.data().id) {
                 var caption = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 1, .expand = .horizontal, .background = true, .color_fill = .{ .color = theme.playerGlass(210) }, .padding = dvui.Rect.all(8) });
-                _ = dvui.label(@src(), "{d} × {d}", .{ row.width, row.height }, .{ .font = dvui.themeGet().font_body.withSize(12), .color_text = .{ .color = dvui.Color.white } });
+                if (row.width > 0 and row.height > 0) {
+                    _ = dvui.label(@src(), "{d} × {d}", .{ row.width, row.height }, .{ .font = dvui.themeGet().font_body.withSize(12), .color_text = .{ .color = theme.colors.text_primary } });
+                } else {
+                    _ = dvui.label(@src(), "{s}", .{row.author.text()}, .{ .font = dvui.themeGet().font_body.withSize(12), .color_text = .{ .color = theme.colors.text_primary } });
+                }
                 caption.deinit();
             }
             stack.deinit();
@@ -351,11 +480,12 @@ pub fn renderContent() void {
     }
 }
 fn openGallery(index: usize) void {
-    motion.deinit();
     mutex.lock();
     const row = if (index < count) rows.items[index] else pure.Row{};
     mutex.unlock();
-    if (row.media != .image) _ = motion.start(row.original.text(), row.page.text());
+    if (row.media != .image) {
+        _ = motion.start(if (row.motion_preview.len > 0) row.motion_preview.text() else row.original.text(), row.page.text());
+    } else motion.stop();
     preview = index;
     actual_size = false;
     full_image.reset();
@@ -365,6 +495,7 @@ fn closeGallery() void {
     motion.deinit();
     preview = null;
     full_image.reset();
+    if (selected == .saved) start(false);
 }
 fn moveGallery(direction: i32) void {
     mutex.lock();
@@ -380,9 +511,26 @@ pub fn galleryKey(key: dvui.enums.Key) bool {
         .left => moveGallery(-1),
         .right => moveGallery(1),
         .escape => closeGallery(),
+        .home => openGallery(0),
+        .end => {
+            mutex.lock();
+            const last = count -| 1;
+            mutex.unlock();
+            openGallery(last);
+        },
+        .space => if (motion.handle != null) motion.togglePause(),
+        .s => {
+            mutex.lock();
+            const row = if ((preview orelse count) < count) rows.items[preview.?] else pure.Row{};
+            mutex.unlock();
+            if (row.original.len > 0) toggleFavorite(row);
+        },
         else => return false,
     }
     return true;
+}
+pub fn capturesKeyboard() bool {
+    return preview != null and state.app.browse_source == .Wallpapers and state.app.router.current == .browse and !state.app.command_palette_open and !state.app.cheatsheet_open and !state.app.settings_open;
 }
 fn renderGallery(toolbar: anytype) void {
     mutex.lock();
@@ -404,7 +552,9 @@ fn renderGallery(toolbar: anytype) void {
         dvui.focusWidget(null, null, null);
     }
     if (row.media != .image and components.iconButton(@src(), if (motion.paused) icons.tvg.lucide.play else icons.tvg.lucide.pause, "Play / pause motion preview", false)) motion.togglePause();
-    if (components.iconButton(@src(), icons.tvg.lucide.monitor, "Set as desktop wallpaper", apply_options)) apply_options = !apply_options;
+    if (components.actionButton(@src(), if (row.media == .image) "Apply wallpaper" else "Apply live wallpaper", .primary, 95500)) desktop.request(row, fill_desktop);
+    if (components.iconButton(@src(), icons.tvg.lucide.settings, "Wallpaper placement options", apply_options)) apply_options = !apply_options;
+    if (components.iconButton(@src(), icons.tvg.lucide.heart, "Save wallpaper (S)", favoriteIndex(&row) != null)) toggleFavorite(row);
     if (components.iconButton(@src(), icons.tvg.lucide.images, "Show thumbnail strip", show_filmstrip)) {
         show_filmstrip = !show_filmstrip;
         dvui.focusWidget(null, null, null);
@@ -425,16 +575,32 @@ fn renderGallery(toolbar: anytype) void {
         } else dvui.spinner(@src(), .{ .gravity_y = 0.5, .min_size_content = theme.iconSize(.sm) });
     }
     toolbar.deinit();
+    {
+        var details = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = dvui.Rect.all(8) });
+        defer details.deinit();
+        var title_buf: [384]u8 = undefined;
+        const title = components.twoLineTitle(if (row.title.len > 0) row.title.text() else "Wallpaper", dvui.themeGet().font_body, @max(80, details.data().contentRect().w), &title_buf);
+        _ = dvui.label(@src(), "{s}", .{title}, .{ .expand = .horizontal, .color_text = .{ .color = theme.colors.text_primary } });
+        if (row.author.len > 0) {
+            var author_buf: [256]u8 = undefined;
+            const font = dvui.themeGet().font_body.withSize(theme.font_size.small);
+            const author = components.twoLineTitle(row.author.text(), font, @max(80, details.data().contentRect().w), &author_buf);
+            _ = dvui.label(@src(), "{s}", .{author}, .{ .expand = .horizontal, .font = font, .color_text = .{ .color = theme.colors.text_secondary } });
+        }
+    }
     if (apply_options) {
         var apply_bar = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = dvui.Rect.all(8) });
-        if (components.iconButton(@src(), icons.tvg.lucide.@"maximize-2", "Fill desktop", fill_desktop)) fill_desktop = true;
-        if (components.iconButton(@src(), icons.tvg.lucide.@"minimize-2", "Fit desktop", !fill_desktop)) fill_desktop = false;
-        if (components.actionButton(@src(), if (row.media == .image) "Apply wallpaper" else "Apply live wallpaper", .secondary, 0)) desktop.request(row, fill_desktop);
-        if (desktop.snapshot() == .active or desktop.snapshot() == .downloading or desktop.snapshot() == .applying) {
-            if (components.iconButton(@src(), icons.tvg.lucide.square, "Stop wallpaper / cancel", false)) desktop.stop();
-        }
+        if (filters.item(@src(), .{ .id = 95501, .label = "Fill desktop", .presentation = .label, .active = fill_desktop })) fill_desktop = true;
+        if (filters.item(@src(), .{ .id = 95502, .label = "Fit desktop", .presentation = .label, .active = !fill_desktop })) fill_desktop = false;
         apply_bar.deinit();
-        if (desktop.label().len > 0) components.bodyText(@src(), desktop.label(), theme.colors.text_secondary);
+    }
+    if (desktop.label().len > 0) {
+        var status_bar = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = dvui.Rect.all(8) });
+        components.bodyText(@src(), desktop.label(), theme.colors.text_secondary);
+        if (desktop.snapshot() == .active or desktop.snapshot() == .downloading or desktop.snapshot() == .applying) {
+            if (components.actionButton(@src(), if (desktop.snapshot() == .active) "Stop live wallpaper" else "Cancel", .secondary, 95503)) desktop.stop();
+        }
+        status_bar.deinit();
     }
     // Render the small cached image immediately, then replace it with the original.
     var canvas = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = true, .color_fill = .{ .color = dvui.Color.black } });
@@ -451,7 +617,7 @@ fn renderGallery(toolbar: anytype) void {
             const w = @min(available.w, available.h * 16 / 9);
             if (!motion.draw(w, w * 9 / 16)) {
                 if (motion.failed) {
-                    if (components.actionButton(@src(), "Retry motion preview", .secondary, 0)) _ = motion.start(row.original.text(), row.page.text());
+                    if (components.actionButton(@src(), "Retry motion preview", .secondary, 0)) _ = motion.start(if (row.motion_preview.len > 0) row.motion_preview.text() else row.original.text(), row.page.text());
                 } else dvui.spinner(@src(), .{ .gravity_x = 0.5, .gravity_y = 0.5 });
             }
         } else if (tex) |texture| {
@@ -563,6 +729,7 @@ pub fn renderConnections() void {
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = dvui.Rect.all(16) });
     defer content.deinit();
     components.sectionHeader("Wallpaper accounts");
+    components.bodyText(@src(), "Mixkit and Wikimedia videos work without an account. Connect more gallery sites below.", theme.colors.text_secondary);
     components.bodyText(@src(), if (gallery.available()) "gallery-dl is ready" else "Install gallery-dl to connect more sources", theme.colors.text_secondary);
     var site_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
     if (dvui.dropdown(@src(), &account_names, .{ .choice = &account_choice }, .{}, .{})) @memset(&auth_value, 0);
@@ -622,6 +789,9 @@ pub fn setNativeFixtureForTest() void {
     preview = null;
     apply_options = false;
     configured = true;
+    selected = .all;
+    media_filter = .all;
+    reset_scroll = true;
     loaded = true;
     rows.resize(alloc, 6) catch unreachable;
     count = 6;
@@ -635,6 +805,19 @@ pub fn setNativeFixtureForTest() void {
         row.original.set(row.preview.text());
         row.page.set(row.preview.text());
     }
+}
+pub fn setLargeFixtureForTest() void {
+    if (!@import("builtin").is_test) @compileError("test only");
+    var base: [6]pure.Row = undefined;
+    @memcpy(&base, rows.items[0..6]);
+    rows.resize(alloc, 2000) catch unreachable;
+    for (rows.items, 0..) |*row, i| {
+        row.* = base[i % base.len];
+        var text: [160]u8 = undefined;
+        row.title.set(std.fmt.bufPrint(&text, "Wallpaper performance fixture {d}", .{i}) catch unreachable);
+        row.original.set(std.fmt.bufPrint(&text, "https://fixture.test/full-wallpaper-{d}.jpg", .{i}) catch unreachable);
+    }
+    count = rows.items.len;
 }
 test "Browse regression wallpaper parser module" {
     _ = pure;
@@ -697,6 +880,9 @@ pub fn deinit() void {
     rows = .empty;
     count = 0;
     loaded = false;
+    favorites.deinit(alloc);
+    favorites = .empty;
+    configured = false;
 }
 test "Browse regression wallpaper pagination grows past old cap and stops duplicate pages" {
     defer deinit();

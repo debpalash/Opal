@@ -254,8 +254,8 @@ pub fn novaProviderLabel(engine: []const u8, out: []u8) []const u8 {
     }
     if (std.mem.indexOfScalar(u8, host, ':')) |port| host = host[0..port];
     if (host.len >= 4 and std.ascii.eqlIgnoreCase(host[0..4], "www.")) host = host[4..];
-    var label: []const u8 = if (std.ascii.eqlIgnoreCase(host, "share.dmhy.org") or std.ascii.eqlIgnoreCase(host, "dmhy.org")) "DMHY" else if (std.ascii.eqlIgnoreCase(host, "acg.rip")) "ACG.RIP" else if (std.ascii.eqlIgnoreCase(host, "subsplease.org")) "SubsPlease" else host;
-    const known = std.ascii.eqlIgnoreCase(host, "share.dmhy.org") or std.ascii.eqlIgnoreCase(host, "dmhy.org") or std.ascii.eqlIgnoreCase(host, "acg.rip") or std.ascii.eqlIgnoreCase(host, "subsplease.org");
+    var label: []const u8 = if (std.ascii.eqlIgnoreCase(host, "share.dmhy.org") or std.ascii.eqlIgnoreCase(host, "dmhy.org")) "DMHY" else if (std.ascii.eqlIgnoreCase(host, "acg.rip")) "ACG.RIP" else if (std.ascii.eqlIgnoreCase(host, "subsplease.org")) "SubsPlease" else if (std.ascii.eqlIgnoreCase(host, "mikanani.me") or std.ascii.eqlIgnoreCase(host, "mikanime.tv")) "Mikan" else host;
+    const known = std.ascii.eqlIgnoreCase(host, "share.dmhy.org") or std.ascii.eqlIgnoreCase(host, "dmhy.org") or std.ascii.eqlIgnoreCase(host, "acg.rip") or std.ascii.eqlIgnoreCase(host, "subsplease.org") or std.ascii.eqlIgnoreCase(host, "mikanani.me") or std.ascii.eqlIgnoreCase(host, "mikanime.tv");
     if (!known) if (std.mem.indexOfScalar(u8, label, '.')) |dot| {
         label = label[0..dot];
     };
@@ -275,4 +275,11 @@ test "Nova provider labels preserve new source identities and exclude credential
     try std.testing.expectEqualStrings("", novaProviderLabel("user:secret@example.test", &out));
     try std.testing.expectEqualStrings("share", novaProviderLabel("https://share.dmhy.org.evil.test/", &out));
     try std.testing.expectEqualStrings("Jackett", novaProviderLabel("Jackett", &out));
+}
+
+test "Mikan torrent provider label recognizes canonical and configured mirror hosts" {
+    var out: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("Mikan", novaProviderLabel("https://mikanani.me", &out));
+    try std.testing.expectEqualStrings("Mikan", novaProviderLabel("https://mikanime.tv", &out));
+    try std.testing.expectEqualStrings("mikanani", novaProviderLabel("https://mikanani.me.evil.test", &out));
 }

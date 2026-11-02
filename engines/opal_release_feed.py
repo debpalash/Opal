@@ -94,6 +94,11 @@ def rss_rows(body, base, allow_torrent=False):
             if not link:
                 continue
             key = link
+            # Standard RSS enclosure length is actual bytes for torrent feeds.
+            # Some publishers use 0/1 as placeholders; leave those unknown.
+            length = count(enclosure.get('length'))
+            if length > 1:
+                size = length
         else:
             continue
         if key in seen:

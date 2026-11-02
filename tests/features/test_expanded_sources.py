@@ -22,7 +22,7 @@ def test_github_torrent_sources():
                             cwd=PROJECT_DIR, capture_output=True, text=True, timeout=30)
     if result.returncode:
         return 'fail', (result.stderr or result.stdout)[-1200:]
-    return 'pass', 'DMHY, ACG.RIP, SubsPlease feed contracts and bounded network reads'
+    return 'pass', 'DMHY, ACG.RIP, Mikan and SubsPlease feed contracts and bounded network reads'
 
 
 @test("New GitHub sources have unique installable catalog entries and production adapters", "Sources")
@@ -32,7 +32,7 @@ def test_github_source_catalog():
     assert len(ids) == len(set(ids)), 'duplicate provider ids'
     assert len(ids) <= 128, 'source manager capacity exceeded'
     entries = {row['id']: row for row in rows}
-    for source in ('dmhy', 'acgrip', 'standardebooks', 'wuxiaclick', 'openverse', 'netlabels', 'somafm', 'comicfury', 'hianime'):
+    for source in ('dmhy', 'acgrip', 'mikan', 'poorlydrawnlines', 'readnovelfull', 'latestcomics', 'ysk', 'xoxo', 'standardebooks', 'wuxiaclick', 'openverse', 'netlabels', 'somafm', 'comicfury', 'hianime'):
         row = entries[source]
         assert row['endpoints']['base'].startswith('https://'), source
         assert row['file'] == f'plugins/{source}.json', source
@@ -47,7 +47,7 @@ def test_github_source_catalog():
     assert 'resolveInstalledAudio' in resolver
     for name in ('reading_provider_pure', 'audio_sources_pure'):
         assert name in (PROJECT_DIR / 'build.zig').read_text(), name
-    return 'pass', 'Ten new installed providers with owned endpoints and cancellable search; existing SubsPlease enhanced without duplication'
+    return 'pass', 'Installable providers include Mikan, Poorly Drawn Lines and ReadNovelFull; owned endpoints and cancellable search'
 
 
 @test("Public audio Browse exposes installed providers and license attribution on both clients", "Sources")
@@ -160,3 +160,20 @@ def test_verified_webcomic_sources():
     assert '"webcomic_sources_pure"' in (PROJECT_DIR / 'build.zig').read_text()
     assert (PROJECT_DIR / 'tests/test_webcomic_sources_live.py').exists()
     return 'pass', 'Unique definitions; installed xkcd archive/number and SMBC recent discovery to bounded full-image reader'
+
+
+@test("Western comic sources expose complete issues in native and remote readers", "Sources")
+def test_western_comic_readers():
+    service = (PROJECT_DIR / 'src/services/western_comics.zig').read_text()
+    comics = (PROJECT_DIR / 'src/services/comics.zig').read_text()
+    api = (PROJECT_DIR / 'src/services/remote_comics_api.zig').read_text()
+    client = (PROJECT_DIR / 'web/js/media.js').read_text()
+    for source in ('latestcomics', 'ysk', 'xoxo'):
+        assert f'Source.{source}' in comics
+        assert f'{source}_installed' in api and f'd.{source}_installed' in client
+    assert 'western.load(value,' in comics
+    assert 'pure.latestBatch(doc.value)' in service and 'pure.yskIssues(doc.value' in service
+    assert 'pure.imagesUrl(' in service and '.cancel_epoch = cancel' in service
+    assert 'readerChapterRow(i, western_reader)' in comics
+    assert 'western_comics_pure' in (PROJECT_DIR / 'build.zig').read_text()
+    return 'pass', 'Three installable western catalogs, complete manifests, bounded pagination and issue navigation'

@@ -2,13 +2,13 @@
 const std = @import("std");
 const expanded = @import("expanded_reading_pure.zig");
 const text = @import("novels_pure.zig");
-pub const Source = enum { royalroad, novelfire, standardebooks, wuxiaclick };
+pub const Source = enum { royalroad, novelfire, readnovelfull, standardebooks, wuxiaclick };
 pub const MAX_ITEMS = 12;
 pub const Item = @import("reading_provider_pure.zig").Item;
 pub const Result = struct { count: usize = 0, valid_listing: bool = false };
 pub fn searchUrl(out: []u8, base: []const u8, source: Source, query: []const u8, page: u32) ?[]const u8 {
     return switch (source) {
-        .royalroad, .novelfire => expanded.novelSearchUrl(out, base, @tagName(source), query, page),
+        .royalroad, .novelfire, .readnovelfull => expanded.novelSearchUrl(out, base, @tagName(source), query, page),
         .standardebooks => @import("reading_provider_pure.zig").searchUrl(out, base, .standardebooks, query, page),
         .wuxiaclick => @import("reading_provider_pure.zig").searchUrl(out, base, .wuxiaclick, query, page),
     };
@@ -32,11 +32,12 @@ pub fn parseInto(body: []const u8, base: []const u8, source: Source, out: []Item
     }
     const listing = expanded.novelListingHtml(body, @tagName(source)) orelse return .{};
     var result: Result = .{ .valid_listing = true };
-    var iter = expanded.html.AnchorIter{ .html = listing, .path = if (source == .royalroad) "/fiction/" else "/book/" };
+    var iter = expanded.html.AnchorIter{ .html = listing, .path = if (source == .readnovelfull) "/" else if (source == .royalroad) "/fiction/" else "/book/" };
     while (iter.next()) |anchor| {
         if (std.mem.indexOf(u8, anchor.url, "/chapter") != null or std.mem.endsWith(u8, anchor.url, "/random")) continue;
         var item: Item = .{};
         const url = expanded.html.sourceUrl(&item.url, base, anchor.url) orelse continue;
+        if (source == .readnovelfull and !expanded.readNovelFullWork(url, base)) continue;
         item.url_len = url.len;
         item.title_len = text.htmlToText(anchor.title, &item.title);
         if (item.title_len == 0) continue;
@@ -57,6 +58,14 @@ pub fn parseInto(body: []const u8, base: []const u8, source: Source, out: []Item
         result.count += 1;
     }
     return result;
+}
+test "ReadNovelFull independent search preserves works and excludes chapter or category links" {
+    const body = "<div id=\"list-page\"><a href='/story-v1.html' title='Story'>Story</a><a href='/story/chapter-1.html'>Chapter</a><a href='/novel-list/search.html'>Category</a><a href='https://evil.test/other.html'>Other</a></div>";
+    var out: [2]Item = undefined;
+    const result = parseInto(body, "https://rnf.test", .readnovelfull, &out);
+    try std.testing.expect(result.valid_listing);
+    try std.testing.expectEqual(@as(usize, 1), result.count);
+    try std.testing.expectEqualStrings("https://rnf.test/story-v1.html", out[0].url[0..out[0].url_len]);
 }
 test "independent reading list owns valid works and merges cover without chapter or foreign links" {
     const html = "<a href='/book/outside'>Outside</a><div class=\"novel-list horizontal col2 chapters\"><a href='/book/real'>Real &amp; Good</a><a href='/book/real' title='Real'><img src='/cover.jpg'></a><a href='/book/real/chapter-1'>Chapter</a><a href='https://evil.test/book/bad'>Bad</a></div>";

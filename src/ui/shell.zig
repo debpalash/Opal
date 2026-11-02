@@ -358,8 +358,9 @@ fn renderTopNav(compact: bool, narrow: bool) void {
         dvui.refresh(null, @src(), null);
     }
     // Persistent navigation owns destinations; this row owns the single query.
-    if (!compact and state.app.router.canGoBack()) {
-        if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-left", "Back", false, true)) state.app.router.goBack();
+    if (!compact) {
+        if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-left", "Back", false, state.app.router.canGoBack())) state.app.router.goBack();
+        if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-right", "Forward", false, state.app.router.canGoForward())) state.app.router.goForward();
     }
     omnibox(narrow);
     if (state.app.router.current == .search) search_mod.renderShellSearchControls(compact);
@@ -478,6 +479,7 @@ fn chromeIconButton(src: std.builtin.SourceLocation, icon: []const u8, tooltip: 
         return false;
     }
     const clicked = dvui.buttonIcon(src, tooltip, icon, .{}, .{}, opts);
+    if (@import("builtin").is_test and std.mem.eql(u8, tooltip, "Clear search")) query_clear_bounds = data.borderRectScale().r;
     components.tip(src, data, tooltip);
     return clicked;
 }
@@ -537,7 +539,7 @@ fn renderSecondaryDestinations(compact: bool) void {
         closeOverflowMenu();
         state.app.router.goBack();
     }
-    if (state.app.router.canGoForward() and dvui.menuItemLabel(@src(), "Forward", .{}, item_opts) != null) {
+    if (compact and state.app.router.canGoForward() and dvui.menuItemLabel(@src(), "Forward", .{}, item_opts) != null) {
         closeOverflowMenu();
         state.app.router.goForward();
     }
@@ -671,7 +673,7 @@ fn omnibox(narrow: bool) void {
         .min_size_content = .{ .w = 80, .h = 30 },
         .background = true,
         .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
-        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+        .color_border = @import("color_compat.zig").wrap(if (query_was_focused) theme.colors.focus_ring else theme.colors.border_subtle),
         .border = dvui.Rect.all(1),
         .corners = theme.dims.rad_md,
         .margin = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = 0 },
@@ -696,11 +698,16 @@ fn omnibox(narrow: bool) void {
     });
     const entered = te.enter_pressed;
     query_bounds = te.data().borderRectScale().r;
+    query_id = te.data().id;
+    query_was_focused = dvui.focusedWidgetIdInCurrentSubwindow() == query_id;
     te.deinit();
 
     const len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
     if (len > 0 and chromeIconButton(@src(), icons.tvg.lucide.x, "Clear search", false, true)) {
         if (state.app.router.current == .search) search_mod.clearShellSearch() else @memset(&state.app.magnet_buf, 0);
+        dvui.focusWidget(query_id, null, null);
+        query_was_focused = true;
+        dvui.refresh(null, @src(), null);
         return;
     }
     const submitted = chromeIconButton(@src(), icons.tvg.lucide.search, "Search", false, len > 0);
@@ -800,7 +807,7 @@ fn scopeChip() void {
         var popup = dvui.floatingMenu(@src(), .{ .from = rect }, .{ .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface) });
         var choices = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface) });
         inline for (comptime @import("opal-reflect").fields(search_mod.scope_model.Scope)) |entry| {
-            const choice: search_mod.scope_model.Scope = @enumFromInt(entry.value);
+            const choice: search_mod.scope_model.Scope = @fromBackingInt(@intCast(entry.value));
             if (dvui.menuItemLabel(@src(), choice.label(), .{}, .{ .id_extra = entry.value, .expand = .horizontal, .color_text = @import("color_compat.zig").wrap(if (choice == scope) theme.colors.accent else theme.colors.text_primary) })) |_| {
                 popup.close();
                 search_mod.changeSearchScope(choice);
@@ -1460,7 +1467,7 @@ fn pluginSubTabs() void {
 pub fn pluginTabControls() void {
     var items: [router.PLUGIN_TABS.len]page_controls.Item = undefined;
     for (router.PLUGIN_TABS, &items) |tab, *item| item.* = .{ .id = @intFromEnum(tab), .label = router.pluginTabLabel(tab), .icon = pluginTabIcon(tab) };
-    if (page_controls.renderMenu(@src(), .{ .items = &items, .selected = @intFromEnum(state.app.plugin_tab) }, true)) |id| state.app.plugin_tab = @enumFromInt(id);
+    if (page_controls.renderMenu(@src(), .{ .items = &items, .selected = @backingInt(state.app.plugin_tab) }, true)) |id| state.app.plugin_tab = @fromBackingInt(@intCast(id));
 }
 
 fn pluginTabIcon(t: router.PluginTab) []const u8 {
@@ -1474,6 +1481,15 @@ fn pluginTabIcon(t: router.PluginTab) []const u8 {
 }
 
 var query_bounds: dvui.Rect.Physical = .{};
+var query_clear_bounds: dvui.Rect.Physical = .{};
+var query_id: ?dvui.Id = null;
+var query_was_focused = false;
+pub fn clearQueryBoundsForTest() dvui.Rect.Physical {
+    return query_clear_bounds;
+}
+pub fn queryFocusedForTest() bool {
+    return query_id != null and dvui.focusedWidgetIdInCurrentSubwindow() == query_id;
+}
 pub fn queryBoundsForTest() dvui.Rect.Physical {
     return query_bounds;
 }

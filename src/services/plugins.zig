@@ -1301,6 +1301,7 @@ fn renderSourcePlugins() void {
                 .stremio => icons.tvg.lucide.play,
                 .anime => icons.tvg.lucide.tv,
                 .comics => icons.tvg.lucide.@"book-open",
+                .novels => icons.tvg.lucide.book,
                 .metadata => icons.tvg.lucide.database,
                 .other => icons.tvg.lucide.puzzle,
             };
@@ -1377,6 +1378,7 @@ fn renderSourcePlugins() void {
                 .stremio => icons.tvg.lucide.play,
                 .anime => icons.tvg.lucide.tv,
                 .comics => icons.tvg.lucide.@"book-open",
+                .novels => icons.tvg.lucide.book,
                 .metadata => icons.tvg.lucide.database,
                 .other => icons.tvg.lucide.puzzle,
             };

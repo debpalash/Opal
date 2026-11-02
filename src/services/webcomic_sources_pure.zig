@@ -3,7 +3,25 @@ const std = @import("std");
 const html = @import("content_html_pure.zig");
 const audio = @import("audio_sources_pure.zig");
 pub const htmlSource = html.sourceUrl;
-pub const Provider = enum { xkcd, smbc };
+pub const Provider = enum {
+    xkcd,
+    smbc,
+    poorlydrawnlines,
+    pub fn author(self: Provider) []const u8 {
+        return switch (self) {
+            .xkcd => "Randall Munroe",
+            .smbc => "Zach Weinersmith",
+            .poorlydrawnlines => "Reza Farazmand",
+        };
+    }
+    pub fn label(self: Provider) []const u8 {
+        return switch (self) {
+            .xkcd => "xkcd",
+            .smbc => "SMBC",
+            .poorlydrawnlines => "Poorly Drawn Lines",
+        };
+    }
+};
 pub const Item = struct {
     title: [256]u8 = @splat(0),
     title_len: usize = 0,
@@ -16,6 +34,67 @@ pub const Item = struct {
     number: u32 = 0,
 };
 pub const Listing = struct { count: usize = 0, total: usize = 0, valid: bool = false };
+
+/// Official WordPress posts carry the full comic panel in content.rendered.
+/// Keep routes opaque IDs and require the publisher's own upload origin.
+pub fn parseWordpressPost(post: std.json.Value, base: []const u8, expected: ?u32) ?Item {
+    const id = audio.number(audio.field(post, "id"));
+    if (id <= 0 or id > std.math.maxInt(u32)) return null;
+    if (expected) |wanted| if (id != wanted) return null;
+    const content = audio.field(post, "content");
+    const protected = audio.field(content, "protected");
+    if (protected != .bool or protected.bool) return null;
+    var page_buf: [1024]u8 = undefined;
+    const page = html.sourceUrl(&page_buf, base, audio.text(post, "link")) orelse return null;
+    if (!std.mem.startsWith(u8, page[std.mem.trimEnd(u8, base, "/").len..], "/comic/")) return null;
+    const body = audio.text(content, "rendered");
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, body, pos, "<img")) |at| {
+        const end = std.mem.indexOfScalarPos(u8, body, at, '>') orelse return null;
+        pos = end + 1;
+        var image_buf: [1024]u8 = undefined;
+        const image = html.sourceUrl(&image_buf, base, html.attr(body[at..pos], "src") orelse continue) orelse continue;
+        if (!std.mem.startsWith(u8, image[std.mem.trimEnd(u8, base, "/").len..], "/wp-content/uploads/")) continue;
+        var item: Item = .{ .number = @intCast(id) };
+        item.title_len = @import("novels_pure.zig").htmlToText(audio.text(audio.field(post, "title"), "rendered"), &item.title);
+        if (item.title_len == 0) return null;
+        audio.copy(&item.image, &item.image_len, image);
+        audio.copy(&item.summary, &item.summary_len, "Poorly Drawn Lines · Reza Farazmand");
+        item.route_len = (std.fmt.bufPrint(&item.route, "poorlydrawnlines:{d}", .{id}) catch return null).len;
+        return item;
+    }
+    return null;
+}
+pub fn parseWordpressPosts(root: std.json.Value, base: []const u8, out: []Item) Listing {
+    if (root != .array) return .{};
+    var result: Listing = .{ .valid = true };
+    for (root.array.items) |post| {
+        const item = parseWordpressPost(post, base, null) orelse continue;
+        result.total += 1;
+        if (result.count < out.len) {
+            out[result.count] = item;
+            result.count += 1;
+        }
+    }
+    return result;
+}
+
+test "publisher WordPress comics read actual panels, preserve identity and reject protected or unrelated content" {
+    const json = "[{\"id\":42,\"link\":\"https://pdl.test/comic/duck/\",\"title\":{\"rendered\":\"Duck &amp; Bear\"},\"content\":{\"protected\":false,\"rendered\":\"<img src='/wp-content/uploads/duck.png'>\"}}]";
+    const doc = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
+    defer doc.deinit();
+    var rows: [2]Item = undefined;
+    const listing = parseWordpressPosts(doc.value, "https://pdl.test", &rows);
+    try std.testing.expect(listing.valid);
+    try std.testing.expectEqual(@as(usize, 1), listing.count);
+    try std.testing.expectEqualStrings("Duck & Bear", rows[0].title[0..rows[0].title_len]);
+    try std.testing.expectEqualStrings("poorlydrawnlines:42", rows[0].route[0..rows[0].route_len]);
+    try std.testing.expectEqualStrings("https://pdl.test/wp-content/uploads/duck.png", rows[0].image[0..rows[0].image_len]);
+    try std.testing.expect(parseWordpressPost(doc.value.array.items[0], "https://pdl.test", 43) == null);
+    try std.testing.expect(parseWordpressPost(doc.value.array.items[0], "https://other.test", null) == null);
+    doc.value.array.items[0].object.getPtr("content").?.object.getPtr("protected").?.* = .{ .bool = true };
+    try std.testing.expect(parseWordpressPost(doc.value.array.items[0], "https://pdl.test", null) == null);
+}
 pub fn matches(title: []const u8, query: []const u8) bool {
     if (query.len == 0) return true;
     if (query.len > title.len) return false;
@@ -185,6 +264,7 @@ test "xkcd verified numeric match remains visible to common title ranking" {
 test "public comic cache retains reader identities but excludes embedded credentials" {
     const cache = @import("search_content_pure.zig");
     try std.testing.expect(cache.cacheEligible(.{ .source = "comics", .provider = "xkcd", .url = "xkcd:12" }));
+    try std.testing.expect(cache.cacheEligible(.{ .source = "comics", .provider = "poorlydrawnlines", .url = "poorlydrawnlines:42" }));
     try std.testing.expect(cache.cacheEligible(.{ .source = "comics", .provider = "smbc", .url = "smbc:https://www.smbc-comics.com/comic/specify" }));
     try std.testing.expect(!cache.cacheEligible(.{ .source = "comics", .provider = "smbc", .url = "smbc:https://user:pass@host/comic/specify" }));
 }

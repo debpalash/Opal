@@ -9,7 +9,7 @@ const state = @import("../core/state.zig");
 const model = @import("wallpapers_pure.zig");
 const pure = @import("wallpaper_desktop_pure.zig");
 const dvui = @import("dvui");
-pub const Status = enum(u8) { idle, downloading, applying, active, applied, stopped, download_failed, invalid_media, apply_failed, missing_player, unsupported };
+pub const Status = enum(u8) { idle, downloading, applying, active, applied, stopped, download_failed, invalid_media, apply_failed, missing_player, missing_host, unsupported };
 var status: std.atomic.Value(Status) = .init(.idle);
 var busy: std.atomic.Value(bool) = .init(false);
 var epoch: std.atomic.Value(u32) = .init(0);
@@ -31,6 +31,7 @@ pub fn label() []const u8 {
         .invalid_media => "Image could not be decoded",
         .apply_failed => "Desktop rejected the wallpaper. Check desktop permissions or installed helper.",
         .missing_player => "Install mpv (mpvpaper on supported Wayland desktops) to apply animated wallpapers.",
+        .missing_host => "Install xwinwrap to place live wallpaper behind desktop windows on X11.",
         .unsupported => "Animated wallpapers need X11 or a supported layer-shell Wayland desktop; GNOME/KDE Wayland are not supported.",
     };
 }
@@ -116,6 +117,11 @@ fn run(job: Job) void {
         publish(.missing_player);
         return;
     } else "";
+    var host_buf: [1024]u8 = undefined;
+    const host = if (live_process and target == .x11) findBinary("xwinwrap", &host_buf) orelse {
+        publish(.missing_host);
+        return;
+    } else null;
     var base: [512]u8 = undefined;
     var dir_buf: [768]u8 = undefined;
     const dir = std.fmt.bufPrint(&dir_buf, "{s}/wallpapers", .{@import("../core/paths.zig").configDir(&base)}) catch {
@@ -151,7 +157,7 @@ fn run(job: Job) void {
     publish(.applying);
     if (live_process) {
         var args: [32][]const u8 = undefined;
-        const argv = pure.animatedArgs(target, binary, media_path, job.fill, &args) orelse {
+        const argv = pure.animatedArgs(target, binary, host, media_path, job.fill, &args) orelse {
             publish(.unsupported);
             return;
         };

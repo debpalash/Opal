@@ -10,6 +10,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'engines'))
 
 
 class GitHubTorrentSources(unittest.TestCase):
+    def test_mikan_encoded_search_real_enclosure_size_and_deduplication(self):
+        entry = ('<item><title>Anime episode</title><link>https://mikanani.me/Home/Episode/abc</link>'
+                 '<enclosure url="https://mikanani.me/Download/abc.torrent" length="123456"/></item>')
+        rows, calls = self.run_engine('mikan', '<rss><channel>' + entry * 2 + '</channel></rss>')
+        self.assertEqual(len(rows), 1)
+        self.assertIn('/RSS/Search?searchstr=Naruto+dub%26sub', calls[0].args[0])
+        self.assertEqual(rows[0]['link'], 'https://mikanani.me/Download/abc.torrent')
+        self.assertEqual((rows[0]['size'], rows[0]['seeds'], rows[0]['leech']), (123456, -1, -1))
+        self.assertEqual(calls[0].kwargs['max_bytes'], 4 * 1024 * 1024)
+
+    def test_mikan_rejects_offsite_enclosures_and_invalid_categories(self):
+        rows, _ = self.run_engine('mikan', '<rss><channel><item><title>Wrong</title>'
+                                  '<enclosure url="https://unrelated.test/a.torrent"/></item></channel></rss>')
+        self.assertEqual(rows, [])
+        rows, calls = self.run_engine('mikan', '', category='music')
+        self.assertEqual((rows, calls), ([], []))
+
     def run_engine(self, name, body, query='Naruto%20dub%26sub', category='all'):
         module = importlib.import_module('engines.' + name)
         rows = []

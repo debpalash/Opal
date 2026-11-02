@@ -338,7 +338,7 @@ def test_comics_mangadex_source():
         # appended after it — assert membership, not the exact closing brace).
         "source enum variant": (bool(_re.search(r"const\s+Source\s*=\s*enum(?:\s*\([^)]*\))?\s*\{", svc))
                                 and "all, readallcomics, mangadex" in svc),
-        "source chip": '.{ .id = @intFromEnum(Source.mangadex), .label = "MangaDex"' in svc,
+        "source chip": '.{ .id = @backingInt(Source.mangadex), .label = "MangaDex"' in svc,
         # ── Keyless: the endpoint is a constant, NOT a source_config lookup ──
         "keyless api const": 'pub const MD_API = "https://api.mangadex.org"' in pure,
         "no source_config gate": 'source_config.zig").get("mangadex"' not in svc,
@@ -469,15 +469,7 @@ def test_bundled_manifest():
 
 @test("Command palette: Ctrl/Cmd+K overlay wired", "UI")
 def test_command_palette():
-    """Re-applied from feat/arch-build-distribution rather than merged.
-
-    That branch could not be merged: main has diverged past it, and 21 files
-    conflicted with main's newer code (its resolver.zig would have reinstated a
-    nova2 read that main deliberately replaced for dropping data). The palette
-    and its dependencies were additive, so they were lifted onto current main
-    instead — `listItem` needed no rewrite because every `tk` token it uses
-    already exists here.
-    """
+    """Structural wiring; native modal tests exercise focus and navigation."""
     cp = _src("src/ui/command_palette.zig")
     mn = _src("src/main.zig")
     inp = _src("src/ui/input.zig")
@@ -496,13 +488,16 @@ def test_command_palette():
         "ctrl/cmd+K bound": "key == .k and (mod.control() or mod.command())" in inp,
         "binding precedes the no-modifier switch":
             inp.index("key == .k and (mod.control()") < inp.index("key == .d and !mod.control()"),
+        "binding works from a focused field":
+            inp.index("key == .k and (mod.control()") < inp.index("// ── If a text entry"),
+        "destinations use shared navigation": "state.navigateToTabNow(tab)" in cp,
         # Its one missing dependency came across too.
         "listItem primitive present": "pub fn listItem(" in comp,
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
         return "fail", "command palette wiring incomplete: " + ", ".join(missing)
-    return "pass", "palette renders as an overlay, Ctrl/Cmd+K toggles it, listItem re-applied"
+    return "pass", "palette shortcut precedes text focus guard; commands use shared page navigation"
 
 
 @test("Movies/TV: live search follows typing, debounced", "UI")

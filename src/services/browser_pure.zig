@@ -424,9 +424,21 @@ fn hasKnownContentExtension(value: []const u8) bool {
 
 /// Determine the correct pane provider for a given URL
 pub fn isPublicWebcomicRoute(url: []const u8) bool {
+    if (@import("western_comics_pure.zig").splitRoute(url) != null) return true;
+    if (std.mem.startsWith(u8, url, "poorlydrawnlines:")) {
+        const id = url["poorlydrawnlines:".len..];
+        if (id.len == 0 or id.len > 10) return false;
+        for (id) |ch| if (!std.ascii.isDigit(ch)) return false;
+        return (std.fmt.parseInt(u32, id, 10) catch return false) > 0;
+    }
     if (std.mem.startsWith(u8, url, "xkcd:")) return @import("webcomic_sources_pure.zig").numberFromPath(url["xkcd:".len..]) != null;
     if (std.mem.startsWith(u8, url, "smbc:")) return @import("audio_sources_pure.zig").safeUrl(url["smbc:".len..]);
     return false;
+}
+test "Poorly Drawn Lines identities open the comic reader and reject nonnumeric routes" {
+    try std.testing.expectEqual(ContentRoute.comic_viewer, routeContent("poorlydrawnlines:42"));
+    try std.testing.expect(!isPublicWebcomicRoute("poorlydrawnlines:42?token=x"));
+    try std.testing.expect(!isPublicWebcomicRoute("poorlydrawnlines:https://unrelated.test"));
 }
 pub fn routeContent(url: []const u8) ContentRoute {
     if (isPublicWebcomicRoute(url)) return .comic_viewer;
@@ -717,4 +729,9 @@ test "saved public webcomic identities route to reader before URL normalization"
     try std.testing.expect(!isPublicWebcomicRoute("xkcd:12?token=x"));
     try std.testing.expect(!isPublicWebcomicRoute("smbc:javascript:alert(1)"));
     try std.testing.expect(!isPublicWebcomicRoute("smbc:https://user:pass@host/comic/a"));
+}
+
+test "western catalog and exact issue routes open the native comic viewer" {
+    try std.testing.expectEqual(ContentRoute.comic_viewer, routeContent("xoxo:https://xoxocomic.com/comic/invincible|https://xoxocomic.com/comic/invincible/issue-0"));
+    try std.testing.expect(!isPublicWebcomicRoute("ysk:javascript:alert(1)"));
 }

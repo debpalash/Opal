@@ -15,6 +15,7 @@ const workers = @import("../core/workers.zig");
 const pure = @import("comics_pure.zig");
 const expanded = @import("expanded_reading_pure.zig");
 const comicfury = @import("comicfury_pure.zig");
+const western = @import("western_comics.zig");
 // MangaThemesia (WPMangaThemesia) engine — pure, base-URL-driven HTML extraction
 // for the ~143 sites on that WordPress theme. comics.zig routes all its parsing
 // through this so the shipped logic IS the tested logic (see manga_themesia_pure).
@@ -486,7 +487,7 @@ fn fetchComicThread(gen: u32) void {
     defer workers.leave();
     const url = state.app.comic.url_buf[0..state.app.comic.url_len];
 
-    inline for (.{ @import("webcomic_sources.zig").Provider.xkcd, @import("webcomic_sources.zig").Provider.smbc }) |provider| {
+    inline for (.{ @import("webcomic_sources.zig").Provider.xkcd, @import("webcomic_sources.zig").Provider.smbc, @import("webcomic_sources.zig").Provider.poorlydrawnlines }) |provider| {
         const scheme = @tagName(provider) ++ ":";
         if (std.mem.startsWith(u8, url, scheme)) {
             const ok = loadPublicWebcomic(provider, url[scheme.len..], gen);
@@ -501,6 +502,13 @@ fn fetchComicThread(gen: u32) void {
         if (state.app.comic.dl_gen.load(.acquire) != gen) return;
         state.app.comic.is_loading.store(false, .release);
         if (ok) downloadPages(gen) else logs.pushLog("error", "comics", "ComicFury returned no readable pages", true);
+        return;
+    }
+    if (western.pure.splitRoute(url) != null) {
+        const ok = loadWesternComic(url, gen);
+        if (state.app.comic.dl_gen.load(.acquire) != gen) return;
+        state.app.comic.is_loading.store(false, .release);
+        if (ok) downloadPages(gen);
         return;
     }
     inline for (.{ "weebcentral", "comicbookplus" }) |id| {
@@ -1833,7 +1841,7 @@ pub fn copySearchSnapshot(out: []OwnedSearchRow) usize {
 //     source to search come from source_config ("suwayomi"/"base",
 //     "suwayomi"/"source"), so it is INERT until the user configures it. Cards
 //     carry a `suwayomi:<mangaId>` pseudo-URL routed by fetchComicThread.
-const Source = enum(u8) { all, readallcomics, mangadex, heancms, mangathemesia, madara, suwayomi, weebcentral, comicbookplus, comicfury, xkcd, smbc };
+const Source = enum(u8) { all, readallcomics, mangadex, heancms, mangathemesia, madara, suwayomi, weebcentral, comicbookplus, comicfury, xkcd, smbc, poorlydrawnlines, latestcomics, ysk, xoxo };
 var active_source = std.atomic.Value(Source).init(.all);
 
 /// The Suwayomi server base URL + the installed-source id to search, or null
@@ -1972,7 +1980,7 @@ pub fn selectedSourceName() []const u8 {
 /// Remote public providers share the same generation-owned Browse command queue.
 pub fn searchComicsFrom(query: []const u8, source: []const u8) bool {
     if (query.len >= pending_query.len) return false;
-    const src: Source = if (std.mem.eql(u8, source, "all")) .all else if (std.mem.eql(u8, source, "xkcd")) .xkcd else if (std.mem.eql(u8, source, "smbc")) .smbc else return false;
+    const src = std.meta.stringToEnum(Source, source) orelse return false;
     if (src != .all and !@import("../core/source_config.zig").has(source)) return false;
     queueComicSearch(query, src);
     return true;
@@ -2037,6 +2045,117 @@ fn fetchSearchHtml(url: [:0]const u8, dst: []u8) usize {
 /// Fetch + merge ONE readallcomics page, writing rows from slot `start`.
 /// Returns the number of new rows (0 if the source is not installed / errored).
 /// Worker-thread only.
+const WesternChapterRow = struct {
+    route_buf: [512]u8 = @splat(0),
+    route_len: usize = 0,
+    title_buf: [160]u8 = @splat(0),
+    title_len: usize = 0,
+    selected: bool = false,
+    fn route(self: *const @This()) []const u8 {
+        return self.route_buf[0..self.route_len];
+    }
+    fn title(self: *const @This()) []const u8 {
+        return self.title_buf[0..self.title_len];
+    }
+};
+var western_chapters: [512]WesternChapterRow = @splat(.{});
+var western_chapter_count: usize = 0;
+var western_chapter_mutex: @import("../core/sync.zig").Mutex = .{};
+fn readerChapterRow(index: usize, is_western: bool) ?WesternChapterRow {
+    if (is_western) {
+        western_chapter_mutex.lock();
+        defer western_chapter_mutex.unlock();
+        return if (index < western_chapter_count) western_chapters[index] else null;
+    }
+    const md = mangaDexChapterRow(index) orelse return null;
+    var row: WesternChapterRow = .{ .route_len = md.route_len, .title_len = md.title_len, .selected = md.selected };
+    @memcpy(row.route_buf[0..md.route_len], md.route());
+    @memcpy(row.title_buf[0..md.title_len], md.title());
+    return row;
+}
+fn loadWesternComic(value: []const u8, gen: u32) bool {
+    const book = western.load(value, .{ .epoch32 = .{ .value = &state.app.comic.dl_gen, .expected = gen } }) catch |err| {
+        if (state.app.comic.dl_gen.load(.acquire) == gen) {
+            logs.pushLog("error", "comics", @errorName(err), true);
+            state.showToastTyped(if (err == error.TooLarge) "This issue exceeds the reader limit; choose another issue" else "Could not load this issue. Try another source or retry.", .warning);
+        }
+        return false;
+    };
+    defer book.deinit();
+    if (state.app.comic.dl_gen.load(.acquire) != gen) return false;
+    const identity = western.pure.splitRoute(value) orelse return false;
+    var base_buf: [512]u8 = undefined;
+    const base = @import("../core/source_config.zig").copyValue(@tagName(identity.provider), "base", &base_buf) orelse return false;
+    for (book.pages[0..book.page_count], 0..) |*page, index| {
+        @memcpy(state.app.comic.page_urls[index][0..page.len], page.get());
+        state.app.comic.page_url_lens[index] = page.len;
+    }
+    state.app.comic.page_count = book.page_count;
+    @memcpy(state.app.comic.referer[0..book.referer.len], book.referer.get());
+    state.app.comic.referer_len = book.referer.len;
+    // Use the exact selected issue for resume and Continue, even when the
+    // reader was opened from a series card.
+    var selected_route: [512]u8 = undefined;
+    if (western.pure.route(&selected_route, identity.provider, base, identity.work, book.chapters[book.selected].url.get())) |route| {
+        @memcpy(state.app.comic.url_buf[0..route.len], route);
+        state.app.comic.url_len = route.len;
+        armPendingResume(route);
+    }
+    const title = book.chapters[book.selected].title.get();
+    @memcpy(state.app.comic.title[0..title.len], title);
+    state.app.comic.title_len = title.len;
+    if (book.selected > 0) if (western.pure.route(&state.app.comic.prev_url, identity.provider, base, identity.work, book.chapters[book.selected - 1].url.get())) |route| {
+        state.app.comic.prev_url_len = route.len;
+    };
+    if (book.selected + 1 < book.count) if (western.pure.route(&state.app.comic.next_url, identity.provider, base, identity.work, book.chapters[book.selected + 1].url.get())) |route| {
+        state.app.comic.next_url_len = route.len;
+    };
+    western_chapter_mutex.lock();
+    defer western_chapter_mutex.unlock();
+    western_chapter_count = 0;
+    for (book.chapters[0..book.count], 0..) |*chapter, index| {
+        var row: WesternChapterRow = .{ .selected = index == book.selected };
+        const route = western.pure.route(&row.route_buf, identity.provider, base, identity.work, chapter.url.get()) orelse continue;
+        row.route_len = route.len;
+        @memcpy(row.title_buf[0..chapter.title.len], chapter.title.get());
+        row.title_len = chapter.title.len;
+        western_chapters[western_chapter_count] = row;
+        western_chapter_count += 1;
+    }
+    return true;
+}
+fn fetchWesternComicPage(provider: western.Provider, query: []const u8, page: u32, gen: u32) usize {
+    const rows = alloc.alloc(western.pure.Item, RESULTS_PER_PAGE) catch return 0;
+    defer alloc.free(rows);
+    const count = western.search(provider, query, page, .{ .epoch32 = .{ .value = &search_gen, .expected = gen } }, rows);
+    search_rows_mutex.lock();
+    defer search_rows_mutex.unlock();
+    if (search_gen.load(.acquire) != gen) return 0;
+    const start = comicAppendStart(gen, 0);
+    var end = start;
+    for (rows[0..count]) |*row| {
+        if (end >= MAX_SEARCH_RESULTS) break;
+        if (row.route.len >= sr_urls[end].len) continue;
+        var duplicate = false;
+        for (0..end) |i| if (std.mem.eql(u8, sr_urls[i][0..sr_url_lens[i]], row.route.get())) {
+            duplicate = true;
+        };
+        if (duplicate) continue;
+        @memcpy(sr_urls[end][0..row.route.len], row.route.get());
+        sr_url_lens[end] = row.route.len;
+        const title_len = @min(row.title.len, sr_titles[end].len);
+        @memcpy(sr_titles[end][0..title_len], row.title.get()[0..title_len]);
+        sr_title_lens[end] = title_len;
+        @memcpy(sr_cover_urls[end][0..row.cover.len], row.cover.get());
+        sr_cover_url_lens[end] = row.cover.len;
+        sr_cover_gen[end] = gen;
+        sr_cover_failed[end] = false;
+        end += 1;
+    }
+    commitComicRows(gen, start, end);
+    return end - start;
+}
+
 fn fetchExpandedComicPage(query: []const u8, page: u32, gen: u32, start_hint: usize, id: []const u8) usize {
     const cfg = @import("../core/source_config.zig");
     var base_buf: [512]u8 = undefined;
@@ -2425,6 +2544,9 @@ fn comicProvider(wave: *ComicWave, src: Source) void {
     if (search_gen.load(.acquire) != gen) return;
     const n = switch (src) {
         .all => 0,
+        .latestcomics => fetchWesternComicPage(.latestcomics, q, wave.page, gen),
+        .ysk => fetchWesternComicPage(.ysk, q, wave.page, gen),
+        .xoxo => fetchWesternComicPage(.xoxo, q, wave.page, gen),
         .mangadex => fetchMangadexPage(q, (wave.page - 1) * RESULTS_PER_PAGE, gen, 0),
         .readallcomics => fetchReadAllComicsPage(q, wave.page, gen, 0),
         .heancms => fetchHeancmsPage(q, wave.page, gen, 0),
@@ -2436,6 +2558,7 @@ fn comicProvider(wave: *ComicWave, src: Source) void {
         .comicfury => fetchExpandedComicPage(q, wave.page, gen, 0, "comicfury"),
         .xkcd => fetchPublicWebcomicSearch(q, gen, 0, .xkcd),
         .smbc => fetchPublicWebcomicSearch(q, gen, 0, .smbc),
+        .poorlydrawnlines => fetchPublicWebcomicSearch(q, gen, 0, .poorlydrawnlines),
     };
     _ = wave.added.fetchAdd(n, .acq_rel);
 }
@@ -2443,17 +2566,17 @@ fn runComicWave(gen: u32, page: u32) usize {
     var wave: ComicWave = .{ .generation = gen, .page = page };
     wave.query_len = @min(sr_query_len, wave.query.len);
     @memcpy(wave.query[0..wave.query_len], sr_query_buf[0..wave.query_len]);
-    var jobs: [11]Source = undefined;
+    var jobs: [15]Source = undefined;
     var count: usize = 0;
     // Give installed sources the first lanes, so slow public catalogs cannot
     // hold up a fast local/user-configured provider's first visible cards.
-    inline for (.{ Source.weebcentral, Source.comicfury, Source.readallcomics, Source.heancms, Source.mangathemesia, Source.madara, Source.suwayomi, Source.comicbookplus, Source.xkcd, Source.smbc, Source.mangadex }) |src| {
+    inline for (.{ Source.latestcomics, Source.ysk, Source.xoxo, Source.weebcentral, Source.comicfury, Source.readallcomics, Source.heancms, Source.mangathemesia, Source.madara, Source.suwayomi, Source.comicbookplus, Source.xkcd, Source.smbc, Source.poorlydrawnlines, Source.mangadex }) |src| {
         const installed = switch (src) {
             .mangadex => true,
             .madara => madaraBase() != null,
             else => @import("../core/source_config.zig").has(@tagName(src)),
         };
-        if (installed and sourceActive(src) and (page == 1 or (src != .xkcd and src != .smbc))) {
+        if (installed and sourceActive(src) and (src != .xoxo or active_source.load(.acquire) == .xoxo) and (page == 1 or (src != .xkcd and src != .smbc and src != .poorlydrawnlines and src != .ysk))) {
             jobs[count] = src;
             count += 1;
         }
@@ -2474,7 +2597,7 @@ fn searchWorker(gen: u32) void {
     search_rows_mutex.lock();
     const full = sr_count >= MAX_SEARCH_RESULTS;
     search_rows_mutex.unlock();
-    if (added == 0 or full or active_source.load(.acquire) == .xkcd or active_source.load(.acquire) == .smbc) more_available = false;
+    if (added == 0 or full or active_source.load(.acquire) == .xkcd or active_source.load(.acquire) == .smbc or active_source.load(.acquire) == .poorlydrawnlines or active_source.load(.acquire) == .ysk) more_available = false;
     if (added > 0 and active_source.load(.acquire) == .all and
         std.mem.eql(u8, sr_query_buf[0..sr_query_len], DEFAULT_FEED_QUERY)) putDefaultCache();
 }
@@ -3302,20 +3425,24 @@ pub fn renderContent() void {
         }
 
         const sources = [_]browse_filters.Item{
-            .{ .id = @intFromEnum(Source.all), .label = "All", .presentation = .label },
-            .{ .id = @intFromEnum(Source.readallcomics), .label = "ReadAllComics", .presentation = .label },
-            .{ .id = @intFromEnum(Source.mangadex), .label = "MangaDex", .presentation = .label },
-            .{ .id = @intFromEnum(Source.weebcentral), .label = "Weeb Central", .presentation = .label, .visible = @import("../core/source_config.zig").has("weebcentral") },
-            .{ .id = @intFromEnum(Source.comicbookplus), .label = "ComicBookPlus", .presentation = .label, .visible = @import("../core/source_config.zig").has("comicbookplus") },
-            .{ .id = @intFromEnum(Source.comicfury), .label = "ComicFury", .presentation = .label, .visible = @import("../core/source_config.zig").has("comicfury") },
-            .{ .id = @intFromEnum(Source.xkcd), .label = "xkcd archive", .presentation = .label, .visible = @import("../core/source_config.zig").has("xkcd") },
-            .{ .id = @intFromEnum(Source.smbc), .label = "SMBC recent", .presentation = .label, .visible = @import("../core/source_config.zig").has("smbc") },
-            .{ .id = @intFromEnum(Source.mangathemesia), .label = "MangaThemesia", .presentation = .label },
-            .{ .id = @intFromEnum(Source.madara), .label = "Madara", .presentation = .label },
-            .{ .id = @intFromEnum(Source.suwayomi), .label = "Suwayomi", .presentation = .label, .visible = suwayomiBase() != null and suwayomiSourceId() != null },
+            .{ .id = @backingInt(Source.all), .label = "All", .presentation = .label },
+            .{ .id = @backingInt(Source.readallcomics), .label = "ReadAllComics", .presentation = .label },
+            .{ .id = @backingInt(Source.mangadex), .label = "MangaDex", .presentation = .label },
+            .{ .id = @backingInt(Source.weebcentral), .label = "Weeb Central", .presentation = .label, .visible = @import("../core/source_config.zig").has("weebcentral") },
+            .{ .id = @backingInt(Source.latestcomics), .label = "LatestComics", .presentation = .label, .visible = @import("../core/source_config.zig").has("latestcomics") },
+            .{ .id = @backingInt(Source.ysk), .label = "YSK Comics", .presentation = .label, .visible = @import("../core/source_config.zig").has("ysk") },
+            .{ .id = @backingInt(Source.xoxo), .label = "XOXO (experimental)", .presentation = .label, .visible = @import("../core/source_config.zig").has("xoxo") },
+            .{ .id = @backingInt(Source.comicbookplus), .label = "ComicBookPlus", .presentation = .label, .visible = @import("../core/source_config.zig").has("comicbookplus") },
+            .{ .id = @backingInt(Source.comicfury), .label = "ComicFury", .presentation = .label, .visible = @import("../core/source_config.zig").has("comicfury") },
+            .{ .id = @backingInt(Source.xkcd), .label = "xkcd archive", .presentation = .label, .visible = @import("../core/source_config.zig").has("xkcd") },
+            .{ .id = @backingInt(Source.smbc), .label = "SMBC recent", .presentation = .label, .visible = @import("../core/source_config.zig").has("smbc") },
+            .{ .id = @backingInt(Source.poorlydrawnlines), .label = "Poorly Drawn Lines", .presentation = .label, .visible = @import("../core/source_config.zig").has("poorlydrawnlines") },
+            .{ .id = @backingInt(Source.mangathemesia), .label = "MangaThemesia", .presentation = .label },
+            .{ .id = @backingInt(Source.madara), .label = "Madara", .presentation = .label },
+            .{ .id = @backingInt(Source.suwayomi), .label = "Suwayomi", .presentation = .label, .visible = suwayomiBase() != null and suwayomiSourceId() != null },
         };
-        if (bar.menu(@src(), .{ .items = &sources, .selected = @intFromEnum(active_source.load(.acquire)) })) |id| {
-            const source: Source = @enumFromInt(id);
+        if (bar.menu(@src(), .{ .items = &sources, .selected = @backingInt(active_source.load(.acquire)) })) |id| {
+            const source: Source = @fromBackingInt(@intCast(id));
             if (source != active_source.load(.acquire)) {
                 var query: [256]u8 = undefined;
                 @memcpy(query[0..sr_query_len], sr_query_buf[0..sr_query_len]);
@@ -3337,8 +3464,8 @@ pub fn renderContent() void {
         }
     }
 
-    if (active_source.load(.acquire) == .xkcd or active_source.load(.acquire) == .smbc) {
-        _ = dvui.label(@src(), "{s}", .{if (active_source.load(.acquire) == .xkcd) "Title archive or exact number; up to 6 matches. Refine the query for more." else "Recent publisher RSS; up to 6 matching main panels."}, .{
+    if (active_source.load(.acquire) == .xkcd or active_source.load(.acquire) == .smbc or active_source.load(.acquire) == .poorlydrawnlines) {
+        _ = dvui.label(@src(), "{s}", .{if (active_source.load(.acquire) == .xkcd) "Title archive or exact number; up to 6 matches. Refine the query for more." else if (active_source.load(.acquire) == .poorlydrawnlines) "Publisher search; up to 6 full comics. Refine the query for more." else "Recent publisher RSS; up to 6 matching main panels."}, .{
             .color_text = .{ .color = theme.colors.text_secondary },
             .font = dvui.themeGet().font_body.withSize(11),
             .margin = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
@@ -3675,7 +3802,8 @@ pub fn renderPaneContent(pane_idx: usize) void {
         return;
     }
 
-    if (pure.mangaIdFromRoute(state.app.comic.url_buf[0..state.app.comic.url_len]) != null) {
+    const western_reader = western.pure.splitRoute(state.app.comic.url_buf[0..state.app.comic.url_len]) != null;
+    if (western_reader or pure.mangaIdFromRoute(state.app.comic.url_buf[0..state.app.comic.url_len]) != null) {
         if (reader_components.actionButton(@src(), if (md_chapter_picker) "Hide chapters" else "Choose chapter", .secondary, 72000)) md_chapter_picker = !md_chapter_picker;
         if (md_chapter_picker) {
             var chapter_scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .horizontal, .min_size_content = .{ .h = 100 }, .max_size_content = .{ .w = std.math.floatMax(f32), .h = 180 } });
@@ -3683,7 +3811,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             var chapter_buttons = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .expand = .horizontal });
             defer chapter_buttons.deinit();
             var i: usize = 0;
-            while (mangaDexChapterRow(i)) |row| : (i += 1) {
+            while (readerChapterRow(i, western_reader)) |row| : (i += 1) {
                 var label_buf: [161]u8 = undefined;
                 const label = @import("opal-fmt").bufPrintZ(&label_buf, "{s}", .{safeUtf8(row.title())}) catch continue;
                 if (reader_components.actionButton(@src(), label, if (row.selected) .primary else .secondary, 72100 + i)) {

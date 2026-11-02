@@ -8,12 +8,14 @@ let pluginPollRemaining = 0;
 const pluginGroups = [
   ['torrent', 'Torrent indexers'], ['stremio', 'Stremio add-ons'],
   ['anime', 'Anime'], ['comics', 'Comics & Manga'],
+  ['novels', 'Novels & Books'],
   ['metadata', 'Metadata'], ['other', 'Other'],
 ];
 function pluginGroup(kind){
   const value = String(kind || '').toLowerCase();
   if (value === 'torrent' || value === 'stremio' || value === 'anime' || value === 'metadata') return value;
   if (value === 'comics' || value === 'manga') return 'comics';
+  if (value === 'novels' || value === 'novel' || value === 'books') return 'novels';
   return 'other';
 }
 function sourceHealthLabel(source){

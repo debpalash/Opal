@@ -4080,6 +4080,8 @@ pub fn renderCheatSheet() void {
     defer scale_w.deinit();
 
     const shortcuts = [_][2][]const u8{
+        .{ "Ctrl/Cmd+K", "Find a Page or Action" },
+        .{ "Ctrl/Cmd+[ / ]", "Back / Forward" },
         .{ "Space", "Play / Pause" },
         .{ "F F", "Toggle Fullscreen (double-tap)" },
         .{ "Left / Right", "Seek -10s / +10s" },

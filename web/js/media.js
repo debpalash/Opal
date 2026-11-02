@@ -247,6 +247,10 @@ function renderComicSources(d){
   const rows = [{id:'all',name:'All sources'}];
   if (d.xkcd_installed) rows.push({id:'xkcd',name:'xkcd · archive / number'});
   if (d.smbc_installed) rows.push({id:'smbc',name:'SMBC · recent comics'});
+  if (d.poorlydrawnlines_installed) rows.push({id:'poorlydrawnlines',name:'Poorly Drawn Lines'});
+  if (d.latestcomics_installed) rows.push({id:'latestcomics',name:'LatestComics'});
+  if (d.ysk_installed) rows.push({id:'ysk',name:'YSK Comics'});
+  if (d.xoxo_installed) rows.push({id:'xoxo',name:'XOXO (experimental)'});
   const markup = rows.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('');
   if (picker.innerHTML !== markup) picker.innerHTML = markup;
   picker.value = rows.some(r => r.id === d.source) ? d.source : 'all';
