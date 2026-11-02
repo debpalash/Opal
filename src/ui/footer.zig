@@ -37,6 +37,7 @@ pub const PickerKind = enum(i32) { none = -1, chapter = 0, aspect = 1, audio = 2
 pub var open_picker: PickerKind = .none;
 pub const MediaLayoutForTest = struct {
     menu_count: usize = 0,
+    youtube_quality: dvui.Rect.Physical = .{},
     menu: [32]dvui.Rect.Physical = @splat(.{}),
     dock_close: dvui.Rect.Physical = .{},
     dock_play: dvui.Rect.Physical = .{},
@@ -58,26 +59,26 @@ pub fn mediaLayoutForTest() MediaLayoutForTest {
 pub var picker_anchor: [11]dvui.Rect.Natural = @as([11]dvui.Rect.Natural, @splat(.{}));
 
 pub fn anchorFor(kind: PickerKind) dvui.Rect.Natural {
-    const i = @intFromEnum(kind);
+    const i = @backingInt(kind);
     if (i < 0 or i >= picker_anchor.len) return .{};
     return picker_anchor[@intCast(i)];
 }
 
 fn recordAnchor(kind: PickerKind, r: dvui.Rect.Physical) void {
-    const i = @intFromEnum(kind);
+    const i = @backingInt(kind);
     if (i < 0 or i >= picker_anchor.len) return;
     picker_anchor[@intCast(i)] = r.toNatural();
     // Language and online search share the CC trigger. Keep their drop-ups
     // attached while a window resize or fullscreen switch moves that trigger.
     if (kind == .sub) {
-        picker_anchor[@intCast(@intFromEnum(PickerKind.lang))] = r.toNatural();
-        picker_anchor[@intCast(@intFromEnum(PickerKind.subs))] = r.toNatural();
+        picker_anchor[@intCast(@backingInt(PickerKind.lang))] = r.toNatural();
+        picker_anchor[@intCast(@backingInt(PickerKind.subs))] = r.toNatural();
     }
     // Secondary panels share More after their menu item disappears. Refresh
     // those anchors each frame, without moving panels opened from CC.
     if (kind == .more) {
-        for ([_]PickerKind{ .aspect, .chapter, .quality, .audio_device, .playlist }) |secondary| {
-            picker_anchor[@intCast(@intFromEnum(secondary))] = r.toNatural();
+        for ([_]PickerKind{ .aspect, .chapter, .audio_device, .playlist }) |secondary| {
+            picker_anchor[@intCast(@backingInt(secondary))] = r.toNatural();
         }
     }
 }
@@ -122,7 +123,7 @@ fn togglePicker(kind: PickerKind) void {
     if (!was_open) {
         if (from_overflow and kind != .more) {
             // Hidden secondary chips inherit the persistent overflow trigger.
-            if (kind != .audio and kind != .sub) picker_anchor[@intCast(@intFromEnum(kind))] = anchorFor(.more);
+            if (kind != .audio and kind != .sub and kind != .quality) picker_anchor[@intCast(@backingInt(kind))] = anchorFor(.more);
         }
         open_picker = kind;
     }
@@ -1313,6 +1314,7 @@ fn pickerChipAtGravity(
         media_layout_for_test.menu[media_layout_for_test.menu_count] = btn_rect;
         media_layout_for_test.menu_count += 1;
     }
+    if (@import("builtin").is_test and kind == .quality) media_layout_for_test.youtube_quality = btn_rect;
     // The drop-up panel floats above this chip, so remember where it landed.
     if (kind != .none) recordAnchor(kind, btn_rect);
     var hovered_signal: bool = false;
@@ -1904,7 +1906,7 @@ pub fn renderLiquidGlassOverlay() void {
                 "Picture preset — Auto detects HDR and corrects it for this display",
                 .none,
             )) {
-                const next: u8 = (@intFromEnum(cur) + 1) % 6;
+                const next: u8 = (@backingInt(cur) + 1) % 6;
                 state.app.picture_preset = next;
                 // Apply to every open player, not just the active one — the
                 // preset is a global viewing preference, and a second window
@@ -2184,6 +2186,13 @@ pub fn renderLiquidGlassOverlay() void {
             }
         }
 
+        if (active_p.isYoutubeSource()) {
+            var quality_buf: [16]u8 = undefined;
+            const height = if (active_p.youtube_active_height > 0) @as(i64, active_p.youtube_active_height) else active_p.cached_video_height;
+            const quality = if (height > 0) std.fmt.bufPrint(&quality_buf, "{d}p", .{height}) catch "Quality" else "Quality";
+            if (pickerIconChip(@src(), 710, icons.tvg.lucide.monitor, if (bar_pt >= 720) quality else "", open_picker == .quality, "YouTube stream quality", .quality)) togglePicker(.quality);
+        }
+
         // Subs.
         {
             var sub_buf: [32]u8 = undefined;
@@ -2229,7 +2238,10 @@ pub fn renderLiquidGlassOverlay() void {
 
     // Secondary controls and transfer actions live above the single strip.
     if (open_picker == .more) {
-        if (@import("builtin").is_test) media_layout_for_test.menu_count = 0;
+        if (@import("builtin").is_test) {
+            media_layout_for_test.menu_count = 0;
+            media_layout_for_test.youtube_quality = .{};
+        }
         var open = true;
         var fw = pickers.beginDropUp(@src(), .more, 330, 420, &open);
         defer fw.deinit();
@@ -2283,26 +2295,13 @@ pub fn renderLiquidGlassOverlay() void {
             }
         }
 
-        // Both URL probes are case-insensitive substring searches over the loaded
-        // URL, and both results are only consumed by the quality chip below. Test
-        // the cheap conditions first so a shed or audio-only transport row does
-        // no scanning at all — this used to run on every rendered frame.
-        const video_is_playing = !active_p.is_loading and !active_p.cached_vid_no and
-            active_p.texture != null and active_p.cached_video_width > 0;
-        if (video_is_playing) {
-            const url = active_p.current_url[0..active_p.current_url_len];
-            const playing_youtube = std.ascii.findIgnoreCase(url, "youtube.com/") != null or
-                std.ascii.findIgnoreCase(url, "youtu.be/") != null;
-            if (playing_youtube) {
-                var quality_buf: [16]u8 = undefined;
-                const quality = if (active_p.youtube_active_height > 0)
-                    std.fmt.bufPrint(&quality_buf, "{d}p", .{active_p.youtube_active_height}) catch "Video"
-                else
-                    "Audio";
-                if (pickerMenuChip(@src(), 711, icons.tvg.lucide.monitor, quality, true, "YouTube stream quality", .quality)) {
-                    togglePicker(.quality);
-                }
-            }
+        // This is a source control, so it remains reachable while loading,
+        // after a low-resolution fallback, and when returning from audio only.
+        if (active_p.isYoutubeSource()) {
+            var quality_buf: [32]u8 = undefined;
+            const height = if (active_p.youtube_active_height > 0) @as(i64, active_p.youtube_active_height) else active_p.cached_video_height;
+            const quality = if (height > 0) std.fmt.bufPrint(&quality_buf, "Quality: {d}p", .{height}) catch "Quality" else "Stream quality";
+            if (pickerMenuChip(@src(), 711, icons.tvg.lucide.monitor, quality, true, "YouTube stream quality", .quality)) togglePicker(.quality);
         }
 
         // Aspect — reports state rather than acting; sheds with the

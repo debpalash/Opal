@@ -1489,6 +1489,9 @@ pub const MediaPlayer = struct {
             self.fallback_url_2_len = request.fallback_url_2.len;
         }
         self.audio_only_intent = request.audio_only;
+        // Invalidate cached lines and in-flight music requests before a video
+        // can reuse the previous song's UI. Audio tracks use exact ownership.
+        if (!request.audio_only) @import("../services/lyrics.zig").clear();
         self.youtube_default_retry_pending = std.ascii.findIgnoreCase(path_span, "youtube.com/") != null or
             std.ascii.findIgnoreCase(path_span, "youtu.be/") != null;
         self.youtube_fast_active = false;
@@ -1612,7 +1615,7 @@ pub const MediaPlayer = struct {
         };
     }
 
-    fn isYoutubeSource(self: *const MediaPlayer) bool {
+    pub fn isYoutubeSource(self: *const MediaPlayer) bool {
         if (self.current_url_len == 0) return false;
         const url = self.current_url[0..self.current_url_len];
         return std.ascii.findIgnoreCase(url, "youtube.com/") != null or
@@ -1689,6 +1692,10 @@ pub const MediaPlayer = struct {
         if (self.current_url_len == 0) return;
         const url = self.current_url[0..self.current_url_len];
         if (!self.isYoutubeSource()) return;
+        // Explicit quality selection also changes playback intent. A YouTube
+        // song opened as audio must be able to return to HD video.
+        self.audio_only_intent = state.app.ytdl_format_idx == 3;
+        _ = c.mpv.mpv_set_property_string(self.mpv_ctx, "vid", if (self.audio_only_intent) "no" else "auto");
         if (self.youtube_proxy_handle.valid()) {
             self.playYoutubeQuality(state.app.ytdl_format_idx, true);
             return;

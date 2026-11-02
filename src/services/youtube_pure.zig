@@ -345,3 +345,15 @@ test "thumbnail publication requires generation request identity and exact artwo
     try t.expect(!thumbnailCanPublish(7, 7, 42, 42, "video", "video", "https://image/b.jpg", "https://image/a.jpg"));
     try t.expect(!thumbnailOwnerMatches(0, 0, "video", "video", "url", "url"));
 }
+
+/// Auto-load controls only pagination, never the initial query or manual load.
+pub fn shouldAutoLoad(enabled: bool, near_bottom: bool, underfilled: bool, loading: bool, loading_more: bool) bool {
+    return enabled and (near_bottom or underfilled) and !loading and !loading_more;
+}
+test "YouTube auto-load toggle stops scroll fetches without removing manual loading" {
+    try std.testing.expect(!shouldAutoLoad(false, true, false, false, false));
+    try std.testing.expect(shouldAutoLoad(true, true, false, false, false));
+    try std.testing.expect(shouldAutoLoad(true, false, true, false, false));
+    try std.testing.expect(!shouldAutoLoad(true, true, true, true, false));
+    try std.testing.expect(!shouldAutoLoad(true, true, true, false, true));
+}

@@ -138,6 +138,7 @@ fn saveChecked() !void {
     setKey("dpi_bypass_enabled", if (state.app.dpi_bypass_enabled) "1" else "0");
     setKey("dpi_bypass_mode", if (state.app.dpi_bypass_mode_len > 0) state.app.dpi_bypass_mode[0..state.app.dpi_bypass_mode_len] else "sni");
     setKey("ytdl_format_idx", fmtInt(&fb, state.app.ytdl_format_idx));
+    setKey("youtube_auto_load_more", if (state.app.youtube_auto_load_more) "1" else "0");
     setKey("drawer_width_px", fmtFloat(&fb, state.app.drawer_width_px));
     // Persist only USER keys, never the build-time embedded default: writing the
     // default would pin it in the user's DB and defeat key rotation, and would
@@ -592,10 +593,10 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.grid_mode = if (std.mem.eql(u8, val, "1")) .cols_1 else if (std.mem.eql(u8, val, "2")) .cols_2 else if (std.mem.eql(u8, val, "3")) .cols_3 else if (std.mem.eql(u8, val, "4")) .cols_4 else .auto;
     } else if (std.mem.eql(u8, key, "watching_filter")) {
         const parsed = std.fmt.parseInt(u8, val, 10) catch 0;
-        state.app.watching_filter = if (parsed <= @intFromEnum(@import("../services/tv_pure.zig").Filter.dropped)) parsed else 0;
+        state.app.watching_filter = if (parsed <= @backingInt(@import("../services/tv_pure.zig").Filter.dropped)) parsed else 0;
     } else if (std.mem.eql(u8, key, "watching_kind_filter")) {
         const parsed = std.fmt.parseInt(u8, val, 10) catch 0;
-        state.app.watching_kind_filter = if (parsed <= @intFromEnum(@import("../services/tv_pure.zig").KindFilter.movie)) parsed else 0;
+        state.app.watching_kind_filter = if (parsed <= @backingInt(@import("../services/tv_pure.zig").KindFilter.movie)) parsed else 0;
     } else if (std.mem.eql(u8, key, "seek_sync")) {
         state.app.seek_sync = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "hwdec2")) {
@@ -748,7 +749,7 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         // Routed through the pure mapping so a corrupt value lands on `auto`
         // rather than whatever integer happened to be stored.
         const avp = @import("../player/av_pure.zig");
-        state.app.picture_preset = @intFromEnum(avp.picturePresetFromInt(std.fmt.parseInt(usize, val, 10) catch 0));
+        state.app.picture_preset = @backingInt(avp.picturePresetFromInt(std.fmt.parseInt(usize, val, 10) catch 0));
     } else if (std.mem.eql(u8, key, "download_rate_limit")) {
         state.app.download_rate_limit = @import("../player/av_pure.zig").sanitizeDownloadLimit(std.fmt.parseInt(i32, val, 10) catch 0);
         // Session may already be up (torrent_init worker) — apply now; if not,
@@ -777,6 +778,8 @@ fn applyConfig(key: []const u8, val: []const u8) void {
             @memcpy(state.app.dpi_bypass_mode[0..val.len], val);
             state.app.dpi_bypass_mode_len = val.len;
         }
+    } else if (std.mem.eql(u8, key, "youtube_auto_load_more")) {
+        state.app.youtube_auto_load_more = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "ytdl_format_idx")) {
         const idx = std.fmt.parseInt(usize, val, 10) catch 1;
         state.app.ytdl_format_idx = if (idx < 4) idx else 1;
@@ -811,10 +814,10 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.anime_skip_enabled = std.mem.eql(u8, val, "1");
         // Migration: configs older than `skip_mode` only had this toggle.
         if (!state.app.skip_mode_loaded)
-            state.app.skip_mode = @intFromEnum(skip_policy.legacyMode(state.app.anime_skip_enabled));
+            state.app.skip_mode = @backingInt(skip_policy.legacyMode(state.app.anime_skip_enabled));
     } else if (std.mem.eql(u8, key, "skip_mode")) {
         const m = skip_policy.modeFromInt(std.fmt.parseInt(u8, val, 10) catch 2);
-        state.app.skip_mode = @intFromEnum(m);
+        state.app.skip_mode = @backingInt(m);
         state.app.skip_mode_loaded = true;
         state.app.anime_skip_enabled = skip_policy.legacyEnabled(m);
     } else if (std.mem.eql(u8, key, "anime_skip_intro")) {

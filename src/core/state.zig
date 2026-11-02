@@ -741,6 +741,7 @@ pub const AppState = struct {
     resource_root: [1024]u8 = std.mem.zeroes([1024]u8),
     resource_root_len: usize = 0,
     ytdl_format_idx: usize = 1,
+    youtube_auto_load_more: bool = true,
     sub_lang_buf: [8]u8 = [_]u8{ 'e', 'n', 'g', 0, 0, 0, 0, 0 },
     sub_lang_len: usize = 3,
     /// Babel (services/babel.zig): live-caption source language ("auto" or a

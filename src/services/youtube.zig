@@ -1452,8 +1452,11 @@ pub fn renderContent() void {
         const max_y = scroll.si.scrollMax(.vertical);
         const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
         const underfilled = max_y <= 0;
-        if ((near_bottom or underfilled) and !state.app.yt.is_loading.load(.acquire) and !loading_more.load(.acquire)) {
+        if (yt_pure.shouldAutoLoad(state.app.youtube_auto_load_more, near_bottom, underfilled, state.app.yt.is_loading.load(.acquire), loading_more.load(.acquire))) {
             fetchMore();
+        }
+        if (!state.app.youtube_auto_load_more and !state.app.yt.is_loading.load(.acquire) and !loading_more.load(.acquire)) {
+            if (components.actionButton(@src(), "Load more videos", .secondary, 97502)) fetchMore();
         }
         if (loading_more.load(.acquire)) {
             dvui.spinner(@src(), .{
@@ -1599,6 +1602,28 @@ fn renderToolbar() void {
     })) {
         refreshCurrentFeed();
     }
+
+    const qualities = [_][]const u8{ "Quality: 720p", "Quality: 1080p", "Quality: 4K", "Audio only" };
+    var quality: usize = @min(state.app.ytdl_format_idx, qualities.len - 1);
+    if (dvui.dropdown(@src(), &qualities, .{ .choice = &quality }, .{}, .{
+        .color_fill = .{ .color = theme.colors.bg_elevated },
+        .color_fill_hover = .{ .color = theme.colors.bg_hover },
+        .color_fill_press = .{ .color = theme.colors.bg_pressed },
+        .color_text = .{ .color = theme.colors.text_primary },
+        .color_border = .{ .color = theme.colors.border_subtle },
+        .corners = theme.dims.rad_sm,
+        .gravity_y = 0.5,
+    })) {
+        state.app.ytdl_format_idx = quality;
+        state.markConfigDirty();
+        if (state.app.active_player_idx < state.app.players.items.len) {
+            const active = state.app.players.items[state.app.active_player_idx];
+            if (active.provider == .mpv and active.isYoutubeSource()) active.reloadYoutubeAtQuality();
+        }
+    }
+    const previous_auto_load = state.app.youtube_auto_load_more;
+    components.compactToggle(@src(), "Auto-load", &state.app.youtube_auto_load_more);
+    if (previous_auto_load != state.app.youtube_auto_load_more) state.markConfigDirty();
 
     // Category preset chips.
     toolbarDivider(901);

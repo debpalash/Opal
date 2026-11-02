@@ -135,3 +135,34 @@ def ytdlp_fallback_is_contained():
         return "fail", "yt-dlp containment incomplete: " + ", ".join(missing)
     return "pass", ("yt-dlp fallback remains incremental behind a 120s/16MiB "
                     "generation-cancelled whole-tree guard")
+
+
+@test("YouTube quality and auto-load controls remain accessible", "Video")
+def test_youtube_quality_and_auto_load():
+    svc = _src("src/services/youtube.zig")
+    footer = _src("src/ui/footer.zig")
+    player = _src("src/player/player.zig")
+    config = _src("src/core/config.zig")
+    assert '"Quality: 1080p"' in svc and '"Quality: 4K"' in svc
+    assert 'components.compactToggle(@src(), "Auto-load"' in svc
+    assert 'yt_pure.shouldAutoLoad(state.app.youtube_auto_load_more' in svc
+    assert '"Load more videos"' in svc
+    assert config.count('"youtube_auto_load_more"') == 2
+    assert 'active.isYoutubeSource()) active.reloadYoutubeAtQuality()' in svc
+    assert 'if (active_p.isYoutubeSource()) {' in footer and '710, icons.tvg.lucide.monitor' in footer
+    assert 'self.audio_only_intent = state.app.ytdl_format_idx == 3;' in player
+    assert 'video_is_playing' not in footer
+    return "pass", "Visible 720p/1080p/4K selector, persisted auto-load/manual pagination and recovery from audio-only"
+
+
+@test("Lyrics are scoped to the active track and cleared before video playback", "Player")
+def test_lyrics_video_transition():
+    music = _src("src/services/music_subsonic.zig")
+    player = _src("src/player/player.zig")
+    lyrics = _src("src/services/lyrics.zig")
+    assert 'lyrics.hasLyricsFor(active.np_subtitle' in music
+    assert '!active.audio_only_intent or active.is_loading' in music
+    assert 'if (!request.audio_only) @import("../services/lyrics.zig").clear();' in player
+    assert 'Browse regression song lyrics disappear when a show replaces music' in lyrics
+    assert '@import("services/lyrics.zig")' in _src("src/main.zig")
+    return "pass", "Song-to-show regression rejects stale timelines and late worker publication"
