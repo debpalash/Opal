@@ -120,6 +120,15 @@ var source_fixture = false;
 var source_name_rects: [source_repo.MAX]dvui.Rect.Physical = undefined;
 var source_meta_rects: [source_repo.MAX]dvui.Rect.Physical = undefined;
 var source_rect_count: usize = 0;
+/// Direct access from a content page must clear old search/installed filters.
+pub fn openSources(category: @import("plugins_pure.zig").Category) void {
+    src_category = category;
+    src_installed_only = false;
+    @memset(&src_filter_buf, 0);
+    state.app.plugin_tab = .sources;
+    state.navigateToTabNow(.Plugins);
+}
+
 pub fn setSourceFixtureForTest(enabled: bool) void {
     if (!@import("builtin").is_test) @compileError("test only");
     source_fixture = enabled;
@@ -1305,7 +1314,7 @@ fn renderSourcePlugins() void {
                 .metadata => icons.tvg.lucide.database,
                 .other => icons.tvg.lucide.puzzle,
             };
-            if (present and filters.item(@src(), .{ .id = 83001 + @as(usize, @intFromEnum(category)), .label = category.label(), .icon = glyph, .active = src_category == category })) src_category = category;
+            if (present and filters.item(@src(), .{ .id = 83001 + @as(usize, @backingInt(category)), .label = category.label(), .icon = glyph, .active = src_category == category })) src_category = category;
         }
         const catalog_state = pr.status.load(.acquire);
         if (catalog_state == .fetching) dvui.spinner(@src(), .{ .min_size_content = theme.iconSize(.sm), .gravity_y = 0.5 });
@@ -1345,13 +1354,13 @@ fn renderSourcePlugins() void {
 
         // Category header with its match count.
         _ = dvui.label(@src(), "{s}  ({d})", .{ cat.label(), cat_matches }, .{
-            .id_extra = @as(usize, @intFromEnum(cat)) + 82000,
+            .id_extra = @as(usize, @backingInt(cat)) + 82000,
             .color_text = .{ .color = theme.colors.text_secondary },
             .font = dvui.themeGet().font_body.withSize(12),
             .margin = .{ .x = 4, .y = 8, .w = 0, .h = 4 },
         });
 
-        var grid = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .id_extra = @intFromEnum(cat), .expand = .horizontal });
+        var grid = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .id_extra = @backingInt(cat), .expand = .horizontal });
         defer grid.deinit();
         const width = @max(240, grid.data().contentRect().w);
         const columns = @max(1, @min(3, @floor(width / 300)));
@@ -1472,7 +1481,7 @@ fn suwaTestWorker(job: SuwaTestJob) void {
     var response: [8192]u8 = undefined;
     var status: ?std.http.Status = null;
     _ = @import("../core/http.zig").fetch(url, &response, .{ .timeout_secs = 6, .status_out = &status });
-    const code: u32 = if (status) |value| @intFromEnum(value) else 0;
+    const code: u32 = if (status) |value| @backingInt(value) else 0;
     if (code == 200) publishSuwaResult(job.generation, "Connected — server reachable") else {
         var m: [64]u8 = undefined;
         publishSuwaResult(job.generation, std.fmt.bufPrint(&m, "No response (code {d})", .{code}) catch "No response");
@@ -2257,4 +2266,21 @@ fn renderSignedRepositories() void {
             };
         }
     }
+}
+
+test "Browse regression Add sources opens the requested category without stale filters" {
+    const previous_route = state.app.router;
+    const previous_tab = state.app.plugin_tab;
+    defer {
+        state.app.router = previous_route;
+        state.app.plugin_tab = previous_tab;
+        src_category = null;
+    }
+    src_installed_only = true;
+    @memcpy(src_filter_buf[0..5], "anime");
+    openSources(.comics);
+    try std.testing.expectEqual(@import("plugins_pure.zig").Category.comics, src_category.?);
+    try std.testing.expect(!src_installed_only and src_filter_buf[0] == 0);
+    try std.testing.expectEqual(@import("../core/router.zig").Route.plugins, state.app.router.current);
+    try std.testing.expectEqual(@import("../core/router.zig").PluginTab.sources, state.app.plugin_tab);
 }

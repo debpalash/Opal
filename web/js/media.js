@@ -251,6 +251,8 @@ function renderComicSources(d){
   if (d.latestcomics_installed) rows.push({id:'latestcomics',name:'LatestComics'});
   if (d.ysk_installed) rows.push({id:'ysk',name:'YSK Comics'});
   if (d.xoxo_installed) rows.push({id:'xoxo',name:'XOXO (experimental)'});
+  if (d.imagecomics_installed) rows.push({id:'imagecomics',name:'Image Comics · free first issues'});
+  if (d.globalcomix_installed) rows.push({id:'globalcomix',name:'GlobalComix · free issues'});
   const markup = rows.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('');
   if (picker.innerHTML !== markup) picker.innerHTML = markup;
   picker.value = rows.some(r => r.id === d.source) ? d.source : 'all';

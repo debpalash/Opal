@@ -6,11 +6,15 @@ pub const Provider = enum {
     latestcomics,
     ysk,
     xoxo,
+    imagecomics,
+    globalcomix,
     pub fn label(self: Provider) []const u8 {
         return switch (self) {
             .latestcomics => "LatestComics",
             .ysk => "YSK Comics",
-            .xoxo => "XOXO Comics",
+            .xoxo => "XOXO Comic",
+            .imagecomics => "Image Comics",
+            .globalcomix => "GlobalComix",
         };
     }
 };
@@ -55,7 +59,12 @@ pub fn series(provider: Provider, base: []const u8, url: []const u8) bool {
     const b = std.mem.trimEnd(u8, base, "/");
     if (!std.mem.startsWith(u8, url, b)) return false;
     const path = url[b.len..];
-    const prefix = if (provider == .latestcomics) "/en/comic/" else "/comic/";
+    const prefix = switch (provider) {
+        .latestcomics => "/en/comic/",
+        .imagecomics => "/read/",
+        .globalcomix => "/c/",
+        else => "/comic/",
+    };
     if (!std.mem.startsWith(u8, path, prefix)) return false;
     const name = std.mem.trimEnd(u8, path[prefix.len..], "/");
     return slug(name) and (provider != .latestcomics or std.mem.endsWith(u8, name, ".html"));
@@ -65,6 +74,18 @@ pub fn issueOwned(provider: Provider, base: []const u8, work: []const u8, url: [
     const b = std.mem.trimEnd(u8, base, "/");
     if (!std.mem.startsWith(u8, url, b)) return false;
     const path = url[b.len..];
+    if (provider == .imagecomics) return std.mem.eql(u8, work, url);
+    if (provider == .globalcomix) {
+        if (!std.mem.startsWith(u8, url, work)) return false;
+        const suffix = url[work.len..];
+        if (!std.mem.startsWith(u8, suffix, "/r/") or suffix.len != 39) return false;
+        for (suffix[3..], 0..) |ch, i| {
+            if (i == 8 or i == 13 or i == 18 or i == 23) {
+                if (ch != '-') return false;
+            } else if (!std.ascii.isHex(ch)) return false;
+        }
+        return true;
+    }
     if (provider == .ysk) return std.mem.startsWith(u8, path, "/chapter/") and slug(path[9..]);
     if (provider == .xoxo) {
         const stem = std.mem.trimEnd(u8, work, "/");
@@ -106,6 +127,8 @@ pub fn searchUrl(out: []u8, provider: Provider, base: []const u8, api: []const u
     if (!result.complete) return null;
     const b = std.mem.trimEnd(u8, base, "/");
     return switch (provider) {
+        .imagecomics => std.fmt.bufPrint(out, "{s}/comics/read-first-issues", .{b}) catch null,
+        .globalcomix => std.fmt.bufPrint(out, "{s}/v1/search/query?q={s}&context=series&p={d}&perpage=20&enrich=1", .{ std.mem.trimEnd(u8, api, "/"), result.bytes, page }) catch null,
         .ysk => if (page != 1 or q.len < 3) null else std.fmt.bufPrint(out, "{s}/search-comics-home?name={s}", .{ std.mem.trimEnd(u8, api, "/"), result.bytes }) catch null,
         .latestcomics => if (page == 1) std.fmt.bufPrint(out, "{s}/en/?s={s}&lang=en", .{ b, result.bytes }) catch null else std.fmt.bufPrint(out, "{s}/en/page/{d}/?s={s}&lang=en", .{ b, page, result.bytes }) catch null,
         .xoxo => if (q.len == 0) std.fmt.bufPrint(out, "{s}/comic-list?page={d}", .{ b, page }) catch null else std.fmt.bufPrint(out, "{s}/search-comic?keyword={s}&page={d}", .{ b, result.bytes, page }) catch null,

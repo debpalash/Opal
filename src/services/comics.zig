@@ -1841,7 +1841,7 @@ pub fn copySearchSnapshot(out: []OwnedSearchRow) usize {
 //     source to search come from source_config ("suwayomi"/"base",
 //     "suwayomi"/"source"), so it is INERT until the user configures it. Cards
 //     carry a `suwayomi:<mangaId>` pseudo-URL routed by fetchComicThread.
-const Source = enum(u8) { all, readallcomics, mangadex, heancms, mangathemesia, madara, suwayomi, weebcentral, comicbookplus, comicfury, xkcd, smbc, poorlydrawnlines, latestcomics, ysk, xoxo };
+const Source = enum(u8) { all, readallcomics, mangadex, heancms, mangathemesia, madara, suwayomi, weebcentral, comicbookplus, comicfury, xkcd, smbc, poorlydrawnlines, latestcomics, ysk, xoxo, imagecomics, globalcomix };
 var active_source = std.atomic.Value(Source).init(.all);
 
 /// The Suwayomi server base URL + the installed-source id to search, or null
@@ -2077,7 +2077,7 @@ fn loadWesternComic(value: []const u8, gen: u32) bool {
     const book = western.load(value, .{ .epoch32 = .{ .value = &state.app.comic.dl_gen, .expected = gen } }) catch |err| {
         if (state.app.comic.dl_gen.load(.acquire) == gen) {
             logs.pushLog("error", "comics", @errorName(err), true);
-            state.showToastTyped(if (err == error.TooLarge) "This issue exceeds the reader limit; choose another issue" else "Could not load this issue. Try another source or retry.", .warning);
+            state.showToastTyped(if (err == error.ConfirmationRequired) "This publisher requires age confirmation on its website" else if (err == error.TooLarge) "This issue exceeds the reader limit; choose another issue" else "Could not load this issue. Try another source or retry.", .warning);
         }
         return false;
     };
@@ -2547,6 +2547,8 @@ fn comicProvider(wave: *ComicWave, src: Source) void {
         .latestcomics => fetchWesternComicPage(.latestcomics, q, wave.page, gen),
         .ysk => fetchWesternComicPage(.ysk, q, wave.page, gen),
         .xoxo => fetchWesternComicPage(.xoxo, q, wave.page, gen),
+        .imagecomics => fetchWesternComicPage(.imagecomics, q, wave.page, gen),
+        .globalcomix => fetchWesternComicPage(.globalcomix, q, wave.page, gen),
         .mangadex => fetchMangadexPage(q, (wave.page - 1) * RESULTS_PER_PAGE, gen, 0),
         .readallcomics => fetchReadAllComicsPage(q, wave.page, gen, 0),
         .heancms => fetchHeancmsPage(q, wave.page, gen, 0),
@@ -2566,11 +2568,11 @@ fn runComicWave(gen: u32, page: u32) usize {
     var wave: ComicWave = .{ .generation = gen, .page = page };
     wave.query_len = @min(sr_query_len, wave.query.len);
     @memcpy(wave.query[0..wave.query_len], sr_query_buf[0..wave.query_len]);
-    var jobs: [15]Source = undefined;
+    var jobs: [17]Source = undefined;
     var count: usize = 0;
     // Give installed sources the first lanes, so slow public catalogs cannot
     // hold up a fast local/user-configured provider's first visible cards.
-    inline for (.{ Source.latestcomics, Source.ysk, Source.xoxo, Source.weebcentral, Source.comicfury, Source.readallcomics, Source.heancms, Source.mangathemesia, Source.madara, Source.suwayomi, Source.comicbookplus, Source.xkcd, Source.smbc, Source.poorlydrawnlines, Source.mangadex }) |src| {
+    inline for (.{ Source.latestcomics, Source.ysk, Source.xoxo, Source.imagecomics, Source.globalcomix, Source.weebcentral, Source.comicfury, Source.readallcomics, Source.heancms, Source.mangathemesia, Source.madara, Source.suwayomi, Source.comicbookplus, Source.xkcd, Source.smbc, Source.poorlydrawnlines, Source.mangadex }) |src| {
         const installed = switch (src) {
             .mangadex => true,
             .madara => madaraBase() != null,
@@ -3432,6 +3434,8 @@ pub fn renderContent() void {
             .{ .id = @backingInt(Source.latestcomics), .label = "LatestComics", .presentation = .label, .visible = @import("../core/source_config.zig").has("latestcomics") },
             .{ .id = @backingInt(Source.ysk), .label = "YSK Comics", .presentation = .label, .visible = @import("../core/source_config.zig").has("ysk") },
             .{ .id = @backingInt(Source.xoxo), .label = "XOXO (experimental)", .presentation = .label, .visible = @import("../core/source_config.zig").has("xoxo") },
+            .{ .id = @backingInt(Source.imagecomics), .label = "Image Comics · free #1s", .presentation = .label, .visible = @import("../core/source_config.zig").has("imagecomics") },
+            .{ .id = @backingInt(Source.globalcomix), .label = "GlobalComix · free issues", .presentation = .label, .visible = @import("../core/source_config.zig").has("globalcomix") },
             .{ .id = @backingInt(Source.comicbookplus), .label = "ComicBookPlus", .presentation = .label, .visible = @import("../core/source_config.zig").has("comicbookplus") },
             .{ .id = @backingInt(Source.comicfury), .label = "ComicFury", .presentation = .label, .visible = @import("../core/source_config.zig").has("comicfury") },
             .{ .id = @backingInt(Source.xkcd), .label = "xkcd archive", .presentation = .label, .visible = @import("../core/source_config.zig").has("xkcd") },
@@ -3449,6 +3453,8 @@ pub fn renderContent() void {
                 queueComicSearch(query[0..sr_query_len], source);
             }
         }
+
+        if (browse_filters.item(@src(), .{ .id = 73501, .label = "Add sources", .icon = icons.tvg.lucide.plus, .presentation = .icon_label })) @import("plugins.zig").openSources(.comics);
 
         // Extensions — opens the Mihon extension browser (fetch a repo's
         // index.min.json, install/remove onto the Suwayomi server).

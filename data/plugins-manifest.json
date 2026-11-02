@@ -1161,7 +1161,7 @@
     },
     {
       "id": "xoxo",
-      "name": "XOXO Comics (experimental)",
+      "name": "XOXO Comic (experimental)",
       "type": "comics",
       "version": "1.0.0",
       "endpoints": {
@@ -1169,6 +1169,29 @@
       },
       "file": "plugins/xoxo.json",
       "note": "Experimental: western catalog and complete issue manifests. Image URLs currently return HTML for tested issues; use LatestComics or YSK for reading."
+    },
+    {
+      "id": "imagecomics",
+      "name": "Image Comics (free first issues)",
+      "type": "comics",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://imagecomics.com"
+      },
+      "file": "plugins/imagecomics.json",
+      "note": "Official publisher catalog, title search, and complete free first issues. Some titles require age confirmation on the publisher website."
+    },
+    {
+      "id": "globalcomix",
+      "name": "GlobalComix (free issues)",
+      "type": "comics",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://globalcomix.com",
+        "api": "https://api.globalcomix.com"
+      },
+      "file": "plugins/globalcomix.json",
+      "note": "Publisher and independent comics. Native reader includes complete free issues only; paid issues and partial previews are excluded."
     }
   ]
 }
