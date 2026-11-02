@@ -32,7 +32,7 @@ def test_github_source_catalog():
     assert len(ids) == len(set(ids)), 'duplicate provider ids'
     assert len(ids) <= 128, 'source manager capacity exceeded'
     entries = {row['id']: row for row in rows}
-    for source in ('dmhy', 'acgrip', 'mikan', 'poorlydrawnlines', 'readnovelfull', 'latestcomics', 'ysk', 'xoxo', 'standardebooks', 'wuxiaclick', 'openverse', 'netlabels', 'somafm', 'comicfury', 'hianime'):
+    for source in ('dmhy', 'acgrip', 'mikan', 'poorlydrawnlines', 'readnovelfull', 'latestcomics', 'ysk', 'xoxo', 'imagecomics', 'globalcomix', 'standardebooks', 'wuxiaclick', 'openverse', 'netlabels', 'somafm', 'comicfury', 'hianime'):
         row = entries[source]
         assert row['endpoints']['base'].startswith('https://'), source
         assert row['file'] == f'plugins/{source}.json', source
@@ -168,7 +168,7 @@ def test_western_comic_readers():
     comics = (PROJECT_DIR / 'src/services/comics.zig').read_text()
     api = (PROJECT_DIR / 'src/services/remote_comics_api.zig').read_text()
     client = (PROJECT_DIR / 'web/js/media.js').read_text()
-    for source in ('latestcomics', 'ysk', 'xoxo'):
+    for source in ('latestcomics', 'ysk', 'xoxo', 'imagecomics', 'globalcomix'):
         assert f'Source.{source}' in comics
         assert f'{source}_installed' in api and f'd.{source}_installed' in client
     assert 'western.load(value,' in comics
@@ -177,3 +177,17 @@ def test_western_comic_readers():
     assert 'readerChapterRow(i, western_reader)' in comics
     assert 'western_comics_pure' in (PROJECT_DIR / 'build.zig').read_text()
     return 'pass', 'Three installable western catalogs, complete manifests, bounded pagination and issue navigation'
+
+
+@test("Western publisher catalogs expose only complete free issues and direct source discovery", "Sources")
+def test_western_publisher_sources():
+    pure = (PROJECT_DIR / 'src/services/western_publishers_pure.zig').read_text()
+    service = (PROJECT_DIR / 'src/services/western_comics.zig').read_text()
+    comics = (PROJECT_DIR / 'src/services/comics.zig').read_text()
+    assert 'publishers.imageItems(' in service and 'publishers.globalItems(' in service
+    assert 'publishers.globalIssues(' in service and 'publishers.globalPages(' in service
+    assert 'free_page_count' in pure and 'display_paid_access_block' in pure
+    assert '.secret_headers = &.{.{ .name = "X-Gc-Client"' in service
+    assert 'openSources(.comics)' in comics and '"Add sources"' in comics
+    assert 'western_publishers_pure' in (PROJECT_DIR / 'build.zig').read_text()
+    return 'pass', 'Two publisher catalogs, complete free-issue guards, and direct Comics source installation route'

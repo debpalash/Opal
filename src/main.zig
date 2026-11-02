@@ -10,6 +10,7 @@ test "Anime playback module" {
     _ = @import("services/anime.zig");
 }
 test "Browse regression modules" {
+    _ = @import("services/plugins.zig");
     _ = @import("services/lyrics.zig");
     _ = @import("services/added_sources_native_test.zig");
     _ = @import("services/wallpapers.zig");

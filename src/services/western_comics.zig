@@ -6,13 +6,14 @@ const bounded = @import("../core/bounded_process.zig");
 const workers = @import("../core/workers.zig");
 pub const pure = @import("western_comics_pure.zig");
 pub const Provider = pure.Provider;
+const publishers = @import("western_publishers_pure.zig");
 const Endpoints = struct {
     base: pure.Field(512) = .{},
     api: pure.Field(512) = .{},
     fn read(provider: Provider) ?@This() {
         var result: @This() = .{};
         result.base.len = (config.copyValue(@tagName(provider), "base", &result.base.bytes) orelse return null).len;
-        if (provider == .ysk) result.api.len = (config.copyValue("ysk", "api", &result.api.bytes) orelse return null).len;
+        if (provider == .ysk or provider == .globalcomix) result.api.len = (config.copyValue(@tagName(provider), "api", &result.api.bytes) orelse return null).len;
         return result;
     }
 };
@@ -30,9 +31,11 @@ pub fn search(provider: Provider, query: []const u8, page: u32, cancel: ?bounded
     const endpoints = Endpoints.read(provider) orelse return 0;
     var address: [2048]u8 = undefined;
     const url = pure.searchUrl(&address, provider, endpoints.base.get(), endpoints.api.get(), query, page) orelse return 0;
+    if (provider == .globalcomix) return searchGlobal(&endpoints, url, cancel, out);
     const buf = alloc.alloc(u8, 4 * 1024 * 1024) catch return 0;
     defer alloc.free(buf);
     const body = get(provider, &endpoints, url, buf, cancel, null) orelse return 0;
+    if (provider == .imagecomics) return publishers.imageItems(body, endpoints.base.get(), query, page, out);
     if (provider != .ysk) return pure.htmlItems(body, provider, endpoints.base.get(), out);
     const doc = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return 0;
     defer doc.deinit();
@@ -49,7 +52,7 @@ pub const Book = struct {
         alloc.destroy(self);
     }
 };
-pub const Error = error{ Unavailable, InvalidRoute, TooLarge, MissingIssue, NoPages, OutOfMemory };
+pub const Error = error{ Unavailable, InvalidRoute, TooLarge, MissingIssue, NoPages, ConfirmationRequired, OutOfMemory };
 pub fn load(value: []const u8, cancel: ?bounded.CancelEpoch) Error!*Book {
     const identity = pure.splitRoute(value) orelse return error.InvalidRoute;
     const provider = identity.provider;
@@ -61,6 +64,10 @@ pub fn load(value: []const u8, cancel: ?bounded.CancelEpoch) Error!*Book {
     const buf = try alloc.alloc(u8, 4 * 1024 * 1024);
     defer alloc.free(buf);
     var address: [2048]u8 = undefined;
+    if (provider == .imagecomics or provider == .globalcomix) {
+        try loadPublisher(book, identity, &endpoints, cancel, buf);
+        return book;
+    }
     if (provider == .ysk) {
         var page: u32 = 1;
         while (page <= 1000) : (page += 1) {
@@ -149,4 +156,69 @@ pub fn load(value: []const u8, cancel: ?bounded.CancelEpoch) Error!*Book {
     }
     _ = book.referer.set(if (provider == .ysk) endpoints.base.get() else issue);
     return book;
+}
+
+fn getGlobal(endpoints: *const Endpoints, url: []const u8, client: []const u8, out: []u8, cancel: ?bounded.CancelEpoch) ?[]const u8 {
+    var headers: [4096]u8 = undefined;
+    const result = @import("source_request.zig").request("globalcomix", url, out, &headers, .{
+        .base = endpoints.api.get(),
+        .transport = .{ .timeout_secs = 15, .connect_timeout_secs = 6, .user_agent = "Mozilla/5.0", .referer = endpoints.base.get(), .headers = &.{ .{ .name = "Origin", .value = endpoints.base.get() }, .{ .name = "X-Gc-Identmode", .value = "cookie" } }, .secret_headers = &.{.{ .name = "X-Gc-Client", .value = client }}, .cancel_epoch = cancel, .https_only = true },
+    });
+    return if (result.ok()) result.body else null;
+}
+fn searchGlobal(endpoints: *const Endpoints, url: []const u8, cancel: ?bounded.CancelEpoch, out: []pure.Item) usize {
+    const buf = alloc.alloc(u8, 4 * 1024 * 1024) catch return 0;
+    defer alloc.free(buf);
+    const body = get(.globalcomix, endpoints, endpoints.base.get(), buf, cancel, null) orelse return 0;
+    const public_client = publishers.globalClient(body) orelse return 0;
+    var client: pure.Field(128) = .{};
+    _ = client.set(public_client);
+    const response = getGlobal(endpoints, url, client.get(), buf, cancel) orelse return 0;
+    const doc = std.json.parseFromSlice(std.json.Value, alloc, response, .{}) catch return 0;
+    defer doc.deinit();
+    return publishers.globalItems(doc.value, endpoints.base.get(), out);
+}
+fn loadPublisher(book: *Book, identity: pure.Route, endpoints: *const Endpoints, cancel: ?bounded.CancelEpoch, buf: []u8) Error!void {
+    const body = get(identity.provider, endpoints, identity.work, buf, cancel, null) orelse return error.Unavailable;
+    if (identity.provider == .imagecomics) {
+        if (std.mem.indexOf(u8, body, "Are you over 18?") != null) return error.ConfirmationRequired;
+        book.page_count = publishers.imagePages(body, identity.work, &book.pages) orelse return error.TooLarge;
+        if (book.page_count == 0) return error.NoPages;
+        book.count = 1;
+        _ = book.chapters[0].url.set(identity.work);
+        _ = book.chapters[0].title.set("Image Comics · Free first issue");
+        if (std.mem.indexOf(u8, body, "<title>")) |at| if (std.mem.indexOfPos(u8, body, at, "</title>")) |end| {
+            book.chapters[0].title.len = @import("novels_pure.zig").htmlToText(body[at + 7 .. end], &book.chapters[0].title.bytes);
+        };
+    } else {
+        const raw_client = publishers.globalClient(body) orelse return error.Unavailable;
+        var client: pure.Field(128) = .{};
+        _ = client.set(raw_client);
+        {
+            const state_body = publishers.globalState(body) orelse return error.Unavailable;
+            const doc = std.json.parseFromSlice(std.json.Value, alloc, state_body, .{}) catch return error.Unavailable;
+            defer doc.deinit();
+            book.count = publishers.globalIssues(doc.value, endpoints.base.get(), identity.work, &book.chapters) orelse return error.TooLarge;
+        }
+        if (book.count == 0) return error.NoPages;
+        pure.sortIssues(book.chapters[0..book.count]);
+        if (identity.issue.len > 0) {
+            var found = false;
+            for (book.chapters[0..book.count], 0..) |*chapter, i| if (std.mem.eql(u8, chapter.url.get(), identity.issue)) {
+                book.selected = i;
+                found = true;
+                break;
+            };
+            if (!found) return error.MissingIssue;
+        }
+        const issue = book.chapters[book.selected].url.get();
+        const id_start = (std.mem.lastIndexOfScalar(u8, issue, '/') orelse return error.InvalidRoute) + 1;
+        var address: [1024]u8 = undefined;
+        const url = std.fmt.bufPrint(&address, "{s}/v1/readV2/{s}", .{ std.mem.trimEnd(u8, endpoints.api.get(), "/"), issue[id_start..] }) catch return error.InvalidRoute;
+        const response = getGlobal(endpoints, url, client.get(), buf, cancel) orelse return error.Unavailable;
+        const doc = std.json.parseFromSlice(std.json.Value, alloc, response, .{}) catch return error.Unavailable;
+        defer doc.deinit();
+        book.page_count = publishers.globalPages(doc.value, &book.pages) orelse return error.NoPages;
+    }
+    _ = book.referer.set(identity.work);
 }

@@ -273,5 +273,25 @@
       "xoxo": "Experimental only: all four issue-list pages yield 170 issues and /all yields complete manifests. Tested image endpoints return HTML instead of image bytes. Excluded from automatic mixed/universal search; load probes image bytes and fails clearly.",
       "desktop_video": "macOS desktop-layer process verified locally. Windows uses mpv documented --wid=0 desktop embedding. X11 uses xwinwrap desktop window, Wayland uses mpvpaper on supported layer-shell compositors. Windows/Linux runtime verification remains outstanding."
     }
+  },
+  "western_publishers_2026_11_03": {
+    "imagecomics": {
+      "catalog": "https://imagecomics.com/comics/read-first-issues",
+      "reader": "https://imagecomics.com/read/skyward",
+      "live": "262 official catalog covers; complete Skyward first issue has 30 pages. First original page HTTP 206 image/jpeg, JPEG signature verified. Some titles require publisher age confirmation."
+    },
+    "globalcomix": {
+      "catalog": "https://globalcomix.com/browse",
+      "reader": "https://globalcomix.com/c/exciting-comics",
+      "live": "Public anonymous web-client configuration and JSON search/reader APIs. Exciting Comics directory exposes 59 releases, 2 complete free issues; initial free issue has 36 pages. First original page HTTP 206 image/jpeg. Paid-only series, paid pages and partial previews are excluded."
+    },
+    "unavailable": {
+      "readcomiconline.li": "DNS resolution failed.",
+      "readcomicsonline.ru": "HTTP 403 on homepage and index.php, including standard curl.",
+      "zipcomic.com": "HTTP 403 on canonical and www domains.",
+      "batcave.biz": "HTTP 403 on catalog and search.",
+      "comicextra.net": "Serves a redirect/JavaScript gate instead of catalog HTML.",
+      "viewcomics.org": "HTTP 410."
+    }
   }
 }

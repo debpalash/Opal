@@ -59,7 +59,7 @@ pub fn apiComics(stream: std.Io.net.Stream, api_path: []const u8, query: []const
         };
         defer a.free(json_buf);
         var w = std.Io.Writer.fixed(json_buf);
-        w.print("{{\"loading_more\":{s},\"has_more\":{s},\"loading\":{s},\"source\":\"{s}\",\"xkcd_installed\":{s},\"smbc_installed\":{s},\"poorlydrawnlines_installed\":{s},\"latestcomics_installed\":{s},\"ysk_installed\":{s},\"xoxo_installed\":{s},\"results\":", .{
+        w.print("{{\"loading_more\":{s},\"has_more\":{s},\"loading\":{s},\"source\":\"{s}\",\"xkcd_installed\":{s},\"smbc_installed\":{s},\"poorlydrawnlines_installed\":{s},\"latestcomics_installed\":{s},\"ysk_installed\":{s},\"xoxo_installed\":{s},\"imagecomics_installed\":{s},\"globalcomix_installed\":{s},\"results\":", .{
             if (comics_svc.loadingMoreResults()) "true" else "false",
             if (comics_svc.hasMoreResults()) "true" else "false",
             if (comics_svc.searching()) "true" else "false",
@@ -70,6 +70,8 @@ pub fn apiComics(stream: std.Io.net.Stream, api_path: []const u8, query: []const
             if (@import("../core/source_config.zig").has("latestcomics")) "true" else "false",
             if (@import("../core/source_config.zig").has("ysk")) "true" else "false",
             if (@import("../core/source_config.zig").has("xoxo")) "true" else "false",
+            if (@import("../core/source_config.zig").has("imagecomics")) "true" else "false",
+            if (@import("../core/source_config.zig").has("globalcomix")) "true" else "false",
         }) catch {
             sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"comic serialization failed\"}");
             return;

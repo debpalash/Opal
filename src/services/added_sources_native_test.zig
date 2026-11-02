@@ -164,6 +164,8 @@ test "Browse regression western optional live metadata pipeline in isolated conf
     const sources = [_]struct { provider: western.Provider, endpoints: []const u8, route: []const u8, minimum: usize }{
         .{ .provider = .latestcomics, .endpoints = "{\"base\":\"https://www.latestcomics.com\"}", .route = "latestcomics:https://www.latestcomics.com/en/comic/invincible-2003.html", .minimum = 144 },
         .{ .provider = .ysk, .endpoints = "{\"base\":\"https://www.ysk-comics.com\",\"api\":\"https://api.ysk-comics.com/api/v1\"}", .route = "ysk:https://www.ysk-comics.com/comic/Invincible-2003", .minimum = 13 },
+        .{ .provider = .imagecomics, .endpoints = "{\"base\":\"https://imagecomics.com\"}", .route = "imagecomics:https://imagecomics.com/read/skyward", .minimum = 1 },
+        .{ .provider = .globalcomix, .endpoints = "{\"base\":\"https://globalcomix.com\",\"api\":\"https://api.globalcomix.com\"}", .route = "globalcomix:https://globalcomix.com/c/exciting-comics", .minimum = 2 },
     };
     var generation: std.atomic.Value(u32) = .init(1);
     const cancel: @import("../core/bounded_process.zig").CancelEpoch = .{ .epoch32 = .{ .value = &generation, .expected = 1 } };
@@ -175,4 +177,47 @@ test "Browse regression western optional live metadata pipeline in isolated conf
         for (book.chapters[0 .. book.count - 1], book.chapters[1..book.count]) |*a, *b| try std.testing.expect(a.number <= b.number);
         std.debug.print("Live production reader: {s}, {d} issues, {d} pages, selected {s}\n", .{ source.provider.label(), book.count, book.page_count, book.chapters[book.selected].title.get() });
     }
+}
+
+test "Browse regression western publisher recorded complete reader responses" {
+    const root = io.getenv("OPAL_PUBLISHER_FIXTURES") orelse return error.SkipZigTest;
+    const publisher = @import("western_publishers_pure.zig");
+    const model = @import("western_comics_pure.zig");
+    const items = try alloc.alloc(model.Item, 24);
+    defer alloc.free(items);
+    const pages = try alloc.alloc(model.Page, 128);
+    defer alloc.free(pages);
+    const issues = try alloc.alloc(model.Issue, 512);
+    defer alloc.free(issues);
+    const catalog = try read(root, "image-catalog");
+    defer alloc.free(catalog);
+    try std.testing.expectEqual(@as(usize, 1), publisher.imageItems(catalog, "https://imagecomics.com", "skyward", 1, items));
+    try std.testing.expectEqualStrings("Skyward", items[0].title.get());
+    const images = try read(root, "image-pages");
+    defer alloc.free(images);
+    try std.testing.expectEqual(@as(usize, 30), publisher.imagePages(images, "https://imagecomics.com/read/skyward", pages).?);
+    const search = try read(root, "global-search");
+    defer alloc.free(search);
+    const search_doc = try std.json.parseFromSlice(std.json.Value, alloc, search, .{});
+    defer search_doc.deinit();
+    const found = publisher.globalItems(search_doc.value, "https://globalcomix.com", items);
+    try std.testing.expect(found > 0);
+    var matched = false;
+    for (items[0..found]) |*item| if (std.mem.indexOf(u8, item.route.get(), "/c/exciting-comics") != null) {
+        matched = true;
+    };
+    try std.testing.expect(matched);
+    const work = try read(root, "global-work");
+    defer alloc.free(work);
+    try std.testing.expect(publisher.globalClient(work) != null);
+    const state_body = publisher.globalState(work) orelse return error.InvalidPublisherState;
+    const state_doc = try std.json.parseFromSlice(std.json.Value, alloc, state_body, .{});
+    defer state_doc.deinit();
+    try std.testing.expectEqual(@as(usize, 2), publisher.globalIssues(state_doc.value, "https://globalcomix.com", "https://globalcomix.com/c/exciting-comics", issues).?);
+    const manifest = try read(root, "global-pages");
+    defer alloc.free(manifest);
+    const manifest_doc = try std.json.parseFromSlice(std.json.Value, alloc, manifest, .{});
+    defer manifest_doc.deinit();
+    try std.testing.expectEqual(@as(usize, 36), publisher.globalPages(manifest_doc.value, pages).?);
+    std.debug.print("Publisher replay: Image Comics complete 30-page issue; GlobalComix 2 complete free issues / 59 releases, 36 pages\n", .{});
 }
