@@ -209,6 +209,17 @@ pub fn clear() void {
     loaded_key_len = 0;
 }
 
+/// A timeline belongs to one exact track; cached lyrics for another player,
+/// radio stream or queued item must never reserve space beside the new media.
+pub fn hasLyricsFor(artist: []const u8, title: []const u8) bool {
+    var key_buf: [320]u8 = undefined;
+    const key = keyInto(&key_buf, artist, title);
+    if (key.len == 0 or artist.len == 0 or title.len == 0) return false;
+    mutex.lock();
+    defer mutex.unlock();
+    return line_count > 0 and std.mem.eql(u8, key, loaded_key[0..loaded_key_len]);
+}
+
 pub fn hasLyrics() bool {
     mutex.lock();
     defer mutex.unlock();
@@ -218,4 +229,51 @@ pub fn hasLyrics() bool {
 /// True while a fetch is in flight — lets the UI show a quiet placeholder.
 pub fn isFetching() bool {
     return fetching.load(.acquire);
+}
+
+test "Browse regression song lyrics disappear when a show replaces music" {
+    const p = try alloc.create(@import("../player/player.zig").MediaPlayer);
+    defer alloc.destroy(p);
+    @memset(std.mem.asBytes(p), 0);
+    p.provider = .mpv;
+    p.audio_only_intent = true;
+    @memcpy(p.np_title[0..4], "Song");
+    p.np_title_len = 4;
+    @memcpy(p.np_subtitle[0..6], "Artist");
+    p.np_subtitle_len = 6;
+    const previous_players = state.app.players;
+    const previous_active = state.app.active_player_idx;
+    state.app.players = .empty;
+    state.app.active_player_idx = 0;
+    try state.app.players.append(alloc, p);
+    defer {
+        state.app.players.deinit(alloc);
+        state.app.players = previous_players;
+        state.app.active_player_idx = previous_active;
+        clear();
+    }
+    mutex.lock();
+    lines[0] = .{};
+    line_count = 1;
+    loaded_key_len = keyInto(&loaded_key, "Artist", "Song").len;
+    mutex.unlock();
+    try std.testing.expect(@import("music_subsonic.zig").lyricsHave());
+    // The new show is still loading: cached audio/video metadata can describe
+    // the old song, so the new request's video intent must already close it.
+    const song_generation = generation.load(.acquire);
+    p.audio_only_intent = false;
+    p.is_loading = true;
+    try std.testing.expect(!@import("music_subsonic.zig").lyricsHave());
+    clear();
+    try std.testing.expect(!pure.mayPublish(song_generation, generation.load(.acquire)));
+    // A different song or radio stream cannot inherit it either.
+    p.audio_only_intent = true;
+    p.is_loading = false;
+    mutex.lock();
+    line_count = 1;
+    loaded_key_len = keyInto(&loaded_key, "Artist", "Song").len;
+    mutex.unlock();
+    @memcpy(p.np_title[0..5], "Radio");
+    p.np_title_len = 5;
+    try std.testing.expect(!@import("music_subsonic.zig").lyricsHave());
 }

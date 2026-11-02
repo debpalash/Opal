@@ -48,7 +48,7 @@ test "Native media offline SDL fixture: wallpaper preview reuses its decoder acr
 }
 var fixture_player: ?*player.MediaPlayer = null;
 var draw_count: usize = 0;
-var mode: enum { dock, player, more, playlist, torrent } = .dock;
+var mode: enum { dock, player, more, playlist, torrent, youtube } = .dock;
 
 fn field(buffer: []u8, len: *usize, value: []const u8) void {
     len.* = @min(buffer.len, value.len);
@@ -163,7 +163,7 @@ fn setup() !void {
     p.cached_speed = 1;
     p.cached_playlist_count = 3;
     p.cached_playlist_pos = 0;
-    field(&p.current_url, &p.current_url_len, path);
+    field(&p.current_url, &p.current_url_len, if (mode == .youtube) "https://www.youtube.com/watch?v=jNQXAC9IVRw" else path);
     if (mode == .torrent) {
         try std.testing.expect(state.torrentSession() == null);
         p.current_torrent_id = -1;
@@ -213,7 +213,7 @@ fn draw() !void {
     _ = dvui.label(@src(), "{s}", .{if (mode == .torrent) "Synthetic cached transfer UI fixture — no torrent session" else "Offline media layout fixture"}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .padding = dvui.Rect.all(16) });
     var space = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     if (mode != .dock) {
-        if (mode == .more or mode == .torrent) footer.open_picker = .more;
+        if (mode == .more or mode == .torrent or mode == .youtube) footer.open_picker = .more;
         if (mode == .playlist) footer.open_picker = .playlist;
         footer.renderLiquidGlassOverlay();
     }
@@ -241,6 +241,10 @@ fn draw() !void {
         }
         for (rows[1..], rows[0..3]) |current, previous| try std.testing.expect(current.y >= previous.y + previous.h - 1);
     }
+    if (mode == .youtube and draw_count >= 8) {
+        try std.testing.expect(layout.youtube_quality.w > 0 and layout.youtube_quality.h > 0);
+        try std.testing.expect(layout.youtube_quality.x + layout.youtube_quality.w <= dvui.windowRectPixels().w + 1);
+    }
     if (mode == .more) {
         try std.testing.expect(layout.menu_count > 3);
         for (layout.menu[1..layout.menu_count], layout.menu[0 .. layout.menu_count - 1]) |current, previous| {
@@ -251,7 +255,7 @@ fn draw() !void {
 
 test "Native media offline SDL fixture" {
     for ([_][2]u32{ .{ 1360, 850 }, .{ 640, 800 } }) |size| {
-        for ([_]@TypeOf(mode){ .dock, .player, .more, .playlist, .torrent }) |view| {
+        for ([_]@TypeOf(mode){ .dock, .player, .more, .playlist, .torrent, .youtube }) |view| {
             if (clock.getenv("OPAL_MEDIA_CASE")) |only| {
                 var cases = std.mem.splitScalar(u8, only, ',');
                 var selected = false;

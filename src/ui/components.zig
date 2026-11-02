@@ -498,14 +498,21 @@ pub fn toggleRow(
     hint: ?[]const u8,
     value: *bool,
 ) void {
+    toggleRowStyle(src, label, hint, value, false);
+}
+pub fn compactToggle(src: std.builtin.SourceLocation, label: []const u8, value: *bool) void {
+    toggleRowStyle(src, label, null, value, true);
+}
+fn toggleRowStyle(src: std.builtin.SourceLocation, label: []const u8, hint: ?[]const u8, value: *bool, compact: bool) void {
     var hovered: bool = false;
 
     var row = dvui.box(src, .{ .dir = .horizontal }, .{
-        .expand = .horizontal,
+        .expand = if (compact) .none else .horizontal,
+        .gravity_y = if (compact) 0.5 else 0,
         .background = true,
         .color_fill = @import("color_compat.zig").wrap(tk.bg_surface()),
         .corners = tk.rad_sm,
-        .padding = .{ .x = tk.sp_md, .y = tk.sp_sm, .w = tk.sp_md, .h = tk.sp_sm },
+        .padding = if (compact) dvui.Rect.all(4) else .{ .x = tk.sp_md, .y = tk.sp_sm, .w = tk.sp_md, .h = tk.sp_sm },
         .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
     });
 
@@ -541,10 +548,10 @@ pub fn toggleRow(
     // Left: label + optional hint stacked vertically.
     {
         var text_col = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal,
+            .expand = if (compact) .none else .horizontal,
             // Long help text must not publish an intrinsic minimum that
             // pushes the independent switch outside the available row.
-            .max_size_content = .{ .w = 0, .h = std.math.floatMax(f32) },
+            .max_size_content = .{ .w = if (compact) std.math.floatMax(f32) else 0, .h = std.math.floatMax(f32) },
             .margin = .{ .w = tk.sp_md },
             .gravity_y = 0.5,
         });

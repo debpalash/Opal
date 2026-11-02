@@ -1374,13 +1374,16 @@ fn playbackMs() ?u32 {
 /// True when a synced-lyric timeline is currently loaded (used by the player
 /// route to decide whether to reserve a lyrics column — without rendering).
 pub fn lyricsHave() bool {
-    return lyrics.hasLyrics();
+    if (state.app.active_player_idx >= state.app.players.items.len) return false;
+    const active = state.app.players.items[state.app.active_player_idx];
+    if (active.provider != .mpv or !active.audio_only_intent or active.is_loading) return false;
+    return lyrics.hasLyricsFor(active.np_subtitle[0..active.np_subtitle_len], active.np_title[0..active.np_title_len]);
 }
 
 pub const LyricsPanelPlacement = enum { side, bottom };
 
 pub fn renderLyricsPanel(placement: LyricsPanelPlacement) void {
-    if (!lyrics.hasLyrics()) return;
+    if (!lyricsHave()) return;
 
     var snap: [400]lyrics.LyricLine = undefined;
     const n = lyrics.snapshot(&snap);
