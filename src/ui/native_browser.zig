@@ -10,6 +10,7 @@ pub fn occludeSidebar(id: dvui.Id, rect: dvui.Rect.Physical) void {
 }
 pub fn beginFrame() void {
     sidebar_cover = null;
+    @import("browser_hub.zig").dismissWhenInactive();
     native.beginFrame();
     if (comptime !native.supported) return;
     @import("../services/browser_privacy.zig").tick();

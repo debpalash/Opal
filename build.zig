@@ -396,6 +396,9 @@ fn buildSupported(b: *std.Build) void {
     const browser_keyboard_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{ "Native embedded browser and macOS desktop wallpaper", "Native embedded browser keyboard" } });
     const run_browser_keyboard_tests = b.addRunArtifact(browser_keyboard_tests);
     b.step("test-native-browser-keyboard", "Verify native browser typing and focus routing").dependOn(&run_browser_keyboard_tests.step);
+    const comic_toolbar_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{ "Browse regression modules", "Native Browse comic reader toolbar" } });
+    const run_comic_toolbar_tests = b.addRunArtifact(comic_toolbar_tests);
+    b.step("test-native-comic-toolbar", "Verify compact comic toolbar layout and navigation").dependOn(&run_comic_toolbar_tests.step);
     const browser_hub_ui_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native browser hub"} });
     browser_hub_ui_tests.use_llvm = true;
     const run_browser_hub_ui_tests = b.addRunArtifact(browser_hub_ui_tests);
@@ -469,6 +472,7 @@ fn buildSupported(b: *std.Build) void {
         .{ .run = run_browser_perf_tests, .name = "browser-performance" },
         .{ .run = run_native_browser_tests, .name = "browser" },
         .{ .run = run_browser_keyboard_tests, .name = "browser-keyboard" },
+        .{ .run = run_comic_toolbar_tests, .name = "comic-toolbar" },
         .{ .run = run_media_tests, .name = "media" },
         .{ .run = run_shell_tests, .name = "shell" },
         .{ .run = run_audio_output_tests, .name = "audio-output" },

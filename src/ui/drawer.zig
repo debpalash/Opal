@@ -178,7 +178,7 @@ fn renderGroup(g: RailGroup, gi: usize) void {
             renderRailTab(.Audiobooks, shell.iconForTab(.Audiobooks), "Audiobooks", 18);
         },
         .web => {
-            renderRailTab(.Web, shell.iconForTab(.Web), "Web", 10);
+            renderRailTab(.Web, shell.iconForTab(.Web), "Browser", 10);
             renderRailTab(.RSS, shell.iconForTab(.RSS), "RSS", 11);
             renderRailTab(.Wallpapers, shell.iconForTab(.Wallpapers), "Wallpapers", 25);
         },

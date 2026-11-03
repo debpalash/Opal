@@ -62,13 +62,16 @@ fn setup() !void {
         .first_run => ui.setRenderFixtureForTest(.{ .links = links_fixture[0..0], .now = NOW, .pairing = .{ .active = true, .code = "482913".*, .remaining = 97 } }),
         .no_streams => ui.setRenderFixtureForTest(.{ .links = links_fixture[0..1], .page = pageFixture(0, false), .now = NOW }),
     }
+    ui.openWorkspace();
 }
 
 fn draw() !void {
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = true, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app) });
     defer page.deinit();
-    ui.render();
+    ui.renderWorkspaceModal();
     viewport_width = dvui.windowRectPixels().w;
+    const stack = dvui.currentWindow().subwindows.stack.items;
+    try std.testing.expect(stack.len > 1 and stack[stack.len - 1].modal);
 }
 
 fn cleanup() void {
