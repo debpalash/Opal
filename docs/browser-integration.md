@@ -44,6 +44,18 @@ or silently fall back to an anonymous connection. Temporary credentials are
 deleted when the stream's last lease closes. This currently targets YouTube;
 it does not extract DRM-protected media.
 
+Comic detail pages expose **Read in Opal** beside the title. Detection combines
+publisher detail URLs (including Marvel issues), ComicIssue/ComicSeries JSON-LD,
+comic metadata, and issue headings. News articles and catalog listings do not
+qualify merely because they mention a comic. SPA navigation refreshes the action.
+The explicit click searches configured sources by series name, keeping the year
+and issue separately. Exact title/volume matches can open the reader at the
+requested issue with its chapter list; uncertain matches stay in the source grid.
+Unavailable issues do not silently substitute a different chapter. **Browse
+series** removes the issue preference when the user wants other chapters. Source
+availability is established by provider responses, not inferred from a publisher
+page. No publisher login cookies are transferred to comic sources.
+
 The built-in shield blocks a small explicit set of known ad/tracker domains,
 alongside installed extensions. Its counters report observed blocked resource
 errors and completed removal of known analytics cookies, not all extension

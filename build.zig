@@ -1704,6 +1704,8 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_youtube_player_pure).step);
     const handoff_tests = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/services/browser_handoff_pure.zig"), .target = target, .optimize = optimize }) });
     test_step.dependOn(&b.addRunArtifact(handoff_tests).step);
+    const comic_handoff_tests = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/services/comic_handoff_pure.zig"), .target = target, .optimize = optimize }) });
+    test_step.dependOn(&b.addRunArtifact(comic_handoff_tests).step);
 
     // mpv ytdl-raw-options: the exact option string handed to mpv, incl. the
     // regression guard that no YouTube player client is ever pinned again.

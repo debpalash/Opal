@@ -16,6 +16,98 @@ const pure = @import("comics_pure.zig");
 const expanded = @import("expanded_reading_pure.zig");
 const comicfury = @import("comicfury_pure.zig");
 const western = @import("western_comics.zig");
+const comic_handoff = @import("comic_handoff_pure.zig");
+var browser_lookup: ?struct { target: comic_handoff.Target, generation: u32, attempted: bool = false } = null;
+var read_hint_mutex: @import("../core/sync.zig").Mutex = .{};
+var read_hint: struct { generation: u32 = 0, issue: ?f64 = null } = .{};
+
+/// Explicit browser intent searches installed sources, never the publisher URL.
+pub fn openFromBrowser(target: comic_handoff.Target) void {
+    closeComic();
+    mihon.close();
+    @memset(&state.app.comic.search_buf, 0);
+    const query = target.series.text();
+    @memcpy(state.app.comic.search_buf[0..query.len], query);
+    @memset(&state.app.magnet_buf, 0);
+    @memcpy(state.app.magnet_buf[0..query.len], query);
+    queueComicSearch(query, .all);
+    search_rows_mutex.lock();
+    sr_count = 0;
+    search_rows_mutex.unlock();
+    browser_lookup = .{ .target = target, .generation = search_gen.load(.acquire) };
+    state.navigateToTabNow(.Comics);
+}
+fn drainBrowserLookup() void {
+    const lookup = if (browser_lookup) |*value| value else return;
+    if (lookup.generation != search_gen.load(.acquire)) {
+        browser_lookup = null;
+        return;
+    }
+    if (lookup.attempted or search_pending.load(.acquire) or searching()) return;
+    if (state.app.router.current != .browse or state.app.browse_source != .Comics) return;
+    lookup.attempted = true;
+    var selected: ?OwnedSearchRow = null;
+    var score: u8 = 0;
+    search_rows_mutex.lock();
+    if (lookup.generation != search_gen.load(.acquire)) {
+        search_rows_mutex.unlock();
+        return;
+    }
+    for (0..@min(sr_count, MAX_SEARCH_RESULTS)) |i| {
+        const row = copySearchRowLocked(i);
+        const identity = western.pure.splitRoute(row.url[0..row.url_len]) orelse continue;
+        if (identity.issue.len != 0) continue;
+        const candidate = comic_handoff.automaticScore(&lookup.target, row.title[0..row.title_len]);
+        if (candidate > score) {
+            selected = row;
+            score = candidate;
+        }
+    }
+    search_rows_mutex.unlock();
+    if (lookup.generation != search_gen.load(.acquire)) return;
+    if (selected) |row| {
+        state.app.comic.title_len = row.title_len;
+        @memcpy(state.app.comic.title[0..row.title_len], row.title[0..row.title_len]);
+        loadComicIssue(row.url[0..row.url_len], lookup.target.issue);
+    }
+}
+test "Native browser protections comic intent opens Comics and replaces stale discovery" {
+    const saved_route = state.app.router;
+    const saved_source = state.app.browse_source;
+    const saved_drawer = state.app.drawer_tab;
+    const saved_query = state.app.magnet_buf;
+    const saved_search = state.app.comic.search_buf;
+    const saved_lookup = browser_lookup;
+    const saved_generation = search_gen.load(.acquire);
+    const saved_pending = search_pending.load(.acquire);
+    const saved_source_filter = active_source.load(.acquire);
+    const saved_count = sr_count;
+    defer {
+        state.navigateToTabNow(saved_drawer);
+        state.app.router = saved_route;
+        state.app.browse_source = saved_source;
+        state.app.magnet_buf = saved_query;
+        state.app.comic.search_buf = saved_search;
+        browser_lookup = saved_lookup;
+        sr_count = saved_count;
+        search_gen.store(saved_generation, .release);
+        search_pending.store(saved_pending, .release);
+        active_source.store(saved_source_filter, .release);
+    }
+    var target: comic_handoff.Target = .{ .year = 2026, .issue = 1 };
+    target.series.set("Queen in Black");
+    target.title.set("Queen in Black (2026) #1");
+    active_source.store(.mangadex, .release);
+    sr_count = 1;
+    openFromBrowser(target);
+    try std.testing.expectEqual(@import("../core/router.zig").Route.browse, state.app.router.current);
+    try std.testing.expectEqual(state.DrawerTab.Comics, state.app.browse_source);
+    try std.testing.expectEqualStrings("Queen in Black", std.mem.sliceTo(&state.app.comic.search_buf, 0));
+    try std.testing.expectEqual(Source.all, active_source.load(.acquire));
+    try std.testing.expectEqual(@as(usize, 0), sr_count);
+    try std.testing.expect(search_pending.load(.acquire));
+    try std.testing.expectEqual(@as(?f64, 1), browser_lookup.?.target.issue);
+}
 // MangaThemesia (WPMangaThemesia) engine — pure, base-URL-driven HTML extraction
 // for the ~143 sites on that WordPress theme. comics.zig routes all its parsing
 // through this so the shipped logic IS the tested logic (see manga_themesia_pure).
@@ -82,6 +174,7 @@ pub fn requestClose() void {
 /// without overwriting the URL while the UI thread is opening a comic.
 pub fn drainPendingLoad() void {
     drainPendingSearch();
+    drainBrowserLookup();
     var url: @TypeOf(state.app.comic.pending_load_url) = undefined;
     comic_command_mutex.lock();
     // Retain the last command while metadata is loading. Consuming it here
@@ -240,6 +333,9 @@ pub fn openDeepLink(link: []const u8) void {
 
 /// Kick off a background thread to fetch and parse a comic issue page.
 pub fn loadComic(url: []const u8) void {
+    loadComicIssue(url, null);
+}
+fn loadComicIssue(url: []const u8, issue: ?f64) void {
     if (state.app.comic.is_loading.load(.acquire)) return;
     if (url.len == 0 or url.len >= 512) return;
 
@@ -281,6 +377,9 @@ pub fn loadComic(url: []const u8) void {
     // THIS load. Workers from a superseded comic carry a stale gen and bail
     // before writing page_pixels (UAF guard).
     const my_gen = state.app.comic.dl_gen.load(.acquire);
+    read_hint_mutex.lock();
+    read_hint = .{ .generation = my_gen, .issue = issue };
+    read_hint_mutex.unlock();
 
     // Comics read inside the Browse › Comics tab now (the player route is for
     // playback only) — no player pane is claimed here.
@@ -2074,10 +2173,13 @@ fn readerChapterRow(index: usize, is_western: bool) ?WesternChapterRow {
     return row;
 }
 fn loadWesternComic(value: []const u8, gen: u32) bool {
-    const book = western.load(value, .{ .epoch32 = .{ .value = &state.app.comic.dl_gen, .expected = gen } }) catch |err| {
+    read_hint_mutex.lock();
+    const issue = if (read_hint.generation == gen) read_hint.issue else null;
+    read_hint_mutex.unlock();
+    const book = western.loadIssue(value, .{ .epoch32 = .{ .value = &state.app.comic.dl_gen, .expected = gen } }, issue) catch |err| {
         if (state.app.comic.dl_gen.load(.acquire) == gen) {
             logs.pushLog("error", "comics", @errorName(err), true);
-            state.showToastTyped(if (err == error.ConfirmationRequired) "This publisher requires age confirmation on its website" else if (err == error.TooLarge) "This issue exceeds the reader limit; choose another issue" else "Could not load this issue. Try another source or retry.", .warning);
+            state.showToastTyped(if (err == error.MissingIssue) "This source does not have the requested issue. Choose another source." else if (err == error.ConfirmationRequired) "This publisher requires age confirmation on its website" else if (err == error.TooLarge) "This issue exceeds the reader limit; choose another issue" else "Could not load this issue. Try another source or retry.", .warning);
         }
         return false;
     };
@@ -3479,6 +3581,12 @@ pub fn renderContent() void {
     }
 
     // ── Cover-grid discovery ──
+    if (browser_lookup) |lookup| if (lookup.generation == search_gen.load(.acquire)) {
+        var hint = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        _ = dvui.label(@src(), "{s}{s}", .{ if (searching()) "Finding in your sources: " else "Choose a source to browse issues: ", lookup.target.title.text() }, .{ .expand = .horizontal, .max_size_content = dvui.Options.MaxSize.width(@max(40, hint.data().contentRect().w - 130)), .color_text = .{ .color = theme.colors.text_secondary }, .padding = dvui.Rect.all(8) });
+        if (lookup.target.issue != null and components.actionButton(@src(), "Browse series", .secondary, 97801)) browser_lookup.?.target.issue = null;
+        hint.deinit();
+    };
     if (visible_count == 0 and searching()) {
         const width = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
         const columns: usize = @intFromFloat(@max(1, @floor(width / (card_w + 12))));
@@ -3770,7 +3878,8 @@ fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
             @memcpy(state.app.comic.title[0..tl], t[0..tl]);
             state.app.comic.title_len = tl;
 
-            loadComic(identity.url[0..identity.url_len]);
+            const issue = if (browser_lookup) |lookup| (if (lookup.generation == search_gen.load(.acquire) and comic_handoff.matches(&lookup.target, t)) lookup.target.issue else null) else null;
+            loadComicIssue(identity.url[0..identity.url_len], issue);
         }
     }
 

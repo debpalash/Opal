@@ -54,6 +54,9 @@ pub const Book = struct {
 };
 pub const Error = error{ Unavailable, InvalidRoute, TooLarge, MissingIssue, NoPages, ConfirmationRequired, OutOfMemory };
 pub fn load(value: []const u8, cancel: ?bounded.CancelEpoch) Error!*Book {
+    return loadIssue(value, cancel, null);
+}
+pub fn loadIssue(value: []const u8, cancel: ?bounded.CancelEpoch, preferred_issue: ?f64) Error!*Book {
     const identity = pure.splitRoute(value) orelse return error.InvalidRoute;
     const provider = identity.provider;
     const endpoints = Endpoints.read(provider) orelse return error.Unavailable;
@@ -65,7 +68,7 @@ pub fn load(value: []const u8, cancel: ?bounded.CancelEpoch) Error!*Book {
     defer alloc.free(buf);
     var address: [2048]u8 = undefined;
     if (provider == .imagecomics or provider == .globalcomix) {
-        try loadPublisher(book, identity, &endpoints, cancel, buf);
+        try loadPublisher(book, identity, &endpoints, cancel, buf, preferred_issue);
         return book;
     }
     if (provider == .ysk) {
@@ -121,6 +124,9 @@ pub fn load(value: []const u8, cancel: ?bounded.CancelEpoch) Error!*Book {
     }
     if (book.count == 0 or workers.isQuitting()) return error.Unavailable;
     pure.sortIssues(book.chapters[0..book.count]);
+    if (identity.issue.len == 0) if (preferred_issue) |number| {
+        book.selected = @import("comic_handoff_pure.zig").chooseIssue(pure.Issue, book.chapters[0..book.count], number) orelse return error.MissingIssue;
+    };
     if (identity.issue.len > 0) {
         var found = false;
         for (book.chapters[0..book.count], 0..) |*chapter, index| if (std.mem.eql(u8, chapter.url.get(), identity.issue)) {
@@ -178,7 +184,7 @@ fn searchGlobal(endpoints: *const Endpoints, url: []const u8, cancel: ?bounded.C
     defer doc.deinit();
     return publishers.globalItems(doc.value, endpoints.base.get(), out);
 }
-fn loadPublisher(book: *Book, identity: pure.Route, endpoints: *const Endpoints, cancel: ?bounded.CancelEpoch, buf: []u8) Error!void {
+fn loadPublisher(book: *Book, identity: pure.Route, endpoints: *const Endpoints, cancel: ?bounded.CancelEpoch, buf: []u8, preferred_issue: ?f64) Error!void {
     const body = get(identity.provider, endpoints, identity.work, buf, cancel, null) orelse return error.Unavailable;
     if (identity.provider == .imagecomics) {
         if (std.mem.indexOf(u8, body, "Are you over 18?") != null) return error.ConfirmationRequired;
@@ -202,6 +208,9 @@ fn loadPublisher(book: *Book, identity: pure.Route, endpoints: *const Endpoints,
         }
         if (book.count == 0) return error.NoPages;
         pure.sortIssues(book.chapters[0..book.count]);
+        if (identity.issue.len == 0) if (preferred_issue) |number| {
+            book.selected = @import("comic_handoff_pure.zig").chooseIssue(pure.Issue, book.chapters[0..book.count], number) orelse return error.MissingIssue;
+        };
         if (identity.issue.len > 0) {
             var found = false;
             for (book.chapters[0..book.count], 0..) |*chapter, i| if (std.mem.eql(u8, chapter.url.get(), identity.issue)) {

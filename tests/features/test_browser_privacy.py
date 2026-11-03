@@ -6,6 +6,17 @@ from pathlib import Path
 from .harness import PROJECT_DIR, test
 ROOT = Path(PROJECT_DIR)
 
+@test("Comic browser pages hand off identities instead of publisher URLs", "Browser")
+def test_comic_browser_handoff():
+    node = shutil.which('node')
+    if not node:
+        return 'skip', 'Node is optional; comic identity matching remains covered by Zig tests'
+    result = subprocess.run([node, 'tests/test_comic_detection.js'], cwd=ROOT, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, (result.stderr or result.stdout)[-1400:]
+    manifest = (ROOT / 'assets/browser-integration/manifest.json').read_text()
+    assert manifest.count('comic-detection.js') == 2
+    return 'pass', 'publisher detail URLs and structured comic metadata, exact issue/volume, user activation and SPA removal'
+
 @test("Browser media handoff preserves requests and rejects navigation confusion", "Browser")
 def test_browser_media_integration():
     node = shutil.which('node')

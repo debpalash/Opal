@@ -18,6 +18,7 @@ static unsigned handoff_serial;
 static BOOL private_context;
 static void (*wake_ui)(void);
 static NSDictionary *pending;
+static NSDictionary *pending_comic;
 static unsigned long long icon_revision=1,next_session=1;
 @interface OpalBrowserMediaSession : NSObject <NSURLSessionTaskDelegate>
 @property NSURLSession *session;
@@ -160,17 +161,29 @@ size_t opal_browser_media_fetch(unsigned long long token,const char *url,const c
 size_t opal_browser_media_take(char *out,size_t cap){
  if(!pending)return 0;NSData *data=[NSJSONSerialization dataWithJSONObject:pending options:0 error:nil];if(!data || data.length>=cap)return 0;memcpy(out,data.bytes,data.length);out[data.length]=0;pending=nil;return data.length;
 }
+size_t opal_browser_comic_take(char *out,size_t cap){
+ if(!pending_comic)return 0;NSData *data=[NSJSONSerialization dataWithJSONObject:pending_comic options:0 error:nil];if(!data || data.length>=cap)return 0;
+ memcpy(out,data.bytes,data.length);out[data.length]=0;pending_comic=nil;return data.length;
+}
 BOOL opal_browser_integration_message(WKWebExtensionContext *context,id raw,WKWebView *page,void (^reply)(id,NSError *)){
  if(context!=integration)return NO;
  ++received_messages;
  if(![raw isKindOfClass:NSDictionary.class]){reply(@{@"ok":@NO},nil);return YES;}
  NSDictionary *message=raw;
  if([message[@"what"]isEqual:@"favicon"]){reply(@{@"ok":@(!private_context && save_icon(message))},nil);return YES;}
+ if([message[@"what"]isEqual:@"read-comic"]){
+  if(!page.URL || ![message[@"url"]isKindOfClass:NSString.class] || ![NSJSONSerialization isValidJSONObject:message]){reply(@{@"ok":@NO},nil);return YES;}
+  NSURLComponents *source=[NSURLComponents componentsWithString:message[@"url"]],*current=[NSURLComponents componentsWithURL:page.URL resolvingAgainstBaseURL:NO];source.fragment=nil;current.fragment=nil;
+  if(!source || !current || ![@[@"http",@"https"]containsObject:source.scheme.lowercaseString] || ![source.URL isEqual:current.URL] || [NSJSONSerialization dataWithJSONObject:message options:0 error:nil].length>8192){reply(@{@"ok":@NO},nil);return YES;}
+  ++handoff_serial;if(pending){opal_browser_media_release([pending[@"session"]unsignedLongLongValue]);pending=nil;}pending_comic=[message copy];
+  if(wake_ui)wake_ui();reply(@{@"ok":@YES},nil);return YES;
+ }
  NSString *id=youtube_id(message[@"url"]);NSString *current=youtube_id(page.URL.absoluteString);
  if(![message[@"what"]isEqual:@"play-youtube"] || !id || ![id isEqual:current] || ![NSJSONSerialization isValidJSONObject:message]){reply(@{@"ok":@NO},nil);return YES;}
  if([NSJSONSerialization dataWithJSONObject:message options:0 error:nil].length>60000){reply(@{@"ok":@NO},nil);return YES;}
  [session_lock lock];BOOL full=sessions.count>=32;[session_lock unlock];if(full){reply(@{@"ok":@NO,@"error":@"Too many active browser streams"},nil);return YES;}
  NSString *route=proxy_url();
+ pending_comic=nil;
  unsigned request_serial=++handoff_serial, epoch=generation;
  NSArray *proxies=nil;if(@available(macOS 14.0,*))proxies=[page.configuration.websiteDataStore.proxyConfigurations copy];
  [page.configuration.websiteDataStore.httpCookieStore getAllCookies:^(NSArray<NSHTTPCookie *> *cookies){
@@ -212,7 +225,7 @@ unsigned long long opal_browser_integration_test_session(void){
  [session_lock lock];unsigned long long token=next_session++;sessions[@(token)]=s;[session_lock unlock];return token;
 }
 unsigned long long opal_browser_integration_test_session_count(void){[session_lock lock];NSUInteger n=sessions.count;[session_lock unlock];return n;}
-void opal_browser_integration_close(void){++generation;integration=nil;}
+void opal_browser_integration_close(void){++generation;integration=nil;pending_comic=nil;}
 void opal_browser_integration_shutdown(void){
  wake_ui=NULL;opal_browser_integration_close();[session_lock lock];NSArray *all=sessions.allValues;sessions=[NSMutableDictionary new];[session_lock unlock];
  for(OpalBrowserMediaSession *s in all){[s.session invalidateAndCancel];if(s.cookieFile)[NSFileManager.defaultManager removeItemAtPath:s.cookieFile error:nil];if(s.configFile)[NSFileManager.defaultManager removeItemAtPath:s.configFile error:nil];}
