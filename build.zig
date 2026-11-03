@@ -382,6 +382,8 @@ fn buildSupported(b: *std.Build) void {
     overview_ui_tests.use_llvm = true;
     const run_overview_ui_tests = b.addRunArtifact(overview_ui_tests);
     b.step("test-native-overview", "Capture the Agents page Overview with isolated offline fixtures").dependOn(&run_overview_ui_tests.step);
+    const popover_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{ "Native browser protections module", "Native browser protections load actual extensions" } });
+    b.step("test-native-browser-popover", "Verify native extension popup sizing and lifecycle").dependOn(&b.addRunArtifact(popover_tests).step);
     const privacy_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native browser protections"} });
     b.step("test-native-browser-privacy", "Verify actual WebKit extensions and browser protections").dependOn(&b.addRunArtifact(privacy_tests).step);
     const native_browser_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native embedded browser"} });

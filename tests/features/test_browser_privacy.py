@@ -24,6 +24,8 @@ def test_official_extension_installer():
     assert 'Sha256.hash(bytes' in service and 'ubol_sha256' in service
     assert '.max_filesize = 16 * 1024 * 1024' in service
     assert 'extensionWithResourceBaseURL:' in native and 'loadExtensionContext:' in native
+    assert 'action.popupPopover' in native and 'NSPopoverBehaviorTransient' in native
+    assert '[presented_action closePopup]' in native
     assert 'requestedPermissions' in native and 'Add extension' in native
     assert 'hasAccessToPrivateData = incognito' in native
     assert 'WKWebExtensionControllerConfiguration.nonPersistentConfiguration' in native

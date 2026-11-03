@@ -4,6 +4,8 @@ const dvui = @import("dvui");
 const io = @import("../core/io_global.zig");
 const native = @import("../services/native_browser.zig");
 const privacy = @import("../services/browser_privacy.zig");
+extern fn opal_extension_test_hide_popup(hide: c_int) void;
+extern fn opal_extension_test_popup_size(width: *f64, height: *f64) c_int;
 fn wake() callconv(.c) void {}
 fn attach(window: ?*anyopaque) !void {
     try std.testing.expectEqual(@as(c_int, 1), native.api.opal_browser_attach(window, 1, wake));
@@ -31,6 +33,7 @@ fn waitTitle(expected: []const u8) !void {
         _ = native.api.opal_browser_poll(&url, url.len, &title, title.len, &err, err.len, &loading, &found);
         if (loading == 0 and std.mem.eql(u8, std.mem.sliceTo(&title, 0), expected)) return;
     }
+    std.debug.print("Browser fixture timeout: title={s}, error={s}, loading={d}\n", .{ std.mem.sliceTo(&title, 0), std.mem.sliceTo(&err, 0), loading });
     return error.Timeout;
 }
 fn backend() !dvui.backend {
@@ -59,11 +62,15 @@ const Fixture = struct {
     count: std.atomic.Value(u32) = .init(0),
     images: std.atomic.Value(u32) = .init(0),
     const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><rect width='1' height='1'/></svg>";
-    const html = "<html><head><title>Loading fixture</title></head><body><img src='/opal-ad/pixel.ar/ads/ad.svg' onload=\"document.title='Image allowed ' + location.pathname\" onerror=\"document.title='Image blocked ' + location.pathname\"></body></html>";
+    const html = "<html><head><title>Loading fixture</title></head><body><img id='ad' onload=\"document.title='Image allowed ' + location.pathname\" onerror=\"document.title='Image blocked ' + location.pathname\"><script>document.querySelector('#ad').src='/opal-ad/pixel.ar/ads/ad.svg?test='+encodeURIComponent(location.pathname)</script></body></html>";
     fn serve(listener: *std.Io.net.Server, self: *@This()) void {
         while (!self.stopping.load(.acquire)) {
             const stream = listener.accept(io.io()) catch return;
             defer stream.close(io.io());
+            // Popup web views can preconnect without sending a request. Do
+            // not let an idle speculative socket starve this serial fixture.
+            var ready = [_]std.posix.pollfd{.{ .fd = stream.socket.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+            if ((std.posix.poll(&ready, 1000) catch continue) == 0) continue;
             self.active.store(stream.socket.handle, .release);
             defer self.active.store(-1, .release);
             var incoming: [4096]u8 = undefined;
@@ -131,11 +138,13 @@ test "Native browser protections load actual extensions and block owned ad reque
     defer io.cwdDeleteTree(directory) catch {};
     var file_buf: [1200]u8 = undefined;
     const manifest = try std.fmt.bufPrint(&file_buf, "{s}/manifest.json", .{directory});
-    try io.cwdWriteFile(.{ .sub_path = manifest, .data = "{\"manifest_version\":3,\"name\":\"Owned blocker\",\"description\":\"Owned network filtering fixture\",\"version\":\"1.0\",\"permissions\":[\"declarativeNetRequest\"],\"host_permissions\":[\"<all_urls>\"],\"declarative_net_request\":{\"rule_resources\":[{\"id\":\"owned\",\"enabled\":true,\"path\":\"rules.json\"}]},\"content_scripts\":[{\"matches\":[\"<all_urls>\"],\"js\":[\"content.js\"],\"run_at\":\"document_end\"}]}" });
+    try io.cwdWriteFile(.{ .sub_path = manifest, .data = "{\"manifest_version\":3,\"name\":\"Owned blocker\",\"description\":\"Owned network filtering fixture\",\"version\":\"1.0\",\"permissions\":[\"declarativeNetRequest\"],\"host_permissions\":[\"<all_urls>\"],\"action\":{\"default_popup\":\"popup.html\"},\"declarative_net_request\":{\"rule_resources\":[{\"id\":\"owned\",\"enabled\":true,\"path\":\"rules.json\"}]},\"content_scripts\":[{\"matches\":[\"<all_urls>\"],\"js\":[\"content.js\"],\"run_at\":\"document_end\"}]}" });
     const rules = try std.fmt.bufPrint(&file_buf, "{s}/rules.json", .{directory});
     try io.cwdWriteFile(.{ .sub_path = rules, .data = "[{\"id\":1,\"priority\":1,\"action\":{\"type\":\"block\"},\"condition\":{\"urlFilter\":\"/opal-ad/\",\"resourceTypes\":[\"image\"]}}]" });
     const content = try std.fmt.bufPrint(&file_buf, "{s}/content.js", .{directory});
     try io.cwdWriteFile(.{ .sub_path = content, .data = "document.documentElement.dataset.opalExtension = 'active';" });
+    const popup_file = try std.fmt.bufPrint(&file_buf, "{s}/popup.html", .{directory});
+    try io.cwdWriteFile(.{ .sub_path = popup_file, .data = "<html><head><title>Owned popup</title><style>html,body{margin:0;padding:0;width:238px;height:112px}</style></head><body>Owned extension controls</body></html>" });
     const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
     var server = try address.listen(io.io(), .{ .reuse_address = true });
     defer server.deinit(io.io());
@@ -152,6 +161,23 @@ test "Native browser protections load actual extensions and block owned ad reque
     try std.testing.expectEqual(before, fixture.images.load(.acquire));
     var result: [256]u8 = undefined;
     try std.testing.expectEqualStrings("active", try evaluate("document.documentElement.dataset.opalExtension", &result));
+    // The popup must fit its content, rather than a fixed 440x600 panel.
+    opal_extension_test_hide_popup(1);
+    defer opal_extension_test_hide_popup(0);
+    privacy.api.opal_extension_action(1, 0);
+    var width: f64 = 0;
+    var height: f64 = 0;
+    var presented = false;
+    for (0..1000) |_| {
+        native.api.opal_browser_test_pump();
+        if (opal_extension_test_popup_size(&width, &height) != 0) {
+            presented = true;
+            break;
+        }
+    }
+    try std.testing.expect(presented);
+    try std.testing.expect(width >= 238 and width <= 270);
+    try std.testing.expect(height >= 112 and height <= 144);
     privacy.api.opal_extension_unload(1);
     try navigate(server.socket.address.getPort(), "disabled", "Image allowed");
 }
