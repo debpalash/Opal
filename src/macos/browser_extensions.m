@@ -50,6 +50,9 @@ static void prepare_guard(void) {
 }
 
 static NSPanel *popup;
+static NSPopover *action_popover;
+static WKWebExtensionAction *presented_action;
+static BOOL test_hide_popup;
 static WKWebView *ready_probe;
 static unsigned ready_generation, ready_serial;
 static NSOpenPanel *picker;
@@ -74,7 +77,7 @@ static void show_popup(WKWebView *web, NSString *title) {
     [popup close];
     popup = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 440, 600) styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
     popup.releasedWhenClosed = NO; popup.title = title ?: @"Extension";
-    popup.contentView = web; [popup center]; [popup makeKeyAndOrderFront:nil];
+    popup.contentView = web; [popup center]; if (!test_hide_popup) [popup makeKeyAndOrderFront:nil];
 }
 @implementation OpalExtensionHost
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
@@ -114,7 +117,29 @@ static void show_popup(WKWebView *web, NSString *title) {
     WKWebView *web = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, 900, 700) configuration:config];
     [web loadRequest:[NSURLRequest requestWithURL:context.optionsPageURL]]; show_popup(web, context.webExtension.displayName); [popup setContentSize:NSMakeSize(900, 700)]; done(nil);
 }
-- (void)webExtensionController:(WKWebExtensionController *)c presentPopupForAction:(WKWebExtensionAction *)action forExtensionContext:(WKWebExtensionContext *)context completionHandler:(void (^)(NSError *))done { show_popup(action.popupWebView, context.webExtension.displayName); done(nil); }
+- (void)webExtensionController:(WKWebExtensionController *)c presentPopupForAction:(WKWebExtensionAction *)action forExtensionContext:(WKWebExtensionContext *)context completionHandler:(void (^)(NSError *))done {
+    if (!page.window || (page.hidden && !test_hide_popup)) {
+        done([NSError errorWithDomain:@"OpalBrowser" code:2 userInfo:@{NSLocalizedDescriptionKey:@"Open the browser page to use extension controls."}]);
+        return;
+    }
+    if (presented_action == action && action_popover.shown) {
+        [action_popover close]; action_popover = nil; presented_action = nil;
+        done(nil); return;
+    }
+    [action_popover close];
+    if (presented_action != action) [presented_action closePopup];
+    action_popover = action.popupPopover; presented_action = action;
+    if (!action_popover) { done([NSError errorWithDomain:@"OpalBrowser" code:3 userInfo:nil]); return; }
+    action_popover.behavior = NSPopoverBehaviorTransient;
+    action_popover.contentViewController.view.appearance = page.appearance;
+    if (!test_hide_popup) {
+        NSRect bounds = page.bounds;
+        CGFloat y = page.isFlipped ? NSMinY(bounds) : NSMaxY(bounds) - 1;
+        NSRect anchor = NSMakeRect(MAX(NSMinX(bounds), NSMaxX(bounds) - 220), y, 1, 1);
+        [action_popover showRelativeToRect:anchor ofView:page preferredEdge:NSRectEdgeMinY];
+    }
+    done(nil);
+}
 // A later optional permission always requires an explicit native choice.
 - (void)webExtensionController:(WKWebExtensionController *)c promptForPermissions:(NSSet *)permissions inTab:(id<WKWebExtensionTab>)tab forExtensionContext:(WKWebExtensionContext *)context completionHandler:(void (^)(NSSet<WKWebExtensionPermission> *, NSDate * _Nullable))done {
     NSAlert *alert = [NSAlert new]; alert.messageText = context.webExtension.displayName ?: @"Extension permissions";
@@ -190,6 +215,8 @@ void opal_extensions_bind(WKWebView *web) { page = web; apply_settings(NO); if (
 void opal_extensions_navigation(void) { if (@available(macOS 15.4, *)) [controller didChangeTabProperties:WKWebExtensionTabChangedPropertiesURL | WKWebExtensionTabChangedPropertiesTitle | WKWebExtensionTabChangedPropertiesLoading forTab:host]; }
 void opal_extensions_close(void) {
     ++generation; wake = NULL;
+    [action_popover close]; [presented_action closePopup];
+    action_popover = nil; presented_action = nil;
     if (@available(macOS 15.4, *)) for (WKWebExtensionContext *context in contexts.allValues) [controller unloadExtensionContext:context error:NULL];
     for (int i = 0; i < 8; ++i) ++serials[i];
     ready_probe.navigationDelegate = nil; [ready_probe stopLoading]; ready_probe = nil;
@@ -253,6 +280,8 @@ void opal_extension_load(int slot, const char *path) {
 void opal_extension_unload(int slot) {
     if (slot < 0 || slot >= 8) return;
     ++serials[slot];
+    [action_popover close]; [presented_action closePopup];
+    action_popover = nil; presented_action = nil;
     if (slot == 0) { ready_probe.navigationDelegate = nil; [ready_probe stopLoading]; ready_probe = nil; }
     if (@available(macOS 15.4, *)) { WKWebExtensionContext *context = contexts[@(slot)]; if (context) [controller unloadExtensionContext:context error:NULL]; [contexts removeObjectForKey:@(slot)]; status(slot, 0, @"Disabled"); }
 }
@@ -305,3 +334,15 @@ int opal_extensions_navigation_allowed(NSURL *url) {
     return 1;
 }
 int opal_browser_proxy_guard_ready(void) { return proxy_guard != nil; }
+
+void opal_extension_test_hide_popup(int hide) { test_hide_popup = hide; }
+int opal_extension_test_popup_size(double *width, double *height) {
+    if (action_popover) {
+        *width = action_popover.contentViewController.preferredContentSize.width;
+        *height = action_popover.contentViewController.preferredContentSize.height;
+    } else if (popup) {
+        *width = popup.contentView.bounds.size.width;
+        *height = popup.contentView.bounds.size.height;
+    } else return 0;
+    return *width > 0 && *height > 0;
+}
