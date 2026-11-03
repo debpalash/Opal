@@ -375,7 +375,14 @@ fn draw() !void {
         const viewport = dvui.windowRectPixels();
         try std.testing.expect(bounds.sidebar.w > 0 and bounds.content.w > 0);
         try std.testing.expect(bounds.sidebar.x >= viewport.x);
-        try std.testing.expect(bounds.sidebar.x + bounds.sidebar.w <= bounds.content.x + 1);
+        const overlaying = (current.hover_sidebar and frames <= 5) or (current.navigate_anime and frames >= 5 and current.sidebar == false);
+        if (!overlaying) try std.testing.expect(bounds.sidebar.x + bounds.sidebar.w <= bounds.content.x + 1);
+        if (overlaying) {
+            // Revealing labels must not shift or shrink the page underneath.
+            const rail_end = bounds.sidebar.x + 48 * dvui.windowNaturalScale();
+            try std.testing.expect(bounds.content.x >= rail_end);
+            try std.testing.expect(bounds.content.x <= rail_end + 16 * dvui.windowNaturalScale());
+        }
         try std.testing.expect(bounds.content.x + bounds.content.w <= viewport.x + viewport.w + 1);
         if (current.sidebar) |expanded| {
             // Clicking a rail item leaves the pointer over it, so hover expansion

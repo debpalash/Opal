@@ -485,19 +485,21 @@ fn renderHub() void {
     right.deinit();
 }
 
-fn renderBridge() void {
-    var root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
-    defer root.deinit();
-    {
-        var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-        });
-        defer bar.deinit();
-        if (components.actionButton(@src(), "Back to the browser hub", .secondary, 31400)) show_bridge = false;
-        _ = dvui.label(@src(), "Built-in browser", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .gravity_y = 0.5 });
+pub fn browsing() bool {
+    adoptBridgeRequest();
+    return show_bridge;
+}
+
+/// Current-page identity and browser-hub access share the navigation row.
+pub fn renderToolbar() void {
+    if (components.iconButton(@src(), icons.tvg.lucide.@"panels-top-left", "Browser hub", false)) show_bridge = false;
+    if (dvui.windowRect().w / state.app.ui_scale >= 1200) {
+        const b = &state.app.browser;
+        var page_name = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5, .min_size_content = .{ .w = 120 }, .max_size_content = .{ .w = 120, .h = 28 }, .padding = .{ .x = 4, .w = 8 } });
+        defer page_name.deinit();
+        _ = dvui.label(@src(), "{s}", .{if (b.title_len > 0) b.title[0..b.title_len] else "New page"}, .{ .expand = .horizontal, .color_text = .{ .color = theme.colors.text_secondary } });
     }
-    if (show_bridge) @import("../services/browser.zig").renderContent();
+    @import("../services/browser.zig").renderToolbar();
 }
 
 /// Draw the Browse > Web page. Safe to call every frame.
@@ -520,5 +522,15 @@ test "Native browser hub reveals a service-requested destination once" {
 
 pub fn render() void {
     adoptBridgeRequest();
-    if (show_bridge) renderBridge() else renderHub();
+    if (show_bridge) {
+        var root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+        defer root.deinit();
+        renderToolbar();
+        @import("../services/browser.zig").renderPageContent();
+    } else renderHub();
+}
+
+pub fn renderInShell() void {
+    adoptBridgeRequest();
+    if (show_bridge) @import("../services/browser.zig").renderPageContent() else renderHub();
 }

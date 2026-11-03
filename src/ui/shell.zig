@@ -31,16 +31,22 @@ var sidebar_collapsed = false;
 var sidebar_hover_expanded = false;
 var sidebar_user_expanded: ?bool = null;
 var sidebar_fixture: ?bool = null;
+var sidebar_scroll: dvui.ScrollInfo = .{};
 var sidebar_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 var anime_sidebar_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 pub fn sidebarAnimeBoundsForTest() dvui.Rect.Physical {
     return anime_sidebar_rect;
 }
 var content_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+var more_rect: dvui.Rect.Physical = .{};
+pub fn moreBoundsForTest() dvui.Rect.Physical {
+    return more_rect;
+}
 pub fn setSidebarFixtureForTest(expanded: ?bool) void {
     if (!@import("builtin").is_test) return;
     sidebar_fixture = expanded;
     sidebar_hover_expanded = false;
+    sidebar_scroll = .{};
     sidebar_rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 }
 pub fn sidebarBoundsForTest() struct { sidebar: dvui.Rect.Physical, content: dvui.Rect.Physical } {
@@ -50,6 +56,10 @@ pub fn sidebarBoundsForTest() struct { sidebar: dvui.Rect.Physical, content: dvu
 const transparent = theme.transparent;
 
 var player_top_chrome_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+
+fn browserToolbarActive() bool {
+    return state.app.router.current == .browse and state.app.browse_source == .Web and @import("browser_hub.zig").browsing();
+}
 
 pub fn mouseInPlayerTopChrome(p: dvui.Point.Physical) bool {
     // Fullscreen omits this layer. Do not let its last rendered rectangle
@@ -233,10 +243,8 @@ pub fn render() !void {
             sidebar_hover_expanded = peek;
             dvui.refresh(null, @src(), null);
         }
-        const nav_layout = if (sidebar_hover_expanded)
-            sidebar_layout.layout(live_width, false, true)
-        else
-            base_layout;
+        // Hover is an overlay. Only a pinned sidebar reserves content width.
+        const nav_layout = base_layout;
         var body = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .both,
             .min_size_content = .{ .w = live_width, .h = 0 },
@@ -244,18 +252,19 @@ pub fn render() !void {
         });
         defer body.deinit();
         renderSidebar(nav_layout);
+        const rail_rect = sidebar_rect;
         // Tight gutter so content fills the window (Browse/grids especially);
         // the player still bleeds edge-to-edge.
-        const gutter: f32 = if (r == .player) 0 else if (tiny) theme.spacing.xs else theme.spacing.sm;
+        const gutter: f32 = if (r == .player or browserToolbarActive()) 0 else if (tiny) theme.spacing.xs else theme.spacing.sm;
         var content = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .both,
             .min_size_content = .{ .w = nav_layout.content - gutter * 2, .h = 0 },
             .max_size_content = .{ .w = @max(0, nav_layout.content - gutter * 2), .h = std.math.floatMax(f32) },
             .background = true,
             .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_deep),
-            .padding = .{ .x = gutter, .y = if (r == .player) 0 else theme.spacing.xs, .w = gutter, .h = 0 },
+            .padding = .{ .x = gutter, .y = if (r == .player or browserToolbarActive()) 0 else theme.spacing.xs, .w = gutter, .h = 0 },
         });
-        defer content.deinit();
+        errdefer content.deinit();
         content_rect = content.data().borderRectScale().r;
         // Fade each page in on navigation. id_extra keyed on the route AND the
         // active sub-tab so the AnimateWidget gets a fresh id per destination →
@@ -268,13 +277,13 @@ pub fn render() !void {
             try renderPage(r);
         } else {
             const sub_key: usize = switch (r) {
-                .browse => @intFromEnum(state.app.browse_source),
-                .system => @intFromEnum(state.app.system_tab),
-                .plugins => @intFromEnum(state.app.plugin_tab),
+                .browse => @backingInt(state.app.browse_source),
+                .system => @backingInt(state.app.system_tab),
+                .plugins => @backingInt(state.app.plugin_tab),
                 else => 0,
             };
             var page_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motionDuration(theme.motion.base), .easing = theme.motion.enter }, .{
-                .id_extra = @as(usize, @intFromEnum(r)) * 100 + sub_key,
+                .id_extra = @as(usize, @backingInt(r)) * 100 + sub_key,
                 .expand = .both,
             });
             defer page_fade.deinit();
@@ -285,6 +294,34 @@ pub fn render() !void {
             var page_col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
             defer page_col.deinit();
             try renderPage(r);
+        }
+        content.deinit();
+        if (sidebar_hover_expanded) {
+            const expanded = sidebar_layout.layout(live_width, false, true);
+            const scale = dvui.windowNaturalScale();
+            var rect: dvui.Rect = .{ .x = rail_rect.x / scale, .y = rail_rect.y / scale, .w = expanded.sidebar * state.app.ui_scale, .h = rail_rect.h / scale };
+            const previous_focus = dvui.focusedSubwindowId();
+            var overlay = dvui.floatingWindow(@src(), .{ .rect = &rect, .resize = .none, .stay_above_parent_window = true }, .{
+                .background = true,
+                .color_fill = .{ .color = theme.colors.bg_app },
+                .color_border = .{ .color = theme.colors.border_subtle },
+                .border = dvui.Rect.all(0),
+                .padding = dvui.Rect.all(0),
+                .margin = dvui.Rect.all(0),
+            });
+            if (dvui.firstFrame(overlay.data().id)) dvui.focusSubwindow(previous_focus, null);
+            var scale_overlay = dvui.scale(@src(), .{ .scale = &state.app.ui_scale }, .{ .expand = .both });
+            renderSidebar(expanded);
+            if (overlay.data().rect.w > 0) {
+                @import("native_browser.zig").occludeSidebar(overlay.data().id, sidebar_rect);
+            } else {
+                @import("native_browser.zig").occludeSidebar(overlay.data().id, .{});
+                // DVUI measures a new floating window before showing it.
+                // Retain the hover region through that single warm-up frame.
+                sidebar_rect = .{ .x = rail_rect.x, .y = rail_rect.y, .w = expanded.sidebar * state.app.ui_scale * scale, .h = rail_rect.h };
+            }
+            scale_overlay.deinit();
+            overlay.deinit();
         }
     }
 
@@ -312,6 +349,7 @@ fn anyHasMedia() bool {
 /// The browsing chrome has one row at every width. Menus absorb secondary
 /// navigation; the expanding query field never moves into a second toolbar.
 fn renderTopNav(compact: bool, narrow: bool) void {
+    const browser_toolbar = browserToolbarActive();
     var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .min_size_content = .{ .w = 0, .h = 36 },
@@ -326,23 +364,25 @@ fn renderTopNav(compact: bool, narrow: bool) void {
     // Keep the product identity beside the sidebar control, including when the
     // rail is collapsed. The compact wordmark still leaves the query room to
     // shrink on narrow windows.
-    var brand = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .gravity_y = 0.5,
-        .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.sm, .h = 0 },
-    });
-    _ = dvui.image(@src(), .{
-        .source = .{ .imageFile = .{ .bytes = @embedFile("opal_logo_64.png"), .name = "opal-shell-brand" } },
-    }, .{
-        .min_size_content = .{ .w = 18, .h = 18 },
-        .max_size_content = .{ .w = 18, .h = 18 },
-        .gravity_y = 0.5,
-    });
-    _ = dvui.label(@src(), "Opal", .{}, .{
-        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
-        .gravity_y = 0.5,
-        .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
-    });
-    brand.deinit();
+    if (!browser_toolbar or dvui.windowRect().w / state.app.ui_scale >= 500) {
+        var brand = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .gravity_y = 0.5,
+            .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        });
+        _ = dvui.image(@src(), .{
+            .source = .{ .imageFile = .{ .bytes = @embedFile("opal_logo_64.png"), .name = "opal-shell-brand" } },
+        }, .{
+            .min_size_content = .{ .w = 18, .h = 18 },
+            .max_size_content = .{ .w = 18, .h = 18 },
+            .gravity_y = 0.5,
+        });
+        if (!browser_toolbar or !compact) _ = dvui.label(@src(), "Opal", .{}, .{
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
+            .gravity_y = 0.5,
+            .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
+        });
+        brand.deinit();
+    }
 
     // The sidebar toggle stays in the chrome; destinations stay in the rail.
     const sidebar_expanded = sidebar_layout.layout(
@@ -358,11 +398,15 @@ fn renderTopNav(compact: bool, narrow: bool) void {
         dvui.refresh(null, @src(), null);
     }
     // Persistent navigation owns destinations; this row owns the single query.
-    if (!compact) {
-        if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-left", "Back", false, state.app.router.canGoBack())) state.app.router.goBack();
-        if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-right", "Forward", false, state.app.router.canGoForward())) state.app.router.goForward();
+    if (browser_toolbar) {
+        @import("browser_hub.zig").renderToolbar();
+    } else {
+        if (!compact) {
+            if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-left", "Back", false, state.app.router.canGoBack())) state.app.router.goBack();
+            if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-right", "Forward", false, state.app.router.canGoForward())) state.app.router.goForward();
+        }
+        omnibox(narrow);
     }
-    omnibox(narrow);
     if (state.app.router.current == .search) search_mod.renderShellSearchControls(compact);
     if (!compact and anyHasMedia()) {
         if (chromeIconButton(@src(), icons.tvg.lucide.play, "Now playing", false, true)) state.app.router.navigate(.player);
@@ -372,14 +416,18 @@ fn renderTopNav(compact: bool, narrow: bool) void {
 
     var m = dvui.menu(@src(), .horizontal, .{ .gravity_y = 0.5 });
     defer m.deinit();
-    if (dvui.menuItemIcon(@src(), "More", icons.tvg.lucide.@"ellipsis-vertical", .{ .submenu = true }, .{
+    var menu_data: dvui.WidgetData = undefined;
+    const menu_anchor = dvui.menuItemIcon(@src(), "More", icons.tvg.lucide.@"ellipsis-vertical", .{ .submenu = true }, .{
+        .data_out = &menu_data,
         .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .color_fill = @import("color_compat.zig").wrap(transparent),
         .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
         .corners = theme.dims.rad_sm,
         .min_size_content = theme.iconSize(.sm),
         .padding = dvui.Rect.all(6),
-    })) |r| {
+    });
+    if (@import("builtin").is_test) more_rect = menu_data.borderRectScale().r;
+    if (menu_anchor) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{
             .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
             .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
@@ -945,7 +993,7 @@ fn renderPage(r: Route) !void {
         .search => if (search_mod.currentScope() == .wallpapers) @import("../services/wallpapers.zig").renderContent() else drawer.renderTabContent(.Search),
         .home => @import("home.zig").render(), // personal hub: metrics + lists
         .browse => {
-            drawer.renderTabContent(state.app.browse_source);
+            if (state.app.browse_source == .Web) @import("browser_hub.zig").renderInShell() else drawer.renderTabContent(state.app.browse_source);
         },
         .watching => @import("../services/tv_library.zig").renderContent(),
         .downloads => drawer.renderTabContent(.Downloads),
@@ -986,7 +1034,7 @@ fn renderSidebar(layout: sidebar_layout.Layout) void {
     });
     defer host.deinit();
     sidebar_rect = host.data().borderRectScale().r;
-    var scroll = dvui.scrollArea(@src(), .{ .horizontal = .none, .vertical = .auto }, .{
+    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &sidebar_scroll, .horizontal = .none, .vertical = .auto }, .{
         .expand = .both,
         .background = true,
         .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app),
@@ -1466,7 +1514,7 @@ fn pluginSubTabs() void {
 }
 pub fn pluginTabControls() void {
     var items: [router.PLUGIN_TABS.len]page_controls.Item = undefined;
-    for (router.PLUGIN_TABS, &items) |tab, *item| item.* = .{ .id = @intFromEnum(tab), .label = router.pluginTabLabel(tab), .icon = pluginTabIcon(tab) };
+    for (router.PLUGIN_TABS, &items) |tab, *item| item.* = .{ .id = @backingInt(tab), .label = router.pluginTabLabel(tab), .icon = pluginTabIcon(tab) };
     if (page_controls.renderMenu(@src(), .{ .items = &items, .selected = @backingInt(state.app.plugin_tab) }, true)) |id| state.app.plugin_tab = @fromBackingInt(@intCast(id));
 }
 

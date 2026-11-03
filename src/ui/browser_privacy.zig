@@ -16,7 +16,11 @@ fn note(src: std.builtin.SourceLocation, text: []const u8) void {
 }
 pub fn render(part: @import("../services/native_browser.zig").Chrome) void {
     if (part == .toolbar) {
-        if (c.actionButton(@src(), "Extensions", if (open) .primary else .secondary, 71300)) open = !open;
+        const clicked = if (dvui.windowRect().w / state.app.ui_scale < 1100)
+            c.iconButton(@src(), @import("icons").tvg.lucide.puzzle, "Extensions", open)
+        else
+            c.actionButton(@src(), "Extensions", if (open) .primary else .secondary, 71300);
+        if (clicked) open = !open;
         return;
     }
     if (!open) return;
