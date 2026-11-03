@@ -2,6 +2,24 @@
 
 Status: sections 1 to 11 are the proposal, written against `v2/agent-os` at dd5f393. **Milestone 1 is implemented on branch `v2/browser-m1`; section 12 records what was built, every deviation from this design with its reason, and what was measured.** Where section 12 and an earlier section disagree, section 12 is current. **Milestone 2 (section 13) adds page sharing, the agent tools and the Browser hub.** **Milestone 3 (section 14) adds the fetch backend (a long poll, not a WebSocket), `browser_fetch`, `browser_tabs`, Add to Wanted and headers on queued streams.** Cookie handoff (designed in 14.6), the WebSocket channel and phases 3 and 4 are not implemented. Facts are marked **verified** (read in this tree, measured on this machine, or confirmed against a cited source) or **unverified** (recalled, or depends on a platform I could not test here). Section 11 lists every unverified item.
 
+## macOS native browser (November 2026)
+
+The macOS desktop build now embeds `WKWebView` as a child of Opal's SDL window.
+WebKit draws the page and handles scrolling, selection, keyboard input, context
+menus and web media directly; there is no JPEG capture or remote input protocol
+in this path. The toolbar routes navigation, history, refresh, zoom, find and
+reader text to WebKit. Command-L/F/K return focus to Opal's controls.
+
+The view follows the browser pane, backing scale and window size. It hides when
+leaving the page or when an overlapping DVUI popup/modal needs the area. Normal
+browsing uses an Opal-owned WebKit data store; private browsing recreates the
+view with an ephemeral store. The view stops and detaches during shutdown.
+
+Windows/Linux retain the existing bridge view. Background anti-block scraping
+still uses the bridge on every platform. The older cross-platform proposal
+below remains historical context, rather than the current macOS implementation.
+WebKit DRM support and browser-extension parity are not claimed.
+
 ## 1. Summary
 
 Opal's in-app Web page is a remote desktop: a Python Playwright bridge screenshots a headless browser as JPEG and Opal paints the pictures and synthesizes input back. Every realistic engine-embedding option either does not work on Linux/Wayland (native web views), is a large per-OS project that still ends in a pixel buffer (CEF off-screen rendering), or is not ready (Servo, Ladybird). None of them gives Opal the thing it is missing: the user's real browser, with their logins, cookies, extensions and DRM.

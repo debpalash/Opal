@@ -475,7 +475,7 @@ fn renderHub() void {
         var card = cardBox(@src(), 3);
         defer card.deinit();
         cardTitle(@src(), "Built-in browser", icons.tvg.lucide.globe);
-        note(@src(), "For sources that need a browser. Separate from your logins; downloads on first use.", theme.colors.text_secondary);
+        note(@src(), if (@import("../services/native_browser.zig").supported) "Browse websites directly inside Opal." else "For sources that need a browser. Separate from your logins; downloads on first use.", theme.colors.text_secondary);
         if (components.actionButton(@src(), "Open built-in browser", .secondary, 31300)) show_bridge = true;
     }
     left.deinit();
@@ -495,9 +495,9 @@ fn renderBridge() void {
         });
         defer bar.deinit();
         if (components.actionButton(@src(), "Back to the browser hub", .secondary, 31400)) show_bridge = false;
-        _ = dvui.label(@src(), "Built-in browser (advanced)", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "Built-in browser", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .gravity_y = 0.5 });
     }
-    @import("../services/browser.zig").renderContent();
+    if (show_bridge) @import("../services/browser.zig").renderContent();
 }
 
 /// Draw the Browse > Web page. Safe to call every frame.

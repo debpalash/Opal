@@ -2068,7 +2068,7 @@ fn renderNetworkTab() void {
         }
     }
 
-    sectionHeader("Browser engine", "Used for web pages. Installation downloads about 200 MB; the selected engine starts on the next browser open.", 33, @src());
+    sectionHeader(if (@import("../services/native_browser.zig").supported) "Source browser engine" else "Browser engine", if (@import("../services/native_browser.zig").supported) "Used by sources that need a browser to fetch pages. The browser page uses the built-in macOS browser." else "Used for web pages. Installation downloads about 200 MB; the selected engine starts on the next browser open.", 33, @src());
     {
         const browser = @import("../services/browser.zig");
         const engines = [_]browser.Engine{ .camoufox, .cloakbrowser };

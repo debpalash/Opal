@@ -9,6 +9,7 @@ const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 const pure = @import("browser_pure.zig");
 const io_g = @import("../core/io_global.zig");
 const player = @import("../player/player.zig");
+pub const native = @import("native_browser.zig");
 
 // Keep the anti-block scrape-fetch layer (services/scrape_fetch.zig) in the
 // build graph and compile-checked even before any scraper is wired through it
@@ -170,16 +171,16 @@ fn setInstallMsg(msg: []const u8) void {
     state.wakeUi();
 }
 pub fn installStatus() InstallState {
-    return @enumFromInt(install_state.load(.acquire));
+    return @fromBackingInt(@intCast(install_state.load(.acquire)));
 }
 
 pub fn installEngine() void {
-    if (install_state.load(.acquire) == @intFromEnum(InstallState.running)) return;
+    if (install_state.load(.acquire) == @backingInt(InstallState.running)) return;
     install_engine_target = active_engine; // snapshot input before spawn
-    install_state.store(@intFromEnum(InstallState.running), .release);
+    install_state.store(@backingInt(InstallState.running), .release);
     setInstallMsg("Preparing…");
     if (@import("../core/workers.zig").spawnLegacy(installWorker, .{})) |t| @import("../core/workers.zig").release(t) else |_| {
-        install_state.store(@intFromEnum(InstallState.failed), .release);
+        install_state.store(@backingInt(InstallState.failed), .release);
         setInstallMsg("Could not start the installer thread");
         logs.pushLog("error", "browser", "Could not start browser installer thread", true);
     }
@@ -235,7 +236,7 @@ fn runInstallStep(argv: []const []const u8) bool {
 fn installWorker() void {
     const fail = struct {
         fn f(msg: []const u8) void {
-            install_state.store(@intFromEnum(InstallState.failed), .release);
+            install_state.store(@backingInt(InstallState.failed), .release);
             setInstallMsg(msg);
             logs.pushLog("error", "browser", msg, true);
         }
@@ -300,8 +301,8 @@ fn installWorker() void {
         .cloakbrowser => setInstallMsg("Installed — first launch downloads ~200 MB (cached)"),
     }
 
-    engine_ready_state[@intFromEnum(engine)].store(2, .release);
-    install_state.store(@intFromEnum(InstallState.done), .release);
+    engine_ready_state[@backingInt(engine)].store(2, .release);
+    install_state.store(@backingInt(InstallState.done), .release);
     logs.pushLog("info", "browser", "Browser engine installed", true);
     ensureBridge();
 }
@@ -315,7 +316,7 @@ var engine_ready_state = [_]std.atomic.Value(u8){
 };
 
 pub fn engineReady(e: Engine) bool {
-    const idx = @intFromEnum(e);
+    const idx = @backingInt(e);
     const v = engine_ready_state[idx].load(.acquire);
     if (v != 0) return v == 2;
     const ok = checkVenvPackage(pure.enginePipPackage(e));
@@ -354,7 +355,7 @@ fn checkVenvPackage(pkg: []const u8) bool {
 }
 
 fn engineInstalled() bool {
-    if (install_state.load(.acquire) == @intFromEnum(InstallState.done)) return true;
+    if (install_state.load(.acquire) == @backingInt(InstallState.done)) return true;
     return engineReady(active_engine);
 }
 
@@ -564,6 +565,7 @@ fn bridgeReaderThread() void {
                 switch (pure.classifyBridgeMsg(buf[0..pos])) {
                     .ready => bridge_ready.store(true, .release),
                     .nav => {
+                        if (native.supported) continue;
                         // Stage url/title for the UI thread to apply at frame
                         // start — direct writes raced the URL bar's textEntry.
                         nav_stage_lock.lock();
@@ -585,7 +587,7 @@ fn bridgeReaderThread() void {
                         // Failed navigation (or command error): stop the
                         // loading indicator and surface the reason — the old
                         // path reported success with the previous page's URL.
-                        state.app.browser.is_loading.store(false, .release);
+                        if (!native.supported) state.app.browser.is_loading.store(false, .release);
                         var msg_buf: [256]u8 = undefined;
                         const detail = extractJsonField(buf[0..pos], "error") orelse "unknown error";
                         if (!bridge_ready.load(.acquire)) {
@@ -593,10 +595,10 @@ fn bridgeReaderThread() void {
                             // "cloakbrowser not installed — install it in
                             // Settings"): surface it on the landing page via
                             // the installer's failed state, not a silent hang.
-                            install_state.store(@intFromEnum(InstallState.failed), .release);
+                            install_state.store(@backingInt(InstallState.failed), .release);
                             setInstallMsg(detail[0..@min(detail.len, 200)]);
                             // Force a fresh package presence check next frame.
-                            engine_ready_state[@intFromEnum(active_engine)].store(0, .release);
+                            engine_ready_state[@backingInt(active_engine)].store(0, .release);
                             logs.pushLog("error", "browser", detail[0..@min(detail.len, 200)], false);
                         } else {
                             const msg = std.fmt.bufPrint(&msg_buf, "Navigation failed: {s}", .{detail[0..@min(detail.len, 180)]}) catch "Navigation failed";
@@ -893,6 +895,11 @@ pub fn navigate(url: []const u8) void {
     requestBridgeView();
     state.wakeUi();
 
+    if (native.supported) {
+        native.navigate(b.url_buf[0..url.len]);
+        return;
+    }
+
     if (bridge_ready.load(.acquire)) {
         sendNavigate(b.url_buf[0..url.len]);
     } else {
@@ -907,6 +914,10 @@ pub fn navigate(url: []const u8) void {
 }
 
 pub fn sendFind(text: []const u8, backwards: bool) void {
+    if (native.supported) {
+        native.find(text, backwards);
+        return;
+    }
     if (!bridge_ready.load(.acquire)) return;
     var esc_buf: [4096]u8 = undefined;
     const esc = escapeJsonString(text, &esc_buf);
@@ -914,12 +925,20 @@ pub fn sendFind(text: []const u8, backwards: bool) void {
 }
 
 pub fn sendZoom(factor: f32) void {
+    if (native.supported) {
+        native.zoom(factor);
+        return;
+    }
     if (!bridge_ready.load(.acquire)) return;
     sendCommandFmt("{{\"cmd\":\"zoom\",\"factor\":{d:.2}}}", .{factor});
 }
 
 /// Request the page's visible text for the reader overlay.
 pub fn requestReadText() void {
+    if (native.supported) {
+        native.read();
+        return;
+    }
     if (!bridge_ready.load(.acquire)) return;
     sendCommand("{\"cmd\":\"readtext\"}");
 }
@@ -1302,16 +1321,28 @@ pub fn sendType(text: []const u8) void {
 }
 
 pub fn requestScreenshot() void {
+    if (native.supported) {
+        native.command(2);
+        return;
+    }
     if (!bridge_ready.load(.acquire)) return;
     sendCommand("{\"cmd\":\"screenshot\"}");
 }
 
 pub fn goBack() void {
+    if (native.supported) {
+        native.command(0);
+        return;
+    }
     if (!bridge_ready.load(.acquire)) return;
     sendCommand("{\"cmd\":\"back\"}");
 }
 
 pub fn goForward() void {
+    if (native.supported) {
+        native.command(1);
+        return;
+    }
     if (!bridge_ready.load(.acquire)) return;
     sendCommand("{\"cmd\":\"forward\"}");
 }
@@ -1512,6 +1543,31 @@ pub fn renderContent() void {
     var root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer root.deinit();
 
+    if (comptime native.supported) {
+        if (native.api.opal_browser_has_focus() != 0) url_bar_focused = false;
+        var error_text: [256]u8 = @splat(0);
+        var loading: c_int = 0;
+        var found: c_int = -1;
+        nav_stage_lock.lock();
+        const flags = native.api.opal_browser_poll(&nav_stage_url, nav_stage_url.len, &nav_stage_title, nav_stage_title.len, &error_text, error_text.len, &loading, &found);
+        if (flags & 1 != 0) {
+            nav_stage_url_len = std.mem.sliceTo(&nav_stage_url, 0).len;
+            nav_stage_title_len = std.mem.sliceTo(&nav_stage_title, 0).len;
+            nav_stage_dirty = true;
+            b.is_loading.store(loading != 0, .release);
+        }
+        nav_stage_lock.unlock();
+        if (flags & 2 != 0) native.focus_address = true;
+        if (flags & 4 != 0) {
+            find_open = true;
+            native.focus_find = true;
+        }
+        if (flags & 8 != 0) state.app.command_palette_open = true;
+        if (flags & 16 != 0) find_count.store(found, .release);
+        if (flags & 32 != 0) reader_len = native.api.opal_browser_reader(&reader_buf, reader_buf.len);
+        if (flags & 1 != 0 and error_text[0] != 0) state.showToast(std.mem.sliceTo(&error_text, 0));
+    }
+
     // Apply reader-thread nav updates (URL bar text + title) on the UI thread.
     applyStagedNav(b);
 
@@ -1548,7 +1604,7 @@ pub fn renderContent() void {
             var last_seen_ms: i64 = 0;
         };
         const now_ms = io_g.milliTimestamp();
-        if (now_ms - S.last_seen_ms > 2000 and bridge_ready.load(.acquire)) requestScreenshot();
+        if (!native.supported and now_ms - S.last_seen_ms > 2000 and bridge_ready.load(.acquire)) requestScreenshot();
         S.last_seen_ms = now_ms;
     }
 
@@ -1595,7 +1651,7 @@ pub fn renderContent() void {
                     .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
                     .gravity_y = 0.5,
                 });
-            } else if (bridge_ready.load(.acquire)) {
+            } else if (native.supported or bridge_ready.load(.acquire)) {
                 dvui.icon(@src(), "browser-ready", icons.tvg.lucide.@"circle-check", .{}, .{
                     .color_text = .{ .color = theme.colors.accent },
                     .min_size_content = .{ .w = 14, .h = 14 },
@@ -1619,6 +1675,10 @@ pub fn renderContent() void {
             .margin = .{ .x = 3, .y = 0, .w = 3, .h = 0 },
             .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
         });
+        if (native.focus_address) {
+            dvui.focusWidget(te.data().id, null, null);
+            native.focus_address = false;
+        }
         var sug = dvui.suggestion(te, .{ .open_on_focus = false, .open_on_text_change = true });
         te.draw();
 
@@ -1669,6 +1729,9 @@ pub fn renderContent() void {
         // While the user is editing the address, staged nav updates must not
         // overwrite their typing (applyStagedNav checks this each frame).
         url_bar_focused = dvui.focusedWidgetId() == te.data().id;
+        if (comptime native.supported) {
+            if (native.api.opal_browser_has_focus() != 0) url_bar_focused = false;
+        }
         te.deinit();
         if (nav_pick) |hi| {
             var nav_buf: [512]u8 = undefined;
@@ -1803,6 +1866,10 @@ pub fn renderContent() void {
         const find_enter = fte.enter_pressed;
         // New text → the old result is stale; hide the count until the bridge
         // answers the next search.
+        if (native.focus_find) {
+            dvui.focusWidget(fte.data().id, null, null);
+            native.focus_find = false;
+        }
         if (fte.text_changed) find_count.store(-1, .release);
         fte.deinit();
 
@@ -1835,7 +1902,7 @@ pub fn renderContent() void {
                     .padding = .{ .x = 6, .y = 0, .w = 6, .h = 0 },
                 });
             } else if (cnt > 0) {
-                _ = dvui.label(@src(), "{d} match{s}", .{ cnt, if (cnt == 1) "" else "es" }, .{
+                _ = dvui.label(@src(), if (native.supported) "Match found" else "{d} match{s}", if (native.supported) .{} else .{ cnt, if (cnt == 1) "" else "es" }, .{
                     .id_extra = 133,
                     .color_text = .{ .color = theme.colors.text_secondary },
                     .gravity_y = 0.5,
@@ -1868,12 +1935,23 @@ pub fn renderContent() void {
     // whole pane blanking to a "Loading..." label. Only while the engine can
     // actually make progress — a sweep animating over "engine not started"
     // read as a stuck red line.
-    if (b.is_loading.load(.acquire) and (bridge_ready.load(.acquire) or bridge_starting.load(.acquire))) {
+    if (b.is_loading.load(.acquire) and (native.supported or bridge_ready.load(.acquire) or bridge_starting.load(.acquire))) {
         renderLoadingBar();
         state.wakeUi();
     }
 
     // ── Frame rendering or landing page ──
+
+    if (comptime native.supported) {
+        if (reader_open) renderReaderOverlay() else {
+            var pane = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = true, .color_fill = .{ .color = theme.colors.bg_deep } });
+            defer pane.deinit();
+            const r = pane.data().contentRectScale().r;
+            const wr = dvui.windowRectPixels();
+            native.present(@ptrCast(dvui.currentWindow().backend.impl.window), .{ .x = r.x, .y = r.y, .w = r.w, .h = r.h }, wr.w, wr.h);
+        }
+        return;
+    }
 
     // Update texture from latest frame
     updateFrameTexture();
@@ -2078,7 +2156,7 @@ pub fn renderContent() void {
 /// Camoufox venv is missing, plain status otherwise. The installer streams
 /// pip/download output line-by-line into the label.
 fn renderEngineStatus() void {
-    const inst: InstallState = @enumFromInt(install_state.load(.acquire));
+    const inst: InstallState = @fromBackingInt(@intCast(install_state.load(.acquire)));
 
     if (inst == .running) {
         var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 10, .gravity_x = 0.5 });
