@@ -21,6 +21,7 @@ extern fn opal_extensions_test_settings_applications() u64;
 extern fn opal_browser_test_focus() void;
 extern fn opal_browser_test_key(text: [*:0]const u8, code: c_ushort, command: c_int, repeat: c_int) void;
 extern fn opal_app_menu_test_new_tab() void;
+extern fn opal_app_menu_test_close() void;
 var profile_prepared = false;
 fn prepareProfile() !void {
     if (profile_prepared) return;
@@ -282,6 +283,9 @@ test "Native embedded browser keyboard command tab shortcuts are owned by the ma
     defer backend.deinit();
     var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
     defer window.deinit();
+    const old_close_requested = @import("titlebar.zig").close_requested;
+    @import("titlebar.zig").close_requested = false;
+    defer @import("titlebar.zig").close_requested = old_close_requested;
     for (0..8) |i| try frame(&window, i, true);
     opal_app_menu_test_new_tab();
     @import("../macos/app_menu.zig").frameTick();
@@ -290,10 +294,35 @@ test "Native embedded browser keyboard command tab shortcuts are owned by the ma
         try window.begin(@as(i128, @intCast(i + 9)) * 16_666_667);
         errdefer _ = window.end(.{}) catch null;
         _ = try window.addEventKey(.{ .code = code, .action = .down, .mod = .lcommand });
+        @import("input.zig").processGlobalInputs();
         @import("browser_tabs.zig").handleShortcuts();
+        try std.testing.expect(!@import("titlebar.zig").close_requested);
         try std.testing.expectEqual(@as(usize, 2), browser.tabsView().count);
         _ = try window.end(.{});
     }
+    // The native action runs before the mirrored key reaches global input.
+    // Closing the last tab creates another new tab and leaves Opal running.
+    for (0..2) |i| {
+        opal_app_menu_test_close();
+        @import("../macos/app_menu.zig").frameTick();
+        try window.begin(@as(i128, @intCast(i + 12)) * 16_666_667);
+        errdefer _ = window.end(.{}) catch null;
+        _ = try window.addEventKey(.{ .code = .w, .action = .down, .mod = .lcommand });
+        @import("input.zig").processGlobalInputs();
+        @import("browser_tabs.zig").handleShortcuts();
+        try std.testing.expectEqual(@as(usize, 1), browser.tabsView().count);
+        try std.testing.expect(!@import("titlebar.zig").close_requested);
+        _ = try window.end(.{});
+    }
+    browser.newTab("");
+    try window.begin(15 * 16_666_667);
+    errdefer _ = window.end(.{}) catch null;
+    _ = try window.addEventKey(.{ .code = .w, .action = .down, .mod = .lcontrol });
+    @import("input.zig").processGlobalInputs();
+    @import("browser_tabs.zig").handleShortcuts();
+    try std.testing.expectEqual(@as(usize, 1), browser.tabsView().count);
+    try std.testing.expect(!@import("titlebar.zig").close_requested);
+    _ = try window.end(.{});
 }
 test "Native embedded browser renders HTML and extracts actual DOM text" {
     var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-browser-fixture", .persist_window_geometry = false, .size = .{ .w = 800, .h = 600 }, .vsync = false, .title = "Opal isolated WebKit fixture", .hidden = true });

@@ -380,6 +380,63 @@ test "Native browser protections themed extension privacy and proxy panels" {
         }
     }
 }
+fn connectionFrame(window: *dvui.Window, index: usize, click: ?dvui.Rect.Physical) !void {
+    try window.begin(@as(i128, @intCast(index + 1)) * 16_666_667);
+    errdefer _ = window.end(.{}) catch null;
+    @import("components.zig").beginFrame();
+    @import("theme.zig").setTheme();
+    if (click) |bounds| {
+        _ = try window.addEventMouseMotion(.{ .pt = bounds.center() });
+        _ = try window.addEventMouseButton(.left, .press);
+        _ = try window.addEventMouseButton(.left, .release);
+    }
+    try drawPanel();
+    _ = try window.end(.{});
+}
+test "Native browser protections connection chooser fits and keeps proxy editing intentional" {
+    const panel = @import("browser_privacy.zig");
+    const before = privacy.prefs;
+    defer privacy.prefs = before;
+    defer cleanupPanel();
+    panel_section = 2;
+    @import("theme.zig").markUiThread();
+    for ([_]f32{ 1000, 640, 375, 320 }) |width| {
+        privacy.prefs = .{};
+        privacy.prefs.proxy_mode = .pool;
+        panel.setPanelForTest(2, false);
+        var backend_window = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-connection-layout", .persist_window_geometry = false, .size = .{ .w = width, .h = 780 }, .vsync = false, .title = "Opal connection layout regression", .hidden = true });
+        defer backend_window.deinit();
+        var window = try dvui.Window.init(@src(), @import("../core/alloc.zig").allocator, backend_window.backend(), .{});
+        defer window.deinit();
+        for (0..8) |i| try connectionFrame(&window, i, null);
+        const initial = panel.connection_layout_for_test;
+        const scale = backend_window.pixelSize().w / width;
+        if (initial.panel.w > @min(width, 706) * scale + 2) std.debug.print("Connection layout width={d} scale={d} panel={any}\n", .{ width, scale, initial.panel });
+        // max_size_content excludes the panel's padding and border.
+        try std.testing.expect(initial.panel.w <= @min(width, 706) * scale + 2);
+        try std.testing.expect(initial.editor.h == 0);
+        for (initial.routes) |r| {
+            try std.testing.expect(r.w > 0 and r.h > 0);
+            try std.testing.expect(r.x >= initial.panel.x);
+            try std.testing.expect(r.x + r.w <= initial.panel.x + initial.panel.w + 1);
+            try std.testing.expectApproxEqAbs(initial.routes[0].center().y, r.center().y, 1);
+        }
+        try connectionFrame(&window, 8, initial.add);
+        for (9..17) |i| try connectionFrame(&window, i, null);
+        const editor = panel.connection_layout_for_test;
+        if (editor.editor.h == 0) std.debug.print("Add proxy hit test width={d} add={any} panel={any} status={any}\n", .{ width, initial.add, initial.panel, initial.status });
+        try std.testing.expect(editor.editor.h > 0);
+        try std.testing.expect(!editor.authentication_visible);
+        try std.testing.expect(editor.host.w > editor.port.w);
+        try std.testing.expectApproxEqAbs(editor.host.y, editor.port.y, 1);
+        try std.testing.expect(editor.port.x + editor.port.w <= editor.editor.x + editor.editor.w + 1);
+        try connectionFrame(&window, 17, editor.cancel);
+        for (18..22) |i| try connectionFrame(&window, i, null);
+        try std.testing.expect(panel.connection_layout_for_test.editor.h == 0);
+        try connectionFrame(&window, 22, panel.connection_layout_for_test.routes[0]);
+        try std.testing.expectEqual(privacy.pure.ProxyKind.system, privacy.prefs.proxy_mode);
+    }
+}
 extern fn opal_browser_proxy_guard_ready() c_int;
 test "Native browser protections also block loopback subresource bypass" {
     var window = try backend();
