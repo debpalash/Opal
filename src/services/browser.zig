@@ -1759,6 +1759,8 @@ pub fn renderContent() void {
             }
         }
 
+        if (native.supported) if (native.render_chrome) |render| render(.toolbar);
+
         // Bookmark star — gold when the current page is bookmarked.
         if (b.url_len > 0) {
             const bookmarked = findBookmark(b.url_buf[0..b.url_len]) != null;
@@ -1917,6 +1919,8 @@ pub fn renderContent() void {
             find_open = false;
         }
     }
+
+    if (native.supported) if (native.render_chrome) |render| render(.panel);
 
     // Title bar
     if (b.title_len > 0) {

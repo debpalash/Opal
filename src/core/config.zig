@@ -100,6 +100,15 @@ fn saveChecked() !void {
     setKey("agent_tasks_enabled", if (state.app.agent_tasks_enabled) "1" else "0");
     setKey("browser_share_agents", if (state.app.browser_share_agents) "1" else "0");
     setKey("browser_share_tabs", if (state.app.browser_share_tabs) "1" else "0");
+    {
+        const privacy = @import("../services/browser_privacy.zig");
+        var buffer: [32768]u8 = undefined;
+        if (privacy.encoded(&buffer)) |json| setKey("browser_privacy", json);
+        for (&privacy.prefs.profiles, 0..) |*profile, index| {
+            var key: [40]u8 = undefined;
+            setSecretKey(std.fmt.bufPrint(&key, "browser_proxy_pass_{d}", .{index}) catch unreachable, profile.password.text());
+        }
+    }
     setKey("operator_enabled", if (state.app.operator_enabled) "1" else "0");
     setKey("operator_daily_cents", fmtInt(&fb, @intCast(state.app.operator_daily_cents)));
     setKey("ask_enabled", if (state.app.ask_enabled) "1" else "0");
@@ -576,7 +585,17 @@ fn migrateLoadedSecrets() void {
 }
 
 fn applyConfig(key: []const u8, val: []const u8) void {
-    if (std.mem.eql(u8, key, "usage_seconds")) {
+    if (std.mem.eql(u8, key, "browser_privacy")) {
+        @import("../services/browser_privacy.zig").restore(val);
+    } else if (std.mem.startsWith(u8, key, "browser_proxy_pass_")) {
+        const index = std.fmt.parseInt(usize, key["browser_proxy_pass_".len..], 10) catch return;
+        const privacy = @import("../services/browser_privacy.zig");
+        if (index >= privacy.prefs.profiles.len) return;
+        var buffer: [128]u8 = undefined;
+        defer @memset(&buffer, 0);
+        var length: usize = 0;
+        if (loadSecretValue(key, val, &buffer, &length)) privacy.prefs.profiles[index].password.set(buffer[0..length]);
+    } else if (std.mem.eql(u8, key, "usage_seconds")) {
         state.app.usage_seconds_total = std.fmt.parseInt(i64, val, 10) catch 0;
     } else if (std.mem.eql(u8, key, "install_id")) {
         if (@import("install_identity_pure.zig").valid(val)) {

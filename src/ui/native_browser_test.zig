@@ -14,7 +14,7 @@ extern fn opal_browser_test_snapshot(path: [*:0]const u8) void;
 extern fn opal_browser_test_snapshot_result() c_int;
 fn frame(window: *dvui.Window, index: usize, show: bool) !void {
     try window.begin(@as(i128, @intCast(index + 1)) * 16_666_667);
-    native.beginFrame();
+    @import("native_browser.zig").beginFrame();
     if (show) @import("../services/browser.zig").renderContent();
     @import("native_browser.zig").endFrame();
     _ = try window.end(.{});

@@ -223,6 +223,8 @@ fn buildSupported(b: *std.Build) void {
             exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/lyrics_text.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
             exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/native_browser.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
             exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/live_wallpaper.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
+            exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/browser_extensions.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
+            exe.root_module.linkFramework("Network", .{});
             exe.root_module.linkFramework("WebKit", .{});
             exe.root_module.linkFramework("QuartzCore", .{});
             exe.root_module.linkFramework("CoreGraphics", .{});
@@ -380,6 +382,8 @@ fn buildSupported(b: *std.Build) void {
     overview_ui_tests.use_llvm = true;
     const run_overview_ui_tests = b.addRunArtifact(overview_ui_tests);
     b.step("test-native-overview", "Capture the Agents page Overview with isolated offline fixtures").dependOn(&run_overview_ui_tests.step);
+    const privacy_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native browser protections"} });
+    b.step("test-native-browser-privacy", "Verify actual WebKit extensions and browser protections").dependOn(&b.addRunArtifact(privacy_tests).step);
     const native_browser_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native embedded browser"} });
     b.step("test-native-browser", "Verify embedded WebKit and desktop wallpaper on macOS").dependOn(&b.addRunArtifact(native_browser_tests).step);
     const browser_hub_ui_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native browser hub"} });
@@ -404,7 +408,7 @@ fn buildSupported(b: *std.Build) void {
     if (is_windows) run_toast_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-toast", "Verify toasts overlay expanded content without diagnostic borders").dependOn(&run_toast_tests.step);
     const native_suite = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{
-        "Native toast", "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native agent tasks offline", "Native operator activity offline", "Native agents overview offline", "Native browser hub", "Native embedded browser", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
+        "Native toast", "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native agent tasks offline", "Native operator activity offline", "Native agents overview offline", "Native browser hub", "Native embedded browser", "Native browser protections", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
     } });
     const run_native_suite = b.addRunArtifact(native_suite);
     if (is_windows) run_native_suite.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
@@ -1833,7 +1837,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_comics_pure).step);
 
-    inline for (.{ "expanded_reading_pure", "reading_provider_pure", "music_audius_pure", "audio_sources_pure", "source_request_pure", "anime_hianime_pure", "comicfury_pure", "webcomic_sources_pure", "western_comics_pure", "western_publishers_pure", "wallpapers_pure", "wallpaper_desktop_pure", "native_browser_pure" }) |module| {
+    inline for (.{ "expanded_reading_pure", "reading_provider_pure", "music_audius_pure", "audio_sources_pure", "source_request_pure", "anime_hianime_pure", "comicfury_pure", "webcomic_sources_pure", "western_comics_pure", "western_publishers_pure", "wallpapers_pure", "wallpaper_desktop_pure", "native_browser_pure", "browser_privacy_pure" }) |module| {
         const source_test = addBoundTest(b, .{ .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/" ++ module ++ ".zig"),
             .target = target,

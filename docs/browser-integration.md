@@ -20,6 +20,31 @@ still uses the bridge on every platform. The older cross-platform proposal
 below remains historical context, rather than the current macOS implementation.
 WebKit DRM support and browser-extension parity are not claimed.
 
+### Native browser protections and extensions
+
+The Extensions button opens themed Extensions, Privacy and Proxies controls.
+The official uBlock Origin Lite Safari package is downloaded on demand from a
+pinned upstream release and verified with SHA-256 before WebKit loads it. The
+full Firefox/Chromium uBlock Origin extension is not supported by this engine.
+Compatible ZIP/unpacked WebExtensions can be imported with a native permission
+review, enabled, reloaded, configured or removed. Private-window access is off
+by default and uses a separate ephemeral controller when allowed.
+
+Canvas protection runs at document start in every frame. It blocks pixel
+readback/export while preserving drawing, with exact-host exceptions for trusted
+editors. It is a canvas defense, rather than an anonymity guarantee.
+
+HTTP, HTTPS and SOCKS5 profiles support optional authentication and apply only
+to the browser's data store. Passwords use Opal's existing secret-storage policy
+and are omitted from the ordinary preference JSON. System proxy restores the OS
+configuration. To prevent macOS's implicit local-route proxy bypass, active
+profiles block local/intranet URLs and literal IPv6 URLs; select System proxy to
+access them. This restriction is enforced for navigation and subresources.
+
+Offline native fixtures exercise actual canvas APIs, extension content-script
+injection, network blocking and an owned HTTP proxy. An additional locally
+supplied official package fixture verifies uBlock Lite's real EasyList blocking.
+
 ## 1. Summary
 
 Opal's in-app Web page is a remote desktop: a Python Playwright bridge screenshots a headless browser as JPEG and Opal paints the pictures and synthesizes input back. Every realistic engine-embedding option either does not work on Linux/Wayland (native web views), is a large per-OS project that still ends in a pixel buffer (CEF off-screen rendering), or is not ready (Servo, Ladybird). None of them gives Opal the thing it is missing: the user's real browser, with their logins, cookies, extensions and DRM.

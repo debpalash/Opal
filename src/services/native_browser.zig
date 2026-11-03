@@ -19,6 +19,9 @@ pub const api = struct {
     pub extern fn opal_browser_test_pump() void;
     pub extern fn opal_browser_test_attached() c_int;
 };
+pub const Chrome = enum { toolbar, panel };
+// The UI supplies themed controls without importing presentation into services.
+pub var render_chrome: ?*const fn (Chrome) void = null;
 var lock: @import("../core/sync.zig").Mutex = .{};
 var destination: [2048:0]u8 = @splat(0);
 var destination_len: usize = 0;

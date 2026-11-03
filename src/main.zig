@@ -64,6 +64,9 @@ test "Native operator activity offline SDL pixel capture" {
 test "Native agents overview offline SDL pixel capture" {
     if (!@import("build_options").headless) _ = @import("ui/agents_overview_native_test.zig");
 }
+test "Native browser protections module" {
+    if (!@import("build_options").headless and builtin.os.tag == .macos) _ = @import("ui/browser_privacy_native_test.zig");
+}
 test "Native embedded browser and macOS desktop wallpaper" {
     if (!@import("build_options").headless and builtin.os.tag == .macos) _ = @import("ui/native_browser_test.zig");
 }
@@ -1196,7 +1199,7 @@ fn renderSlashMenu() void {
 }
 
 fn appFrame() !dvui.App.Result {
-    @import("services/native_browser.zig").beginFrame();
+    @import("ui/native_browser.zig").beginFrame();
     defer @import("ui/native_browser.zig").endFrame();
     @import("services/wallpaper_desktop.zig").pollNative();
     // SDL2 defers SIGINT/SIGTERM until its next event pump. Cocoa's native

@@ -4,6 +4,12 @@ const native = @import("../services/native_browser.zig");
 const pure = @import("../services/native_browser_pure.zig");
 const state = @import("../core/state.zig");
 const theme = @import("theme.zig");
+pub fn beginFrame() void {
+    native.beginFrame();
+    if (comptime !native.supported) return;
+    @import("../services/browser_privacy.zig").tick();
+    native.render_chrome = @import("browser_privacy.zig").render;
+}
 pub fn endFrame() void {
     if (comptime !native.supported) return;
     var visible = !state.app.command_palette_open and !state.app.cheatsheet_open;
