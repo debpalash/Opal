@@ -10,6 +10,11 @@ pub const api = struct {
     pub extern fn opal_browser_close() void;
     pub extern fn opal_browser_has_focus() c_int;
     pub extern fn opal_browser_navigate(url: [*:0]const u8) void;
+    pub extern fn opal_browser_tab_select(id: u32) c_int;
+    pub extern fn opal_browser_tab_close(id: u32) void;
+    pub extern fn opal_browser_tab_navigate(id: u32, url: [*:0]const u8) void;
+    pub extern fn opal_browser_tab_info(id: u32, url: [*]u8, url_cap: usize, title: [*]u8, title_cap: usize, loading: *c_int) c_int;
+    pub extern fn opal_browser_tab_requested(url: [*]u8, cap: usize) c_int;
     pub extern fn opal_browser_command(command: c_int) void;
     pub extern fn opal_browser_zoom(zoom: f64) void;
     pub extern fn opal_browser_find(text: [*:0]const u8, backwards: c_int) void;
@@ -26,6 +31,8 @@ pub var render_chrome: ?*const fn (Chrome) void = null;
 var lock: @import("../core/sync.zig").Mutex = .{};
 var destination: [2048:0]u8 = @splat(0);
 var destination_len: usize = 0;
+var destination_tab: u32 = 1;
+var selected_tab: std.atomic.Value(u32) = .init(1);
 var initialized = false;
 var private_mode = false;
 pub var presented = false;
@@ -43,6 +50,18 @@ pub fn navigate(url: []const u8) void {
     @memcpy(destination[0..url.len], url);
     destination[url.len] = 0;
     destination_len = url.len;
+    destination_tab = selected_tab.load(.acquire);
+}
+pub fn selectTab(id: u32) bool {
+    if (comptime supported) if (initialized and api.opal_browser_tab_select(id) == 0) return false;
+    selected_tab.store(id, .release);
+    return true;
+}
+pub fn closeTab(id: u32) void {
+    lock.lock();
+    if (destination_tab == id) destination_len = 0;
+    lock.unlock();
+    if (comptime supported) if (initialized) api.opal_browser_tab_close(id);
 }
 pub fn beginFrame() void {
     presented = false;
@@ -57,9 +76,10 @@ pub fn present(window: ?*anyopaque, rect: pure.Rect, width: f64, height: f64) vo
             return;
         }
     }
+    _ = api.opal_browser_tab_select(selected_tab.load(.acquire));
     lock.lock();
     if (destination_len > 0) {
-        api.opal_browser_navigate(&destination);
+        api.opal_browser_tab_navigate(destination_tab, &destination);
         destination_len = 0;
     }
     lock.unlock();
@@ -76,6 +96,10 @@ pub fn deinit() void {
     if (comptime supported) api.opal_browser_close();
     initialized = false;
     presented = false;
+    selected_tab.store(1, .release);
+    lock.lock();
+    destination_len = 0;
+    lock.unlock();
 }
 pub fn command(cmd: c_int) void {
     if (comptime supported) api.opal_browser_command(cmd);

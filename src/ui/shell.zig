@@ -230,6 +230,7 @@ pub fn render() !void {
         const prev_alpha = dvui.alpha(nav_alpha);
         renderTopNav(compact, narrow);
         dvui.alphaSet(prev_alpha);
+        if (browserToolbarActive()) @import("browser_tabs.zig").render();
     }
 
     {
@@ -350,6 +351,7 @@ fn anyHasMedia() bool {
 /// navigation; the expanding query field never moves into a second toolbar.
 fn renderTopNav(compact: bool, narrow: bool) void {
     const browser_toolbar = browserToolbarActive();
+    if (browser_toolbar) @import("browser_tabs.zig").handleShortcuts();
     var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .min_size_content = .{ .w = 0, .h = 36 },

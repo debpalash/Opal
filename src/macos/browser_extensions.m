@@ -20,7 +20,12 @@ static NSString *import_error;
 static unsigned serials[8];
 static WKContentRuleList *proxy_guard;
 static BOOL proxy_guard_compiling;
-static NSURL *waiting_proxy_url;
+static NSMapTable<WKWebView *, NSURL *> *waiting_proxy_urls;
+static void wait_for_proxy(WKWebView *web, NSURL *url) {
+    if (!web || !url) return;
+    if (!waiting_proxy_urls) waiting_proxy_urls = [NSMapTable weakToStrongObjectsMapTable];
+    [waiting_proxy_urls setObject:url forKey:web];
+}
 static NSString * const local_pattern = @"^https?://(localhost|[^/]+\\.localhost|127\\.[0-9.]+|0\\.0\\.0\\.0|10\\.[0-9.]+|192\\.168\\.[0-9.]+|172\\.(1[6-9]|2[0-9]|3[01])\\.[0-9.]+|169\\.254\\.[0-9.]+|\\[[0-9a-f:.]*\\])([:/]|$)";
 static BOOL proxy_selected(void) { NSString *mode = settings[@"proxy_mode"]; return mode && ![mode isEqual:@"system"]; }
 static void apply_guard(WKUserContentController *content) {
@@ -45,7 +50,11 @@ static void prepare_guard(void) {
         proxy_guard_compiling = NO; proxy_guard = list;
         if (page) apply_guard(page.configuration.userContentController);
         if (error) { import_error = @"Could not prepare proxy protection. Select System proxy and try again."; signal_ui(); return; }
-        if (page && waiting_proxy_url) { NSURL *url = waiting_proxy_url; waiting_proxy_url = nil; [page loadRequest:[NSURLRequest requestWithURL:url]]; }
+        NSMapTable *waiting = waiting_proxy_urls; waiting_proxy_urls = nil;
+        for (WKWebView *web in waiting.keyEnumerator) {
+            NSURL *url = [waiting objectForKey:web];
+            if (url) [web loadRequest:[NSURLRequest requestWithURL:url]];
+        }
     }];
 }
 
@@ -72,6 +81,29 @@ static size_t copy(NSString *text, char *out, size_t cap) {
 @interface OpalExtensionHost : NSObject <WKWebExtensionControllerDelegate, WKWebExtensionWindow, WKWebExtensionTab, WKNavigationDelegate>
 @end
 static OpalExtensionHost *host;
+@interface OpalBrowserTab : NSObject <WKWebExtensionTab>
+@property(nonatomic, weak) WKWebView *web;
+@end
+static NSMutableArray<OpalBrowserTab *> *browser_tabs;
+static OpalBrowserTab *current_tab;
+@implementation OpalBrowserTab
+- (id<WKWebExtensionWindow>)windowForWebExtensionContext:(WKWebExtensionContext *)context { return host; }
+- (NSUInteger)indexInWindowForWebExtensionContext:(WKWebExtensionContext *)context { return [browser_tabs indexOfObject:self]; }
+- (WKWebView *)webViewForWebExtensionContext:(WKWebExtensionContext *)context { return self.web; }
+- (NSString *)titleForWebExtensionContext:(WKWebExtensionContext *)context { return self.web.title; }
+- (NSURL *)urlForWebExtensionContext:(WKWebExtensionContext *)context { return self.web.URL; }
+- (BOOL)isPrivateForWebExtensionContext:(WKWebExtensionContext *)context { return incognito; }
+- (BOOL)isSelectedForWebExtensionContext:(WKWebExtensionContext *)context { return self == current_tab; }
+- (BOOL)isLoadingCompleteForWebExtensionContext:(WKWebExtensionContext *)context { return !self.web.loading; }
+- (CGSize)sizeForWebExtensionContext:(WKWebExtensionContext *)context { return self.web.bounds.size; }
+- (double)zoomFactorForWebExtensionContext:(WKWebExtensionContext *)context { return self.web.pageZoom; }
+- (void)setZoomFactor:(double)zoom forWebExtensionContext:(WKWebExtensionContext *)context completionHandler:(void (^)(NSError *))done { self.web.pageZoom = zoom; done(nil); }
+- (void)reloadFromOrigin:(BOOL)origin forWebExtensionContext:(WKWebExtensionContext *)context completionHandler:(void (^)(NSError *))done { origin ? [self.web reloadFromOrigin] : [self.web reload]; done(nil); }
+- (void)loadURL:(NSURL *)url forWebExtensionContext:(WKWebExtensionContext *)context completionHandler:(void (^)(NSError *))done {
+    if ([url.scheme isEqual:@"http"] || [url.scheme isEqual:@"https"] || [url.absoluteString isEqual:@"about:blank"]) { [self.web loadRequest:[NSURLRequest requestWithURL:url]]; done(nil); }
+    else done([NSError errorWithDomain:@"OpalBrowser" code:1 userInfo:nil]);
+}
+@end
 static void show_popup(WKWebView *web, NSString *title) {
     if (!web || !page.window) return;
     [popup close];
@@ -93,8 +125,8 @@ static void show_popup(WKWebView *web, NSString *title) {
 }
 - (NSArray *)webExtensionController:(WKWebExtensionController *)c openWindowsForExtensionContext:(WKWebExtensionContext *)context { return page ? @[self] : @[]; }
 - (id<WKWebExtensionWindow>)webExtensionController:(WKWebExtensionController *)c focusedWindowForExtensionContext:(WKWebExtensionContext *)context { return page ? self : nil; }
-- (NSArray *)tabsForWebExtensionContext:(WKWebExtensionContext *)context { return page ? @[self] : @[]; }
-- (id<WKWebExtensionTab>)activeTabForWebExtensionContext:(WKWebExtensionContext *)context { return page ? self : nil; }
+- (NSArray *)tabsForWebExtensionContext:(WKWebExtensionContext *)context { return browser_tabs.copy ?: @[]; }
+- (id<WKWebExtensionTab>)activeTabForWebExtensionContext:(WKWebExtensionContext *)context { return current_tab; }
 - (id<WKWebExtensionWindow>)windowForWebExtensionContext:(WKWebExtensionContext *)context { return self; }
 - (NSUInteger)indexInWindowForWebExtensionContext:(WKWebExtensionContext *)context { return 0; }
 - (WKWebView *)webViewForWebExtensionContext:(WKWebExtensionContext *)context { return page; }
@@ -194,7 +226,7 @@ void opal_extensions_configure(const char *json, const char *script, int reload)
     settings = decoded; canvas_source = [NSString stringWithUTF8String:script];
     prepare_guard();
     if (page && proxy_selected() && !proxy_guard) {
-        waiting_proxy_url = page.URL;
+        wait_for_proxy(page, page.URL);
         [page stopLoading]; [page loadHTMLString:@"<title>Preparing proxy protection</title>" baseURL:nil];
     }
     apply_settings(YES); if (reload && page.URL) { [page stopLoading]; [page reload]; }
@@ -211,8 +243,41 @@ void opal_extensions_prepare(WKWebViewConfiguration *config, int is_private, voi
         contexts = [NSMutableDictionary new]; statuses = [NSMutableDictionary new]; names = [NSMutableDictionary new]; messages = [NSMutableDictionary new];
     }
 }
-void opal_extensions_bind(WKWebView *web) { page = web; apply_settings(NO); if (@available(macOS 15.4, *)) { [controller didOpenWindow:host]; [controller didOpenTab:host]; [controller didActivateTab:host previousActiveTab:nil]; [controller didFocusWindow:host]; } }
-void opal_extensions_navigation(void) { if (@available(macOS 15.4, *)) [controller didChangeTabProperties:WKWebExtensionTabChangedPropertiesURL | WKWebExtensionTabChangedPropertiesTitle | WKWebExtensionTabChangedPropertiesLoading forTab:host]; }
+static OpalBrowserTab *tab_for(WKWebView *web) {
+    for (OpalBrowserTab *tab in browser_tabs) if (tab.web == web) return tab;
+    return nil;
+}
+void opal_extensions_bind(WKWebView *web) {
+    BOOL first = browser_tabs == nil;
+    if (first) browser_tabs = [NSMutableArray new];
+    OpalBrowserTab *tab = tab_for(web);
+    BOOL opened = tab == nil;
+    if (!tab) { tab = [OpalBrowserTab new]; tab.web = web; [browser_tabs addObject:tab]; }
+    OpalBrowserTab *previous = current_tab;
+    if (page != web) { [action_popover close]; [presented_action closePopup]; action_popover = nil; presented_action = nil; }
+    page = web; current_tab = tab; apply_settings(NO);
+    if (@available(macOS 15.4, *)) {
+        if (first) [controller didOpenWindow:host];
+        if (opened) [controller didOpenTab:tab];
+        if (!previous || previous != tab) {
+            [controller didActivateTab:tab previousActiveTab:previous];
+        }
+        [controller didFocusWindow:host];
+    }
+}
+void opal_extensions_navigation(WKWebView *web) {
+    if (@available(macOS 15.4, *)) {
+        OpalBrowserTab *tab = tab_for(web);
+        if (tab) [controller didChangeTabProperties:WKWebExtensionTabChangedPropertiesURL | WKWebExtensionTabChangedPropertiesTitle | WKWebExtensionTabChangedPropertiesLoading forTab:tab];
+    }
+}
+void opal_extensions_forget(WKWebView *web) {
+    OpalBrowserTab *tab = tab_for(web);
+    if (!tab) return;
+    if (@available(macOS 15.4, *)) [controller didCloseTab:tab windowIsClosing:NO];
+    [browser_tabs removeObject:tab];
+    if (tab == current_tab) { current_tab = nil; page = nil; }
+}
 void opal_extensions_close(void) {
     ++generation; wake = NULL;
     [action_popover close]; [presented_action closePopup];
@@ -222,8 +287,8 @@ void opal_extensions_close(void) {
     ready_probe.navigationDelegate = nil; [ready_probe stopLoading]; ready_probe = nil;
     [popup close]; popup = nil;
     [picker cancel:nil]; picker = nil; import_path = nil; import_name = nil;
-    waiting_proxy_url = nil;
-    page = nil; controller = nil; host = nil; contexts = nil; statuses = nil; names = nil; messages = nil;
+    waiting_proxy_urls = nil;
+    browser_tabs = nil; current_tab = nil; page = nil; controller = nil; host = nil; contexts = nil; statuses = nil; names = nil; messages = nil;
 }
 int opal_extensions_ready(void) { return page != nil; }
 void opal_extension_load(int slot, const char *path) {
@@ -291,7 +356,7 @@ int opal_extension_status(int slot, char *name, size_t name_cap, char *message, 
     return [statuses[@(slot)] intValue];
 }
 void opal_extension_action(int slot, int options) {
-    if (@available(macOS 15.4, *)) { WKWebExtensionContext *context = contexts[@(slot)]; if (!context) return; if (options) [host webExtensionController:controller openOptionsPageForExtensionContext:context completionHandler:^(NSError *e) {}]; else [context performActionForTab:host]; }
+    if (@available(macOS 15.4, *)) { WKWebExtensionContext *context = contexts[@(slot)]; if (!context) return; if (options) [host webExtensionController:controller openOptionsPageForExtensionContext:context completionHandler:^(NSError *e) {}]; else [context performActionForTab:current_tab]; }
 }
 void opal_extension_pick(void) {
     if (@available(macOS 15.4, *)) {
@@ -322,7 +387,7 @@ int opal_extensions_test_result(char *out, size_t cap) { if (!probe_result) retu
 size_t opal_extension_take_error(char *out, size_t cap) { size_t n = copy(import_error, out, cap); import_error = nil; return n; }
 int opal_browser_proxy_supported(void) { if (@available(macOS 14.0, *)) return 1; return 0; }
 
-int opal_extensions_navigation_allowed(NSURL *url) {
+int opal_extensions_navigation_allowed(WKWebView *web, NSURL *url) {
     if (!proxy_selected() || ![@[@"http", @"https"] containsObject:url.scheme.lowercaseString]) return 1;
     NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:local_pattern options:NSRegularExpressionCaseInsensitive error:NULL];
     NSString *hostname = url.host.lowercaseString;
@@ -330,10 +395,11 @@ int opal_extensions_navigation_allowed(NSURL *url) {
     if ([hostname containsString:@":"] && ![hostname hasPrefix:@"["]) hostname = [NSString stringWithFormat:@"[%@]", hostname];
     NSString *canonical = [NSString stringWithFormat:@"%@://%@/", url.scheme, hostname];
     if ([hostname hasSuffix:@".local"] || [regex firstMatchInString:canonical options:0 range:NSMakeRange(0, canonical.length)]) return -1;
-    if (!proxy_guard) { waiting_proxy_url = url; prepare_guard(); return 0; }
+    if (!proxy_guard) { wait_for_proxy(web, url); prepare_guard(); return 0; }
     return 1;
 }
 int opal_browser_proxy_guard_ready(void) { return proxy_guard != nil; }
+int opal_extensions_test_tab_count(void) { return (int)[host tabsForWebExtensionContext:nil].count; }
 
 void opal_extension_test_hide_popup(int hide) { test_hide_popup = hide; }
 int opal_extension_test_popup_size(double *width, double *height) {

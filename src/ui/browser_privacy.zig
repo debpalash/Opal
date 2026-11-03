@@ -16,6 +16,8 @@ fn note(src: std.builtin.SourceLocation, text: []const u8) void {
 }
 pub fn render(part: @import("../services/native_browser.zig").Chrome) void {
     if (part == .toolbar) {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
+        defer row.deinit();
         const clicked = if (dvui.windowRect().w / state.app.ui_scale < 1100)
             c.iconButton(@src(), @import("icons").tvg.lucide.puzzle, "Extensions", open)
         else

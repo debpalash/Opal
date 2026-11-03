@@ -490,15 +490,11 @@ pub fn browsing() bool {
     return show_bridge;
 }
 
-/// Current-page identity and browser-hub access share the navigation row.
+/// Page titles live in the tab strip; this row holds browser-hub access.
 pub fn renderToolbar() void {
+    var hub = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
     if (components.iconButton(@src(), icons.tvg.lucide.@"panels-top-left", "Browser hub", false)) show_bridge = false;
-    if (dvui.windowRect().w / state.app.ui_scale >= 1200) {
-        const b = &state.app.browser;
-        var page_name = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5, .min_size_content = .{ .w = 120 }, .max_size_content = .{ .w = 120, .h = 28 }, .padding = .{ .x = 4, .w = 8 } });
-        defer page_name.deinit();
-        _ = dvui.label(@src(), "{s}", .{if (b.title_len > 0) b.title[0..b.title_len] else "New page"}, .{ .expand = .horizontal, .color_text = .{ .color = theme.colors.text_secondary } });
-    }
+    hub.deinit();
     @import("../services/browser.zig").renderToolbar();
 }
 
@@ -525,7 +521,10 @@ pub fn render() void {
     if (show_bridge) {
         var root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
         defer root.deinit();
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         renderToolbar();
+        row.deinit();
+        @import("browser_tabs.zig").render();
         @import("../services/browser.zig").renderPageContent();
     } else renderHub();
 }
