@@ -5,6 +5,11 @@
 #include <SDL2/SDL_syswm.h>
 #include <string.h>
 
+extern void opal_extensions_prepare(WKWebViewConfiguration *, int, void (*)(void));
+extern void opal_extensions_bind(WKWebView *);
+extern void opal_extensions_close(void);
+extern void opal_extensions_navigation(void);
+extern int opal_extensions_navigation_allowed(NSURL *);
 static void (*wake_ui)(void);
 static unsigned changes;
 static int find_result = -1;
@@ -44,7 +49,7 @@ static OpalWebView *view;
 static OpalBrowserDelegate *delegate;
 static NSMutableSet<WKDownload *> *downloads;
 @implementation OpalBrowserDelegate
-- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context { changed(1); }
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context { opal_extensions_navigation(); changed(1); }
 - (WKWebView *)webView:(WKWebView *)webView createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration forNavigationAction:(WKNavigationAction *)action windowFeatures:(WKWindowFeatures *)features {
     if (!action.targetFrame) [webView loadRequest:action.request];
     return nil;
@@ -52,6 +57,11 @@ static NSMutableSet<WKDownload *> *downloads;
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)action decisionHandler:(void (^)(WKNavigationActionPolicy))handler {
     NSString *scheme = action.request.URL.scheme.lowercaseString;
     BOOL safe = [scheme isEqual:@"http"] || [scheme isEqual:@"https"] || [scheme isEqual:@"blob"] || [action.request.URL.absoluteString isEqual:@"about:blank"];
+    int proxy_policy = safe ? opal_extensions_navigation_allowed(action.request.URL) : 1;
+    if (proxy_policy <= 0) {
+        if (proxy_policy < 0) { strcpy(last_error, "Local and literal IPv6 pages require System proxy mode."); changed(1); }
+        handler(WKNavigationActionPolicyCancel); return;
+    }
     handler(!safe ? WKNavigationActionPolicyCancel : action.shouldPerformDownload ? WKNavigationActionPolicyDownload : WKNavigationActionPolicyAllow);
 }
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationResponse:(WKNavigationResponse *)response decisionHandler:(void (^)(WKNavigationResponsePolicy))handler {
@@ -90,6 +100,7 @@ static NSMutableSet<WKDownload *> *downloads;
 void opal_browser_close(void) {
     ++lifetime;
     wake_ui = NULL;
+    opal_extensions_close();
     for (WKDownload *download in [downloads copy]) { download.delegate = nil; [download cancel:nil]; }
     downloads = nil;
     if (view) {
@@ -111,10 +122,14 @@ int opal_browser_attach(void *sdl_window, int incognito, void (*wake)(void)) {
         private_mode = incognito;
         WKWebViewConfiguration *config = [WKWebViewConfiguration new];
         config.websiteDataStore = incognito ? WKWebsiteDataStore.nonPersistentDataStore : WKWebsiteDataStore.defaultDataStore;
+        NSInteger os = NSProcessInfo.processInfo.operatingSystemVersion.majorVersion;
+        config.applicationNameForUserAgent = [NSString stringWithFormat:@"Version/%ld.0 Safari/605.1.15 Opal", (long)(os >= 26 ? os : os + 3)];
+        opal_extensions_prepare(config, incognito, wake);
         view = [[OpalWebView alloc] initWithFrame:NSZeroRect configuration:config];
         delegate = [OpalBrowserDelegate new];
         view.navigationDelegate = delegate; view.UIDelegate = delegate;
         view.allowsBackForwardNavigationGestures = YES;
+        opal_extensions_bind(view);
         for (NSString *key in @[@"URL", @"title", @"loading"]) [view addObserver:delegate forKeyPath:key options:0 context:NULL];
         [view loadHTMLString:@"<html><head><title>New page</title><meta name='color-scheme' content='dark light'></head><body></body></html>" baseURL:nil];
     }
