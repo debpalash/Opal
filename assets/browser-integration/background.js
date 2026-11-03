@@ -25,6 +25,10 @@ api.tabs.onRemoved.addListener(id=>streams.delete(id));
 api.tabs.onUpdated.addListener((id,change)=>{if(change.url)streams.delete(id)});
 api.runtime.onMessage.addListener(async (message,sender)=>{
  if(!sender.tab || sender.frameId!==0)return {ok:false};
+ if(message.what==='read-comic'){
+  const command=globalThis.OpalComicDetection?.command(message,sender.url);
+  return command?api.runtime.sendNativeMessage('opal.browser',command):{ok:false};
+ }
  if(message.what==='favicon')return api.runtime.sendNativeMessage('opal.browser',{what:'favicon',url:sender.url,data:message.data});
  if(message.what!=='play-youtube'||!isYouTube(sender.url)||videoId(sender.url)!==videoId(message.url)||videoId(message.url).length!==11)return {ok:false};
  const state=streams.get(sender.tab.id)||{};

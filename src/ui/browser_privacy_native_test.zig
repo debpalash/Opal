@@ -57,6 +57,7 @@ fn stopServer(listener: *std.Io.net.Server, task: *std.Io.Future(void), fixture:
     _ = task.cancel(io.io());
 }
 const Fixture = struct {
+    comic_test: bool = false,
     range_test: bool = false,
     headers_seen: std.atomic.Value(u32) = .init(0),
     stopping: std.atomic.Value(bool) = .init(false),
@@ -65,6 +66,7 @@ const Fixture = struct {
     images: std.atomic.Value(u32) = .init(0),
     const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><rect width='1' height='1'/></svg>";
     const html = "<html><head><title>Loading fixture</title></head><body><img id='ad' onload=\"document.title='Image allowed ' + location.pathname\" onerror=\"document.title='Image blocked ' + location.pathname\"><script>document.querySelector('#ad').src='/opal-ad/pixel.ar/ads/ad.svg?test='+encodeURIComponent(location.pathname)</script></body></html>";
+    const comic_html = "<title>Owned Comic (2026) #2</title><h1>Owned Comic (2026) #2</h1><script type='application/ld+json'>{\"@type\":\"ComicIssue\",\"name\":\"Owned Comic (2026) #2\",\"issueNumber\":2,\"isPartOf\":{\"@type\":\"ComicSeries\",\"name\":\"Owned Comic (2026)\"}}</script>";
     fn serve(listener: *std.Io.net.Server, self: *@This()) void {
         while (!self.stopping.load(.acquire)) {
             const stream = listener.accept(io.io()) catch return;
@@ -99,7 +101,7 @@ const Fixture = struct {
             }
             _ = self.count.fetchAdd(1, .acq_rel);
             if (image) _ = self.images.fetchAdd(1, .acq_rel);
-            const body = if (image) svg else html;
+            const body = if (image) svg else if (self.comic_test) comic_html else html;
             var outgoing: [2048]u8 = undefined;
             var writer = stream.writer(io.io(), &outgoing);
             writer.interface.print("HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{s}", .{ if (image) "image/svg+xml" else "text/html", body.len, body }) catch continue;
@@ -125,6 +127,7 @@ fn waitExtension(slot: usize) !void {
     return error.Timeout;
 }
 test "Native browser protections first party integration loads and exchanges actual WebKit messages" {
+    _ = @import("../services/comics.zig");
     const integration = @import("../services/browser_integration.zig");
     const Native = struct {
         extern fn opal_browser_integration_test_messages() u64;
@@ -154,15 +157,41 @@ test "Native browser protections first party integration loads and exchanges act
     const before = Native.opal_browser_integration_test_messages();
     var server = try (try std.Io.net.IpAddress.parse("127.0.0.1", 0)).listen(io.io(), .{ .reuse_address = true });
     defer server.deinit(io.io());
-    var fixture: Fixture = .{};
+    var fixture: Fixture = .{ .comic_test = true };
     var task = try io.io().concurrent(Fixture.serve, .{ &server, &fixture });
     defer stopServer(&server, &task, &fixture);
-    try navigate(server.socket.address.getPort(), "integration", "Image allowed");
+    var address: [256:0]u8 = @splat(0);
+    _ = try std.fmt.bufPrint(&address, "http://127.0.0.1:{d}/integration", .{server.socket.address.getPort()});
+    native.api.opal_browser_navigate(&address);
+    try waitTitle("Owned Comic (2026) #2");
     for (0..2000) |_| {
         native.api.opal_browser_test_pump();
         if (Native.opal_browser_integration_test_messages() > before) break;
     }
     try std.testing.expect(Native.opal_browser_integration_test_messages() > before);
+    var result: [256]u8 = undefined;
+    try std.testing.expectEqualStrings("Read in Opal", try evaluate("document.querySelector('[data-opal-read]')?.textContent || 'missing'", &result));
+    const Input = struct {
+        extern fn opal_browser_test_focus() void;
+        extern fn opal_browser_test_key(text: [*:0]const u8, code: c_ushort, command: c_int, repeat: c_int) void;
+    };
+    Input.opal_browser_test_focus();
+    _ = try evaluate("document.querySelector('[data-opal-read]').focus(); 'ready'", &result);
+    Input.opal_browser_test_key("\r", 36, 0, 0);
+    var command: [8192]u8 = undefined;
+    var count: usize = 0;
+    for (0..1000) |_| {
+        native.api.opal_browser_test_pump();
+        count = integration.api.opal_browser_comic_take(&command, command.len);
+        if (count > 0) break;
+    }
+    if (count == 0) std.debug.print("Comic activation: {s}\n", .{try evaluate("JSON.stringify({text:document.querySelector('[data-opal-read]')?.textContent,active:document.activeElement?.tagName,url:location.href})", &result)});
+    try std.testing.expect(count > 0);
+    var target: @import("../services/comic_handoff_pure.zig").Target = undefined;
+    try std.testing.expect(@import("../services/comic_handoff_pure.zig").parse(@import("../core/alloc.zig").allocator, command[0..count], &target));
+    try std.testing.expectEqualStrings("Owned Comic", target.series.text());
+    try std.testing.expectEqual(@as(?u16, 2026), target.year);
+    try std.testing.expectEqual(@as(?f64, 2), target.issue);
 }
 test "Native browser protections media transport retains headers bounds response memory and releases leases" {
     const integration = @import("../services/browser_integration.zig");

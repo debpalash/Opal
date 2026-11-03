@@ -10,6 +10,7 @@ pub const api = struct {
     pub extern fn opal_browser_icon_revision() u64;
     pub extern fn opal_browser_icon_copy(url: [*:0]const u8, out: [*]u8, cap: usize) usize;
     pub extern fn opal_browser_media_take(out: [*]u8, cap: usize) usize;
+    pub extern fn opal_browser_comic_take(out: [*]u8, cap: usize) usize;
     pub extern fn opal_browser_media_config(token: u64, agent: [*:0]const u8, out: [*]u8, cap: usize) usize;
     pub extern fn opal_browser_media_retain(token: u64) void;
     pub extern fn opal_browser_media_release(token: u64) void;
@@ -19,6 +20,7 @@ pub const api = struct {
 var ready = false;
 var error_reported = false;
 var pending: ?@import("browser_handoff_pure.zig").Handoff = null;
+var pending_comic: ?@import("comic_handoff_pure.zig").Target = null;
 pub fn tick() void {
     if (comptime !supported or builtin.is_test) return;
     prepare();
@@ -29,9 +31,24 @@ pub fn tick() void {
         state.showToast("Browser media integration could not start. Close and reopen the browser to retry.");
     }
     if (status == 2) error_reported = false;
+    var comic_buffer: [8192]u8 = undefined;
+    const comic_count = api.opal_browser_comic_take(&comic_buffer, comic_buffer.len);
+    if (comic_count > 0) {
+        var target: @import("comic_handoff_pure.zig").Target = undefined;
+        if (@import("comic_handoff_pure.zig").parse(@import("../core/alloc.zig").allocator, comic_buffer[0..comic_count], &target)) {
+            if (pending) |old| release(old.session);
+            pending = null;
+            pending_comic = target;
+        }
+    }
+    if (pending_comic != null and state.app.config_loaded.load(.acquire)) {
+        @import("comics.zig").openFromBrowser(pending_comic.?);
+        pending_comic = null;
+    }
     var buffer: [65536]u8 = undefined;
     const count = api.opal_browser_media_take(&buffer, buffer.len);
     if (count > 0) {
+        pending_comic = null;
         var handoff: @import("browser_handoff_pure.zig").Handoff = undefined;
         if (@import("browser_handoff_pure.zig").parse(@import("../core/alloc.zig").allocator, buffer[0..count], &handoff)) {
             if (pending) |old| release(old.session);

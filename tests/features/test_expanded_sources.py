@@ -171,7 +171,8 @@ def test_western_comic_readers():
     for source in ('latestcomics', 'ysk', 'xoxo', 'imagecomics', 'globalcomix'):
         assert f'Source.{source}' in comics
         assert f'{source}_installed' in api and f'd.{source}_installed' in client
-    assert 'western.load(value,' in comics
+    assert 'western.loadIssue(value,' in comics and 'read_hint.generation == gen' in comics
+    assert 'preferred_issue: ?f64' in service and 'chooseIssue(pure.Issue' in service
     assert 'pure.latestBatch(doc.value)' in service and 'pure.yskIssues(doc.value' in service
     assert 'pure.imagesUrl(' in service and '.cancel_epoch = cancel' in service
     assert 'readerChapterRow(i, western_reader)' in comics

@@ -49,4 +49,33 @@
     enhance();
   }
   void favicon();
+  const comics=globalThis.OpalComicDetection;
+  if(comics){
+    let button=null,candidate=null,queued=false;
+    function comicAction(){
+      queued=false;candidate=comics.detect(comics.snapshot(document,location.href));
+      if(!candidate){button?.remove();button=null;return;}
+      if(!button||!button.isConnected){
+        button=document.createElement('button');button.type='button';button.dataset.opalRead='true';button.textContent='Read in Opal';
+        button.style.cssText='display:inline-flex;align-items:center;padding:10px 16px;margin:12px 0;border:1px solid currentColor;border-radius:8px;background:Canvas;color:CanvasText;font:600 14px system-ui;cursor:pointer;position:relative;z-index:10';
+        const heading=document.querySelector('main h1,article h1,h1');
+        if(heading)heading.after(button);else {button.style.cssText+=';position:fixed;right:20px;bottom:20px;z-index:2147483646';document.body.append(button);}
+        button.addEventListener('click',async event=>{
+          if(!event.isTrusted)return;event.preventDefault();event.stopPropagation();
+          const target=comics.detect(comics.snapshot(document,location.href));if(!target)return;
+          button.disabled=true;button.textContent='Finding comic…';
+          try{const reply=await api.runtime.sendMessage({what:'read-comic',url:location.href,...target});if(!reply?.ok)throw new Error('handoff');button.textContent='Opened in Opal';}
+          catch{button.textContent='Try Read in Opal again';}
+          setTimeout(()=>{if(button){button.disabled=false;button.textContent='Read in Opal'}},2200);
+        });
+      }
+      button.title=`Find ${candidate.title||candidate.series} in your comic sources`;
+    }
+    comicAction();
+    if(candidate||comics.publisherSite(location.href)){
+      const observer=new MutationObserver(()=>{if(!queued){queued=true;setTimeout(()=>requestAnimationFrame(comicAction),150)}});
+      observer.observe(document.documentElement,{childList:true,subtree:true});
+      window.addEventListener('popstate',comicAction);
+    }
+  }
 })();
