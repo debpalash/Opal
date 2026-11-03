@@ -55,6 +55,7 @@ from features import (  # noqa: F401
     test_architecture,
     test_horizon,
     test_expanded_sources,
+    test_native_browser,
     test_database,
     test_build,
     test_voice,

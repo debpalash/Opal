@@ -9,13 +9,66 @@ const state = @import("../core/state.zig");
 const model = @import("wallpapers_pure.zig");
 const pure = @import("wallpaper_desktop_pure.zig");
 const dvui = @import("dvui");
-pub const Status = enum(u8) { idle, downloading, applying, active, applied, stopped, download_failed, invalid_media, apply_failed, missing_player, missing_host, unsupported };
+pub const Status = enum(u8) { idle, downloading, applying, active, applied, stopped, download_failed, invalid_media, apply_failed, missing_player, missing_converter, missing_host, unsupported };
 var status: std.atomic.Value(Status) = .init(.idle);
 var busy: std.atomic.Value(bool) = .init(false);
 var epoch: std.atomic.Value(u32) = .init(0);
 const Job = struct { row: model.Row, fill: bool, generation: u32 };
 var pending: ?Job = null; // UI owner only.
 var announced: Status = .idle;
+const native_mac = builtin.os.tag == .macos and !@import("build_options").headless;
+const mac = struct {
+    extern fn opal_wallpaper_start(path: [*:0]const u8, fill: c_int) c_int;
+    extern fn opal_wallpaper_stop() void;
+    extern fn opal_wallpaper_status() c_int;
+};
+var native_lock: @import("../core/sync.zig").Mutex = .{};
+var native_path: [1024:0]u8 = @splat(0);
+var native_job: ?Job = null;
+var native_generation: ?u32 = null;
+var native_started_ms: i64 = 0;
+pub fn deinitNative() void {
+    if (comptime !native_mac) return;
+    mac.opal_wallpaper_stop();
+    native_generation = null;
+    native_lock.lock();
+    native_job = null;
+    native_lock.unlock();
+}
+/// Cocoa windows are created, checked, and destroyed only on the UI thread.
+pub fn pollNative() void {
+    if (comptime !native_mac) return;
+    if (native_generation) |generation| if (epoch.load(.acquire) != generation) {
+        mac.opal_wallpaper_stop();
+        native_generation = null;
+        if (snapshot() == .active or snapshot() == .applying) publish(.stopped);
+    };
+    native_lock.lock();
+    if (native_job) |job| {
+        native_job = null;
+        if (current(job)) {
+            native_generation = job.generation;
+            native_started_ms = io.milliTimestamp();
+            if (mac.opal_wallpaper_start(&native_path, @intFromBool(job.fill)) == 0) {
+                native_generation = null;
+                publish(.apply_failed);
+            } else publish(.applying);
+        }
+    }
+    native_lock.unlock();
+    if (native_generation != null) {
+        const result = mac.opal_wallpaper_status();
+        if (result < 0 or (result == 0 and snapshot() == .applying and io.milliTimestamp() - native_started_ms > 15_000)) {
+            mac.opal_wallpaper_stop();
+            native_generation = null;
+            publish(.apply_failed);
+        } else if (result == 1 and snapshot() == .applying) publish(.active);
+        if (result == 0) {
+            const id = dvui.Id.extendId(null, @src(), 0);
+            if (dvui.timerDoneOrNone(id)) dvui.timer(id, 200_000);
+        }
+    }
+}
 pub fn snapshot() Status {
     return status.load(.acquire);
 }
@@ -31,6 +84,7 @@ pub fn label() []const u8 {
         .invalid_media => "Image could not be decoded",
         .apply_failed => "Desktop rejected the wallpaper. Check desktop permissions or installed helper.",
         .missing_player => "Install mpv (mpvpaper on supported Wayland desktops) to apply animated wallpapers.",
+        .missing_converter => "Install ffmpeg to apply WebM, MKV or GIF live wallpapers on macOS.",
         .missing_host => "Install xwinwrap to place live wallpaper behind desktop windows on X11.",
         .unsupported => "Animated wallpapers need X11 or a supported layer-shell Wayland desktop; GNOME/KDE Wayland are not supported.",
     };
@@ -112,7 +166,7 @@ fn run(job: Job) void {
         return;
     }
     var bin_buf: [1024]u8 = undefined;
-    const live_process = animated or target == .wayland;
+    const live_process = (animated and !native_mac) or target == .wayland;
     const binary = if (live_process) findBinary(if (target == .wayland) "mpvpaper" else if (builtin.os.tag == .windows) "mpv.exe" else "mpv", &bin_buf) orelse {
         publish(.missing_player);
         return;
@@ -153,8 +207,55 @@ fn run(job: Job) void {
         publish(.stopped);
         return;
     }
-    const media_path = if (local) original else path;
+    var media_path = if (local) original else path;
+    var converted_path: [1024]u8 = undefined;
     publish(.applying);
+    if (animated and native_mac) {
+        if (pure.macNeedsConversion(ext)) {
+            var converter_buf: [1024]u8 = undefined;
+            const converter = findBinary("ffmpeg", &converter_buf) orelse {
+                publish(.missing_converter);
+                return;
+            };
+            const converted = std.fmt.bufPrint(&converted_path, "{s}/{x}-desktop.mp4", .{ dir, std.hash.Wyhash.hash(0, original) }) catch {
+                publish(.apply_failed);
+                return;
+            };
+            // Partial/cancelled conversions are never reused as valid media.
+            var temporary_buf: [1100]u8 = undefined;
+            const temporary = std.fmt.bufPrint(&temporary_buf, "{s}.preparing.mp4", .{converted}) catch {
+                publish(.apply_failed);
+                return;
+            };
+            if (io.cwdAccess(converted, .{})) {} else |_| {
+                const argv = pure.macConversionArgs(converter, media_path, temporary);
+                var output: [4096]u8 = undefined;
+                const result = bounded.run(&argv, &output, .{ .timeout_ms = 180_000, .cancel_epoch = token(job) });
+                if (!result.ok() or !current(job)) {
+                    io.cwdDeleteFile(temporary) catch {};
+                    publish(if (current(job)) .apply_failed else .stopped);
+                    return;
+                }
+                io.renameAbsolute(temporary, converted) catch {
+                    io.cwdDeleteFile(temporary) catch {};
+                    publish(.apply_failed);
+                    return;
+                };
+            }
+            media_path = converted;
+        }
+        if (media_path.len >= native_path.len) {
+            publish(.apply_failed);
+            return;
+        }
+        native_lock.lock();
+        @memcpy(native_path[0..media_path.len], media_path);
+        native_path[media_path.len] = 0;
+        native_job = job;
+        native_lock.unlock();
+        state.wakeUi();
+        return;
+    }
     if (live_process) {
         var args: [32][]const u8 = undefined;
         const argv = pure.animatedArgs(target, binary, host, media_path, job.fill, &args) orelse {

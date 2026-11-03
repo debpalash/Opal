@@ -64,6 +64,9 @@ test "Native operator activity offline SDL pixel capture" {
 test "Native agents overview offline SDL pixel capture" {
     if (!@import("build_options").headless) _ = @import("ui/agents_overview_native_test.zig");
 }
+test "Native embedded browser and macOS desktop wallpaper" {
+    if (!@import("build_options").headless and builtin.os.tag == .macos) _ = @import("ui/native_browser_test.zig");
+}
 test "Native browser hub offline SDL pixel capture" {
     if (!@import("build_options").headless) _ = @import("ui/browser_hub_native_test.zig");
 }
@@ -928,6 +931,8 @@ pub fn appDeinit() void {
     // Join all owned work before any buffers, services, HTTP state, or the
     // allocator it may publish into are released. 800 ms is the diagnostic
     // threshold, not permission for a worker to outlive shared state.
+    @import("services/native_browser.zig").deinit();
+    @import("services/wallpaper_desktop.zig").deinitNative();
     workers.beginShutdownAndDrain(800);
     @import("ui/local_library_ui.zig").deinit();
     @import("services/source_request.zig").deinit();
@@ -1191,6 +1196,9 @@ fn renderSlashMenu() void {
 }
 
 fn appFrame() !dvui.App.Result {
+    @import("services/native_browser.zig").beginFrame();
+    defer @import("ui/native_browser.zig").endFrame();
+    @import("services/wallpaper_desktop.zig").pollNative();
     // SDL2 defers SIGINT/SIGTERM until its next event pump. Cocoa's native
     // wait may sleep indefinitely when no media or widgets request frames.
     // Keep that wait bounded so Ctrl+C reaches the normal close/cleanup path.

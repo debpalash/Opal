@@ -36,6 +36,7 @@ pub fn fileUri(path: []const u8, out: []u8) ?[]const u8 {
     return out[0..n];
 }
 pub fn animatedArgs(backend: Backend, bin: []const u8, host: ?[]const u8, path: []const u8, fill: bool, out: *[32][]const u8) ?[]const []const u8 {
+    if (backend == .mac) return null; // Native desktop surfaces own macOS video.
     var n: usize = 0;
     // A managed desktop window is needed on X11: its root window can be
     // covered by GNOME/KDE/XFCE's desktop surface. xwinwrap owns a window
@@ -62,12 +63,7 @@ pub fn animatedArgs(backend: Backend, bin: []const u8, host: ?[]const u8, path: 
         out[n] = arg;
         n += 1;
     }
-    if (backend == .mac) {
-        for ([_][]const u8{ "--ontop", "--ontop-level=desktop", "--focus-on=never", "--on-all-workspaces", "--macos-app-activation-policy=accessory", "--macos-geometry-calculation=whole", "--geometry=100%x100%+0+0" }) |arg| {
-            out[n] = arg;
-            n += 1;
-        }
-    } else if (backend == .windows) {
+    if (backend == .windows) {
         // mpv's documented Win32 zero handle targets the desktop WorkerW
         // behind icons; it is not the X11 root-window implementation.
         out[n] = "--wid=0";
@@ -106,7 +102,7 @@ test "desktop routing does not claim GNOME or KDE Wayland animation support" {
 test "animated file paths remain single literal arguments on every backend" {
     const path = "C:/Pictures/a 'quote'; $(touch nope).mp4";
     var args: [32][]const u8 = undefined;
-    for ([_]Backend{ .mac, .windows, .x11, .wayland }) |backend| {
+    for ([_]Backend{ .windows, .x11, .wayland }) |backend| {
         const argv = animatedArgs(backend, "mpv", "xwinwrap", path, true, &args).?;
         try std.testing.expectEqualStrings(path, argv[argv.len - 1]);
         try std.testing.expect(argv.len <= args.len);
@@ -140,4 +136,25 @@ test "live wallpaper targets desktop surfaces rather than normal player windows"
     };
     try std.testing.expect(child_handle);
     try std.testing.expect(animatedArgs(.gnome, "mpv", null, "/movie.mp4", true, &args) == null);
+}
+
+test "macOS live wallpaper cannot launch a normal mpv window" {
+    var args: [32][]const u8 = undefined;
+    try std.testing.expect(animatedArgs(.mac, "mpv", null, "/movie.mp4", true, &args) == null);
+}
+
+/// AVFoundation handles native containers; normalize WebM, MKV and GIF off UI.
+pub fn macNeedsConversion(extension: []const u8) bool {
+    for ([_][]const u8{ "mp4", "mov", "m4v" }) |ext| if (std.ascii.eqlIgnoreCase(extension, ext)) return false;
+    return true;
+}
+pub fn macConversionArgs(bin: []const u8, source: []const u8, destination: []const u8) [25][]const u8 {
+    return .{ bin, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", source, "-an", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-threads", "2", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "--", destination };
+}
+test "macOS converts browser video containers and GIFs without shell interpretation" {
+    for ([_][]const u8{ "webm", "mkv", "gif" }) |ext| try std.testing.expect(macNeedsConversion(ext));
+    for ([_][]const u8{ "mp4", "MOV", "m4v" }) |ext| try std.testing.expect(!macNeedsConversion(ext));
+    const args = macConversionArgs("ffmpeg", "/a 'quote'; $(touch nope).webm", "/safe.mp4");
+    try std.testing.expectEqualStrings("/a 'quote'; $(touch nope).webm", args[7]);
+    try std.testing.expectEqualStrings("/safe.mp4", args[args.len - 1]);
 }
