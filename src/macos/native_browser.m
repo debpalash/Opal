@@ -35,7 +35,7 @@ static size_t copy_text(NSString *s, char *out, size_t cap) {
     if ((event.modifierFlags & NSEventModifierFlagCommand) != 0) {
         NSString *key = event.charactersIgnoringModifiers.lowercaseString;
         unsigned flag = [key isEqual:@"l"] ? 2 : [key isEqual:@"f"] ? 4 : [key isEqual:@"k"] ? 8 : 0;
-        if (flag) { [self.window makeFirstResponder:self.superview]; changed(flag); return YES; }
+        if (flag) { [self.window makeFirstResponder:self.window.contentView]; changed(flag); return YES; }
         if ([key isEqual:@"r"]) { [self reload]; return YES; }
         if ([key isEqual:@"["]) { [self goBack]; return YES; }
         if ([key isEqual:@"]"]) { [self goForward]; return YES; }
@@ -46,6 +46,8 @@ static size_t copy_text(NSString *s, char *out, size_t cap) {
 @interface OpalBrowserDelegate : NSObject <WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate>
 @end
 static OpalWebView *view;
+static NSView *clip_host;
+static double cover_right;
 static OpalBrowserDelegate *delegate;
 static NSMutableSet<WKDownload *> *downloads;
 @implementation OpalBrowserDelegate
@@ -109,6 +111,7 @@ void opal_browser_close(void) {
         view.navigationDelegate = nil; view.UIDelegate = nil;
         [view removeFromSuperview];
     }
+    [clip_host removeFromSuperview]; clip_host = nil; cover_right = 0;
     view = nil; delegate = nil; reader_text = nil; changes = 0; last_error[0] = 0; find_result = -1;
 }
 int opal_browser_attach(void *sdl_window, int incognito, void (*wake)(void)) {
@@ -133,22 +136,34 @@ int opal_browser_attach(void *sdl_window, int incognito, void (*wake)(void)) {
         for (NSString *key in @[@"URL", @"title", @"loading"]) [view addObserver:delegate forKeyPath:key options:0 context:NULL];
         [view loadHTMLString:@"<html><head><title>New page</title><meta name='color-scheme' content='dark light'></head><body></body></html>" baseURL:nil];
     }
-    if (view.superview != window.contentView) [window.contentView addSubview:view];
+    if (!clip_host) {
+        clip_host = [[NSView alloc] initWithFrame:NSZeroRect];
+        clip_host.wantsLayer = YES; clip_host.layer.masksToBounds = YES;
+        [clip_host addSubview:view];
+    }
+    if (clip_host.superview != window.contentView) [window.contentView addSubview:clip_host];
     return 1;
 }
+void opal_browser_occlude_left(double right) { cover_right = right; }
 void opal_browser_present(double x, double y, double width, double height, double pixel_w, double pixel_h, int visible, unsigned rgb, int dark) {
     if (!view) return;
-    NSView *host = view.superview;
+    NSView *host = clip_host.superview;
     NSRect bounds = host.bounds;
     if (pixel_w > 0 && pixel_h > 0) {
         double sx = bounds.size.width / pixel_w, sy = bounds.size.height / pixel_h;
-        view.frame = NSMakeRect(bounds.origin.x + x * sx, bounds.origin.y + (host.isFlipped ? y : pixel_h - y - height) * sy, width * sx, height * sy);
+        double covered = MIN(width, MAX(0, cover_right - x)) * sx;
+        clip_host.frame = NSMakeRect(bounds.origin.x + x * sx + covered, bounds.origin.y + (host.isFlipped ? y : pixel_h - y - height) * sy, width * sx - covered, height * sy);
+        // Crop beneath hover navigation without changing the page's viewport.
+        view.frame = NSMakeRect(-covered, 0, width * sx, height * sy);
     }
     view.appearance = [NSAppearance appearanceNamed:dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
     if (@available(macOS 12.0, *)) view.underPageBackgroundColor = [NSColor colorWithRed:((rgb >> 16) & 255) / 255. green:((rgb >> 8) & 255) / 255. blue:(rgb & 255) / 255. alpha:1];
     if (!visible && !view.hidden && [view.window.firstResponder isKindOfClass:NSView.class] && [(NSView *)view.window.firstResponder isDescendantOf:view]) [view.window makeFirstResponder:host];
     view.hidden = !visible;
+    clip_host.hidden = !visible;
 }
+double opal_browser_test_page_width(void) { return view.frame.size.width; }
+double opal_browser_test_clip_width(void) { return clip_host.frame.size.width; }
 void opal_browser_navigate(const char *url) { NSURL *u = [NSURL URLWithString:[NSString stringWithUTF8String:url]]; if (u) [view loadRequest:[NSURLRequest requestWithURL:u]]; }
 void opal_browser_command(int command) {
     if (command == 0) [view goBack]; else if (command == 1) [view goForward]; else if (command == 2) [view reload];
@@ -174,7 +189,7 @@ size_t opal_browser_reader(char *out, size_t cap) { return copy_text(reader_text
 // Isolated native tests exercise the same WKWebView, not a mock browser.
 void opal_browser_test_html(const char *html) { [view loadHTMLString:[NSString stringWithUTF8String:html] baseURL:[NSURL URLWithString:@"https://opal.invalid/"]]; }
 void opal_browser_test_pump(void) { [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]]; }
-int opal_browser_test_attached(void) { return view && view.window && view.superview == view.window.contentView && view.frame.size.width > 0 && view.frame.size.height > 0; }
+int opal_browser_test_attached(void) { return view && view.window && view.superview == clip_host && clip_host.superview == view.window.contentView && view.frame.size.width > 0 && view.frame.size.height > 0; }
 
 int opal_browser_has_focus(void) { return view && [view.window.firstResponder isKindOfClass:NSView.class] && [(NSView *)view.window.firstResponder isDescendantOf:view]; }
 int opal_browser_test_visible(void) { return view && !view.hidden; }

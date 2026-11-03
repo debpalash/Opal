@@ -69,7 +69,7 @@ def test_motion_transitions():
     ft = _src("src/ui/footer.zig")
     if "pub const motion = struct" not in th or "dvui.easing" not in th:
         return "fail", "theme.motion tokens missing"
-    if "dvui.animate(" not in sh or "@intFromEnum(r)" not in sh:
+    if "dvui.animate(" not in sh or not any(builtin in sh for builtin in ("@intFromEnum(r)", "@backingInt(r)")):
         return "fail", "route fade not wired in shell.zig"
     if "dvui.animate(" not in ft:
         return "fail", "toast fade not wired in footer.zig"

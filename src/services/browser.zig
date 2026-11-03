@@ -1531,17 +1531,22 @@ fn applyStagedNav(b: *@TypeOf(state.app.browser)) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn renderContent() void {
-    const b = &state.app.browser;
-
-    const icons = @import("icons");
-
-    // Wrap the whole browser body in ONE expanding container. Without this, the
-    // URL bar / title / landing render as bare siblings directly into the shell's
-    // content box — next to the Browse sub-tabs row — and the expand=.both frame
-    // starves the non-expand siblings (sub-tabs + URL bar) of height, making them
-    // vanish. Every other Browse content renderer wraps its body the same way.
     var root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer root.deinit();
+    renderToolbar();
+    renderPageContent();
+}
+
+/// The shell can place browser navigation in its existing top bar.
+var address_rect_for_test: dvui.Rect.Physical = .{};
+pub fn addressBoundsForTest() dvui.Rect.Physical {
+    return address_rect_for_test;
+}
+pub fn renderToolbar() void {
+    const b = &state.app.browser;
+    const icons = @import("icons");
+    const toolbar_width = dvui.windowRect().w / state.app.ui_scale;
+    const tiny_toolbar = toolbar_width < 500;
 
     if (comptime native.supported) {
         if (native.api.opal_browser_has_focus() != 0) url_bar_focused = false;
@@ -1632,7 +1637,7 @@ pub fn renderContent() void {
         }
 
         // Forward
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-right", .{}, .{}, icon_btn_style)) {
+        if (!tiny_toolbar and dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-right", .{}, .{}, icon_btn_style)) {
             goForward();
         }
 
@@ -1642,7 +1647,7 @@ pub fn renderContent() void {
         }
 
         // Status indicator: spinner while navigating/starting, check when ready
-        {
+        if (!tiny_toolbar) {
             if (b.is_loading.load(.acquire) or bridge_starting.load(.acquire)) {
                 dvui.spinner(@src(), .{
                     .id_extra = 99,
@@ -1666,7 +1671,7 @@ pub fn renderContent() void {
         var te = dvui.widgetAlloc(dvui.TextEntryWidget);
         te.init(@src(), .{ .text = .{ .buffer = &b.url_buf } }, .{
             .expand = .horizontal,
-            .min_size_content = .{ .w = 200, .h = 18 },
+            .min_size_content = .{ .w = if (tiny_toolbar) 32 else 72, .h = 18 },
             .color_fill = .{ .color = theme.colors.bg_elevated },
             .color_border = .{ .color = theme.colors.border_strong },
             .color_text = .{ .color = theme.colors.text_primary },
@@ -1681,6 +1686,7 @@ pub fn renderContent() void {
         }
         var sug = dvui.suggestion(te, .{ .open_on_focus = false, .open_on_text_change = true });
         te.draw();
+        if (@import("builtin").is_test) address_rect_for_test = te.data().borderRectScale().r;
 
         // History autocomplete: rank the cached top-visited rows against the
         // typed text (browser_pure.historyMatchScore) and offer the best 5.
@@ -1732,6 +1738,10 @@ pub fn renderContent() void {
         if (comptime native.supported) {
             if (native.api.opal_browser_has_focus() != 0) url_bar_focused = false;
         }
+        if (b.title_len > 0) {
+            var title: [256]u8 = undefined;
+            @import("../ui/components.zig").tip(@src(), te.data().*, safeUtf8Buf(b.title[0..b.title_len], &title));
+        }
         te.deinit();
         if (nav_pick) |hi| {
             var nav_buf: [512]u8 = undefined;
@@ -1741,7 +1751,7 @@ pub fn renderContent() void {
         }
 
         // Go (play icon)
-        const clicked_go = dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
+        const clicked_go = !tiny_toolbar and dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .color_fill = .{ .color = theme.colors.accent },
             .color_text = .{ .color = dvui.Color.white },
             .corners = theme.dims.rad_sm,
@@ -1761,82 +1771,108 @@ pub fn renderContent() void {
 
         if (native.supported) if (native.render_chrome) |render| render(.toolbar);
 
-        // Bookmark star — gold when the current page is bookmarked.
-        if (b.url_len > 0) {
-            const bookmarked = findBookmark(b.url_buf[0..b.url_len]) != null;
-            var star_wd: dvui.WidgetData = undefined;
-            var star_style = icon_btn_style;
-            star_style.id_extra = 119;
-            star_style.data_out = &star_wd;
-            if (bookmarked) star_style.color_text = .{ .color = theme.colors.warning };
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.star, .{}, .{}, star_style)) {
-                toggleBookmark();
+        if (toolbar_width < 1100) {
+            var menu = dvui.menu(@src(), .horizontal, .{ .gravity_y = 0.5 });
+            defer menu.deinit();
+            if (dvui.menuItemIcon(@src(), "Page tools", icons.tvg.lucide.ellipsis, .{ .submenu = true }, icon_btn_style)) |r| {
+                var popup = dvui.floatingMenu(@src(), .{ .from = r }, .{ .color_fill = .{ .color = theme.colors.bg_surface }, .color_border = .{ .color = theme.colors.border_subtle } });
+                defer popup.deinit();
+                var tools = dvui.box(@src(), .{ .dir = .horizontal }, .{ .padding = dvui.Rect.all(4), .background = true, .color_fill = .{ .color = theme.colors.bg_surface } });
+                defer tools.deinit();
+                renderPageTools(icon_btn_style);
             }
-            @import("../ui/components.zig").tipId(@src(), star_wd, if (bookmarked) "Remove bookmark" else "Bookmark this page", 119);
-        }
+        } else renderPageTools(icon_btn_style);
+    }
+}
 
-        // Copy current URL
-        if (b.url_len > 0) {
-            var copy_wd: dvui.WidgetData = undefined;
-            var copy_style = icon_btn_style;
-            copy_style.id_extra = 120;
-            copy_style.data_out = &copy_wd;
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.copy, .{}, .{}, copy_style)) {
-                dvui.clipboardTextSet(b.url_buf[0..b.url_len]);
-                state.showToast("URL copied");
-            }
-            @import("../ui/components.zig").tipId(@src(), copy_wd, "Copy URL", 120);
+fn renderPageTools(icon_btn_style: dvui.Options) void {
+    const b = &state.app.browser;
+    const icons = @import("icons");
+    if (dvui.windowRect().w / state.app.ui_scale < 500) {
+        if (dvui.buttonIcon(@src(), "Forward", icons.tvg.lucide.@"chevron-right", .{}, .{}, icon_btn_style)) goForward();
+    }
+    // Bookmark star — gold when the current page is bookmarked.
+    if (b.url_len > 0) {
+        const bookmarked = findBookmark(b.url_buf[0..b.url_len]) != null;
+        var star_wd: dvui.WidgetData = undefined;
+        var star_style = icon_btn_style;
+        star_style.id_extra = 119;
+        star_style.data_out = &star_wd;
+        if (bookmarked) star_style.color_text = .{ .color = theme.colors.warning };
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.star, .{}, .{}, star_style)) {
+            toggleBookmark();
         }
+        @import("../ui/components.zig").tipId(@src(), star_wd, if (bookmarked) "Remove bookmark" else "Bookmark this page", 119);
+    }
 
-        // Open the current page in the media player (yt-dlp handles most
-        // video pages) — the browse-to-watch handoff in one click.
-        if (b.url_len > 0) {
-            var mpv_wd: dvui.WidgetData = undefined;
-            var mpv_style = icon_btn_style;
-            mpv_style.id_extra = 121;
-            mpv_style.data_out = &mpv_wd;
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"monitor-play", .{}, .{}, mpv_style)) {
-                var url_copy: [2048]u8 = undefined;
-                @memcpy(url_copy[0..b.url_len], b.url_buf[0..b.url_len]);
-                state.showToast("Opening in player...");
-                loadContentDirect(url_copy[0..b.url_len]);
-            }
-            @import("../ui/components.zig").tipId(@src(), mpv_wd, "Play this page in the media player", 121);
+    // Copy current URL
+    if (b.url_len > 0) {
+        var copy_wd: dvui.WidgetData = undefined;
+        var copy_style = icon_btn_style;
+        copy_style.id_extra = 120;
+        copy_style.data_out = &copy_wd;
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.copy, .{}, .{}, copy_style)) {
+            dvui.clipboardTextSet(b.url_buf[0..b.url_len]);
+            state.showToast("URL copied");
         }
+        @import("../ui/components.zig").tipId(@src(), copy_wd, "Copy URL", 120);
+    }
 
-        // Zoom out / in (Cmd/Ctrl - and + work too; Cmd/Ctrl 0 resets)
-        {
-            var zo_style = icon_btn_style;
-            zo_style.id_extra = 123;
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"zoom-out", .{}, .{}, zo_style)) {
-                setZoom(zoom_level - 0.1);
-            }
-            var zi_style = icon_btn_style;
-            zi_style.id_extra = 124;
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"zoom-in", .{}, .{}, zi_style)) {
-                setZoom(zoom_level + 0.1);
-            }
+    // Open the current page in the media player (yt-dlp handles most
+    // video pages) — the browse-to-watch handoff in one click.
+    if (b.url_len > 0) {
+        var mpv_wd: dvui.WidgetData = undefined;
+        var mpv_style = icon_btn_style;
+        mpv_style.id_extra = 121;
+        mpv_style.data_out = &mpv_wd;
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"monitor-play", .{}, .{}, mpv_style)) {
+            var url_copy: [2048]u8 = undefined;
+            @memcpy(url_copy[0..b.url_len], b.url_buf[0..b.url_len]);
+            state.showToast("Opening in player...");
+            loadContentDirect(url_copy[0..b.url_len]);
         }
+        @import("../ui/components.zig").tipId(@src(), mpv_wd, "Play this page in the media player", 121);
+    }
 
-        // Reader — extract the page's text into a scrollable overlay.
-        if (b.url_len > 0) {
-            var rd_wd: dvui.WidgetData = undefined;
-            var rd_style = icon_btn_style;
-            rd_style.id_extra = 125;
-            rd_style.data_out = &rd_wd;
-            if (reader_open) rd_style.color_text = .{ .color = theme.colors.accent };
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"book-open", .{}, .{}, rd_style)) {
-                if (reader_open) {
-                    reader_open = false;
-                } else {
-                    reader_open = true;
-                    reader_len = 0; // stale text from the previous page hides
-                    requestReadText();
-                }
-            }
-            @import("../ui/components.zig").tipId(@src(), rd_wd, "Reader: extract page text", 125);
+    // Zoom out / in (Cmd/Ctrl - and + work too; Cmd/Ctrl 0 resets)
+    {
+        var zo_style = icon_btn_style;
+        zo_style.id_extra = 123;
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"zoom-out", .{}, .{}, zo_style)) {
+            setZoom(zoom_level - 0.1);
+        }
+        var zi_style = icon_btn_style;
+        zi_style.id_extra = 124;
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"zoom-in", .{}, .{}, zi_style)) {
+            setZoom(zoom_level + 0.1);
         }
     }
+
+    // Reader — extract the page's text into a scrollable overlay.
+    if (b.url_len > 0) {
+        var rd_wd: dvui.WidgetData = undefined;
+        var rd_style = icon_btn_style;
+        rd_style.id_extra = 125;
+        rd_style.data_out = &rd_wd;
+        if (reader_open) rd_style.color_text = .{ .color = theme.colors.accent };
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"book-open", .{}, .{}, rd_style)) {
+            if (reader_open) {
+                reader_open = false;
+            } else {
+                reader_open = true;
+                reader_len = 0; // stale text from the previous page hides
+                requestReadText();
+            }
+        }
+        @import("../ui/components.zig").tipId(@src(), rd_wd, "Reader: extract page text", 125);
+    }
+}
+
+pub fn renderPageContent() void {
+    const b = &state.app.browser;
+    const icons = @import("icons");
+    var root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+    defer root.deinit();
 
     // ── Find-in-page bar (Cmd/Ctrl+F; Enter = next match; Esc closes) ──
     if (find_open) {
@@ -1921,18 +1957,6 @@ pub fn renderContent() void {
     }
 
     if (native.supported) if (native.render_chrome) |render| render(.panel);
-
-    // Title bar
-    if (b.title_len > 0) {
-        var tbuf: [256]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(b.title[0..b.title_len], &tbuf)}, .{
-            .color_text = .{ .color = theme.colors.text_primary },
-            .padding = .{ .x = 8, .y = 2, .w = 8, .h = 2 },
-            .background = true,
-            .color_fill = .{ .color = theme.colors.bg_surface },
-            .expand = .horizontal,
-        });
-    }
 
     // Loading state — a slim indeterminate sweep under the URL bar. The
     // previous page stays visible underneath (browser-style), instead of the
