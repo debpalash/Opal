@@ -17,6 +17,22 @@ class Visuals(unittest.TestCase):
         text = media.markdown(data)
         self.assertIn(f'/Opal/v{version}/assets/releases/v{version}/', text)
         self.assertNotIn('/main/', text)
+    def test_cancelled_candidate_does_not_hide_features_from_next_release(self):
+        import shutil, subprocess
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw);(root/'scripts').mkdir()
+            for name in ('release-notes.sh','release-media.py'):shutil.copy(ROOT/'scripts'/name,root/'scripts'/name)
+            def git(*args):return subprocess.run(['git',*args],cwd=root,capture_output=True,text=True,check=True)
+            git('init');git('config','user.name','Release fixture');git('config','user.email','fixture@example.invalid')
+            def commit(text,tag):
+                (root/'fixture').write_text(text);git('add','.');git('commit','-m',text);git('tag',tag)
+            commit('Published baseline','v1.0.0')
+            commit('Feature from cancelled candidate','v1.0.1')
+            (root/'CHANGELOG.md').write_text('## v1.0.2 — today\nFeatures plus restart fix.\n## v1.0.1 — today (unpublished)\nCandidate cancelled.\n')
+            commit('Fix restart','v1.0.2')
+            result=subprocess.run(['sh','scripts/release-notes.sh','v1.0.2'],cwd=root,capture_output=True,text=True,check=True)
+            self.assertIn('compare/v1.0.0...v1.0.2',result.stdout)
+            self.assertIn('Feature from cancelled candidate',result.stdout)
     def test_missing_stale_traversal_and_invalid_images_block_release(self):
         with tempfile.TemporaryDirectory() as raw:
             root=Path(raw);folder=root/'docs/releases/v1.2.3';folder.mkdir(parents=True)

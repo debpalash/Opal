@@ -1,0 +1,15 @@
+{
+  "tag": "v0.9.3",
+  "items": [
+    {
+      "path": "assets/releases/v0.9.3/browser.png",
+      "alt": "Opal’s native macOS browser with compact navigation, tabs and a themed new-tab page.",
+      "caption": "Browse inside Opal on macOS. Tabs, extensions, recent pages and connection controls sit beside the player and reading library. Native UI capture with public demo recents."
+    },
+    {
+      "path": "assets/releases/v0.9.3/update-flow.gif",
+      "alt": "The corner update card offers Update, shows download progress, then offers Restart.",
+      "caption": "Download in the background, then restart to install and reopen. Native UI preview with an illustrative next-version number; no live download is shown. Seamless restart installation is available for writable macOS app bundles."
+    }
+  ]
+}

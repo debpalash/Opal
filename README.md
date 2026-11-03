@@ -14,7 +14,7 @@ macOS · Linux · Windows alpha
 
 </div>
 
-![Opal’s native macOS browser: compact address bar and tabs, a themed new-tab page, privacy measurements and connection controls.](assets/releases/v0.9.2/browser.png)
+![Opal’s native macOS browser: compact address bar and tabs, a themed new-tab page, privacy measurements and connection controls.](assets/releases/v0.9.3/browser.png)
 
 <sub>Current macOS UI with public demo recents.</sub>
 
@@ -124,7 +124,7 @@ Install search sources in **Settings → General → Install source plugins**.
 A **TMDB v4 token** adds richer metadata. AI and voice models are opt-in.
 Reopen onboarding in **Settings → About**.
 
-**Updates from v0.9.2:** Opal checks automatically and offers a small corner prompt.
+**Updates from v0.9.3:** Opal checks automatically and offers a small corner prompt.
 On a writable macOS app installation, choose **Update**, keep using the app while
 it downloads, then **Restart** to install and reopen. A failed launch restores the
 previous version. Control checks in **Settings → About**. Older versions need one
@@ -147,7 +147,7 @@ curl -fsSL https://raw.githubusercontent.com/debpalash/Opal/main/scripts/install
 
 ## See it in action
 
-**New in v0.9.2: the browser belongs in the app.** Tabs, pinned extensions, a native
+**New in v0.9.3: the browser belongs in the app.** Tabs, pinned extensions, a native
 new-tab page, YouTube handoff and comic discovery keep browsing close to playback.
 The native embedded browser and desktop update flow shown here are for macOS.
 
@@ -155,8 +155,8 @@ The native embedded browser and desktop update flow shown here are for macOS.
 <summary><b>Update, keep using Opal, restart when ready</b></summary>
 
 <picture>
-  <source media="(prefers-reduced-motion: reduce)" srcset="assets/releases/v0.9.2/update-ready.png" />
-  <img src="assets/releases/v0.9.2/update-flow.gif" width="100%" alt="Opal’s corner update card moves from Update to download progress to Restart, while the browser stays open." />
+  <source media="(prefers-reduced-motion: reduce)" srcset="assets/releases/v0.9.3/update-ready.png" />
+  <img src="assets/releases/v0.9.3/update-flow.gif" width="100%" alt="Opal’s corner update card moves from Update to download progress to Restart, while the browser stays open." />
 </picture>
 
 Native UI preview with an illustrative next-version number. The app changes only

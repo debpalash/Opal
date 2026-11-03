@@ -103,7 +103,7 @@ us, and the service's own privacy policy governs that interaction.
 Two outbound requests can occur at startup without an explicit per-use action.
 
 1. **Update check** — a request to GitHub Releases to see if a newer Opal
-   version exists. In v0.9.2 and later, automatic checks begin after startup and
+   version exists. In v0.9.3 and later, automatic checks begin after startup and
    run at most daily during a session. Turn them off in **Settings → About**.
    Downloads start only after you choose **Update**; installation starts only
    after you choose **Restart** (or open the platform installer).

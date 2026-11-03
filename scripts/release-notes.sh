@@ -44,6 +44,14 @@ fi
 PREV="${2:-}"
 if [ -z "$PREV" ]; then
     PREV=$(git -C "$ROOT" describe --tags --abbrev=0 "$END^" 2>/dev/null || true)
+    # A cancelled candidate has a tag but no published release. Include its
+    # changes in the next release rather than hiding them behind that tag.
+    while [ -n "$PREV" ] && [ -f "$CHANGELOG" ] && awk -v tag="$PREV" '
+        /^## / && $2 == tag && /\(unpublished\)/ { found = 1 }
+        END { exit !found }
+    ' "$CHANGELOG"; do
+        PREV=$(git -C "$ROOT" describe --tags --abbrev=0 "$PREV^" 2>/dev/null || true)
+    done
 fi
 if [ -n "$PREV" ]; then RANGE="$PREV..$END"; else RANGE="$END"; fi
 
