@@ -28,6 +28,10 @@ const browser_pure = @import("../services/browser_pure.zig");
 const sidebar_layout = @import("shell_layout_pure.zig");
 const shell_tabs = @import("shell_tabs_pure.zig");
 var sidebar_collapsed = false;
+var sidebar_toggle_rect: dvui.Rect.Physical = .{};
+pub fn sidebarToggleBoundsForTest() dvui.Rect.Physical {
+    return sidebar_toggle_rect;
+}
 var sidebar_hover_expanded = false;
 var sidebar_user_expanded: ?bool = null;
 var sidebar_fixture: ?bool = null;
@@ -49,6 +53,8 @@ pub fn moreBoundsForTest() dvui.Rect.Physical {
 pub fn setSidebarFixtureForTest(expanded: ?bool) void {
     if (!@import("builtin").is_test) return;
     sidebar_fixture = expanded;
+    sidebar_collapsed = false;
+    sidebar_user_expanded = null;
     sidebar_hover_expanded = false;
     sidebar_scroll = .{};
     sidebar_rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
@@ -78,6 +84,7 @@ pub fn mouseInPlayerTopChrome(p: dvui.Point.Physical) bool {
 
 /// Frame entry — called from appFrame when page_shell_enabled.
 pub fn render() !void {
+    if (@import("builtin").is_test) sidebar_toggle_rect = .{};
     // Player popovers and panels are route-bound. Leaving Now Playing must not
     // leave an invisible modal armed that reappears on the next visit or eats
     // the first click on another page.
@@ -159,7 +166,7 @@ pub fn render() !void {
             .threshold_ms = autohide.DEFAULT_THRESHOLD_MS,
         });
     }
-    const immersive = autohide.playerImmersive(fullscreen, hide_eligible, idle_ms);
+    const immersive = state.app.router.current == .player and autohide.playerImmersive(fullscreen, hide_eligible, idle_ms);
 
     if (state.app.router.current == .player) {
         // Player is a true layer stack: the video owns the entire route and
@@ -306,7 +313,9 @@ pub fn render() !void {
             const scale = dvui.windowNaturalScale();
             var rect: dvui.Rect = .{ .x = rail_rect.x / scale, .y = rail_rect.y / scale, .w = expanded.sidebar * state.app.ui_scale, .h = rail_rect.h / scale };
             const previous_focus = dvui.focusedSubwindowId();
-            var overlay = dvui.floatingWindow(@src(), .{ .rect = &rect, .resize = .none, .stay_above_parent_window = true }, .{
+            // A zero-origin rail is an explicit anchor, including during
+            // fullscreen/layout transitions. DVUI otherwise centers (0, 0).
+            var overlay = dvui.floatingWindow(@src(), .{ .rect = &rect, .center_on = dvui.Rect.Natural.cast(rect), .window_avoid = .none, .resize = .none, .stay_above_parent_window = true }, .{
                 .background = true,
                 .color_fill = .{ .color = theme.colors.bg_app },
                 .color_border = .{ .color = theme.colors.border_subtle },
@@ -534,6 +543,7 @@ fn chromeIconButton(src: std.builtin.SourceLocation, icon: []const u8, tooltip: 
     }
     const clicked = dvui.buttonIcon(src, tooltip, icon, .{}, .{}, opts);
     if (@import("builtin").is_test and std.mem.eql(u8, tooltip, "Clear search")) query_clear_bounds = data.borderRectScale().r;
+    if (@import("builtin").is_test and (std.mem.eql(u8, tooltip, "Expand sidebar") or std.mem.eql(u8, tooltip, "Collapse sidebar"))) sidebar_toggle_rect = data.borderRectScale().r;
     components.tip(src, data, tooltip);
     return clicked;
 }
