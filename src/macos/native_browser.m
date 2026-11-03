@@ -1,6 +1,7 @@
 // WebKit renders and receives input directly in the SDL window. No frame stream.
 #import <AppKit/AppKit.h>
 #import <WebKit/WebKit.h>
+#import <QuartzCore/CAShapeLayer.h>
 #import "browser_security.h"
 extern int opal_browser_security_navigation_allowed(NSURL *);
 extern void opal_browser_security_wait(WKWebView *, NSURLRequest *);
@@ -66,7 +67,17 @@ int opal_browser_is_start_page(void) { return !view || !view.URL || [view.URL.ab
 static NSMutableDictionary<NSNumber *, OpalWebView *> *tab_views;
 static unsigned active_tab_id = 1;
 static NSString *new_tab_url;
-static NSView *clip_host;
+@interface OpalBrowserClipView : NSView
+@property NSRect excludedRect;
+@property NSRect maskBounds;
+@end
+@implementation OpalBrowserClipView
+- (NSView *)hitTest:(NSPoint)point {
+    if (!NSIsEmptyRect(self.excludedRect) && NSPointInRect([self convertPoint:point fromView:self.superview],self.excludedRect)) return nil;
+    return [super hitTest:point];
+}
+@end
+static OpalBrowserClipView *clip_host;
 static double cover_right;
 static OpalBrowserDelegate *delegate;
 static NSMutableSet<WKDownload *> *downloads;
@@ -240,7 +251,7 @@ int opal_browser_attach(void *sdl_window, int incognito, void (*wake)(void)) {
         opal_extensions_bind(view);
     }
     if (!clip_host) {
-        clip_host = [[NSView alloc] initWithFrame:NSZeroRect];
+        clip_host = [[OpalBrowserClipView alloc] initWithFrame:NSZeroRect];
         clip_host.wantsLayer = YES; clip_host.layer.masksToBounds = YES;
         [clip_host addSubview:view];
     }
@@ -273,6 +284,17 @@ void opal_browser_present(double x, double y, double width, double height, doubl
 }
 double opal_browser_test_page_width(void) { return view.frame.size.width; }
 double opal_browser_test_clip_width(void) { return clip_host.frame.size.width; }
+void opal_browser_occlude_popup(double x,double y,double w,double h,double pixel_w,double pixel_h) {
+    if (!clip_host || !clip_host.superview || pixel_w<=0 || pixel_h<=0) return;
+    NSView *host=clip_host.superview; NSRect bounds=host.bounds;
+    NSRect hole=NSZeroRect;
+    if(w>0 && h>0){NSRect frame=NSMakeRect(bounds.origin.x+x*bounds.size.width/pixel_w,bounds.origin.y+(host.isFlipped?y:pixel_h-y-h)*bounds.size.height/pixel_h,w*bounds.size.width/pixel_w,h*bounds.size.height/pixel_h);hole=[clip_host convertRect:frame fromView:host];}
+    if(NSEqualRects(hole,clip_host.excludedRect)&&NSEqualRects(clip_host.bounds,clip_host.maskBounds))return;
+    clip_host.excludedRect=hole;clip_host.maskBounds=clip_host.bounds;
+    if(NSIsEmptyRect(hole)){clip_host.layer.mask=nil;return;}
+    CAShapeLayer *mask=[CAShapeLayer layer];CGMutablePathRef path=CGPathCreateMutable();CGPathAddRect(path,NULL,NSRectToCGRect(clip_host.bounds));CGPathAddRoundedRect(path,NULL,NSRectToCGRect(hole),8,8);mask.path=path;mask.fillRule=kCAFillRuleEvenOdd;clip_host.layer.mask=mask;CGPathRelease(path);
+}
+int opal_browser_test_popup_hole(void){return clip_host && !NSIsEmptyRect(clip_host.excludedRect) && clip_host.layer.mask!=nil;}
 void opal_browser_navigate(const char *url) { NSURL *u = [NSURL URLWithString:[NSString stringWithUTF8String:url]]; if (u) [view loadRequest:[NSURLRequest requestWithURL:u]]; }
 void opal_browser_command(int command) {
     if (command == 0) [view goBack]; else if (command == 1) [view goForward]; else if (command == 2) [view reload];
@@ -327,3 +349,9 @@ void opal_browser_test_snapshot(const char *path) {
     }];
 }
 int opal_browser_test_snapshot_result(void) { return snapshot_result; }
+int opal_browser_test_popup_passthrough(void) {
+    if (!clip_host || NSIsEmptyRect(clip_host.excludedRect)) return 0;
+    NSRect r=clip_host.excludedRect;
+    NSPoint p=[clip_host convertPoint:NSMakePoint(NSMidX(r),NSMidY(r)) toView:clip_host.superview];
+    return [clip_host hitTest:p]==nil;
+}

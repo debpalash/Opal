@@ -21,6 +21,7 @@ pub fn endFrame() void {
     var visible = !state.app.command_palette_open and !state.app.cheatsheet_open;
     const stack = dvui.currentWindow().subwindows.stack.items;
     if (stack.len > 1) for (stack[1..]) |sw| {
+        if (@import("update_prompt.zig").popup_id) |id| if (sw.id == id) continue;
         const r = sw.rect_pixels;
         if (sidebar_cover) |cover| {
             if (sw.id == cover.id) continue;
@@ -36,4 +37,7 @@ pub fn endFrame() void {
     native.api.opal_browser_occlude_left(if (sidebar_cover) |cover| cover.rect.x + cover.rect.w else 0);
     const rgb = (@as(c_uint, bg.r) << 16) | (@as(c_uint, bg.g) << 8) | bg.b;
     native.endFrame(visible, rgb, @as(u32, bg.r) + bg.g + bg.b < 384);
+    const popup = @import("update_prompt.zig");
+    const window = dvui.windowRectPixels();
+    native.api.opal_browser_occlude_popup(popup.bounds.x, popup.bounds.y, if (popup.popup_id != null) popup.bounds.w else 0, if (popup.popup_id != null) popup.bounds.h else 0, window.w, window.h);
 }

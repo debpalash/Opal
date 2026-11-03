@@ -875,6 +875,7 @@ pub const AppState = struct {
     // Auto-download subtitles when a video starts and none are present
     // (embedded or sidecar). Needs opensub_api_key; no-ops silently without it.
     auto_download_subs: bool = true,
+    auto_check_updates: bool = true,
     /// Wanted list: queue each tracked show's newest aired episode automatically.
     wanted_follow_tv: bool = false,
     /// Scheduled agent tasks run only while this is on (they spend the user's agent credit).

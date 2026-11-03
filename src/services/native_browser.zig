@@ -7,6 +7,7 @@ pub const api = struct {
     pub extern fn opal_browser_attach(window: ?*anyopaque, private: c_int, wake: *const fn () callconv(.c) void) c_int;
     pub extern fn opal_browser_present(x: f64, y: f64, w: f64, h: f64, pixel_w: f64, pixel_h: f64, visible: c_int, rgb: c_uint, dark: c_int) void;
     pub extern fn opal_browser_occlude_left(right: f64) void;
+    pub extern fn opal_browser_occlude_popup(x: f64, y: f64, w: f64, h: f64, pixel_w: f64, pixel_h: f64) void;
     pub extern fn opal_browser_close() void;
     pub extern fn opal_browser_has_focus() c_int;
     pub extern fn opal_browser_is_start_page() c_int;
