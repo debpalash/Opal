@@ -8,7 +8,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 const search = @import("../services/search.zig");
 const resolver = @import("../services/resolver.zig");
 const capture = @import("native_capture.zig");
-const Case = struct { name: []const u8, route: router.Route, tab: state.DrawerTab = .TMDB, settings: state.SettingsTab = .General, plugin: router.PluginTab = .sources, sidebar: ?bool = null, navigate_anime: bool = false, hover_sidebar: bool = false, scope: ?search.scope_model.Scope = null, remove_scope: bool = false, clear_query: bool = false, clear_query_click: bool = false, submit_query: bool = false, navigate_movies: bool = false, nav_api: bool = false, ranking_fixture: bool = false, comic_reader: bool = false, novels_empty: bool = false, anime_episodes: bool = false, wallpaper_performance: bool = false };
+const Case = struct { name: []const u8, route: router.Route, tab: state.DrawerTab = .TMDB, settings: state.SettingsTab = .General, plugin: router.PluginTab = .sources, sidebar: ?bool = null, navigate_anime: bool = false, hover_sidebar: bool = false, fullscreen_comics: bool = false, toggle_sidebar: bool = false, ui_scale: f32 = 1, scope: ?search.scope_model.Scope = null, remove_scope: bool = false, clear_query: bool = false, clear_query_click: bool = false, submit_query: bool = false, navigate_movies: bool = false, nav_api: bool = false, ranking_fixture: bool = false, comic_reader: bool = false, novels_empty: bool = false, anime_episodes: bool = false, wallpaper_performance: bool = false };
 var current: Case = undefined;
 var first_frame = true;
 var preset: theme.ThemePreset = .midnight;
@@ -42,7 +42,8 @@ fn setup() !void {
     @import("shell.zig").setSidebarFixtureForTest(current.sidebar);
     theme.active_preset = preset;
     state.app.page_shell_enabled = true;
-    state.app.ui_scale = 1;
+    state.app.ui_scale = current.ui_scale;
+    state.app.fullscreen_player_idx = if (current.fullscreen_comics) 0 else null;
     state.app.router.current = current.route;
     search.enterSearchContext(.global, "");
     search.setSearchScope(current.scope orelse .all);
@@ -166,6 +167,11 @@ fn draw() !void {
     }
 
     @import("components.zig").clearToggleBoundsForTest();
+    if (frames == 0) {
+        // Hidden fixtures must not inherit the user's live pointer position.
+        const viewport = dvui.windowRectPixels();
+        _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = viewport.w - 8, .y = viewport.h - 8 } });
+    }
     if (current.hover_sidebar and (frames == 2 or frames == 5)) {
         const bounds = @import("shell.zig").sidebarBoundsForTest();
         const point = if (frames == 2)
@@ -173,6 +179,13 @@ fn draw() !void {
         else
             dvui.Point.Physical{ .x = bounds.content.x + bounds.content.w - 20, .y = bounds.content.y + 20 };
         _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = point });
+    }
+    if (current.toggle_sidebar and (frames == 4 or frames == 6)) {
+        const toggle = @import("shell.zig").sidebarToggleBoundsForTest();
+        try std.testing.expect(toggle.w > 0 and toggle.h > 0);
+        _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = toggle.center() });
+        _ = try dvui.currentWindow().addEventMouseButton(.left, .press);
+        _ = try dvui.currentWindow().addEventMouseButton(.left, .release);
     }
     if (current.navigate_movies and frames == 2) {
         const bounds = @import("shell.zig").sidebarMoviesBoundsForTest();
@@ -318,7 +331,11 @@ fn draw() !void {
         _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = dvui.windowRectPixels().w - 80, .y = 400 } });
         _ = try dvui.currentWindow().addEventMouseWheel(-800, .vertical, null);
     }
-    try @import("shell.zig").render();
+    if (current.fullscreen_comics) {
+        var scaled = dvui.scale(@src(), .{ .scale = &state.app.ui_scale }, .{ .expand = .both });
+        try @import("shell.zig").render();
+        scaled.deinit();
+    } else try @import("shell.zig").render();
     if (current.wallpaper_performance and frames >= 4) {
         const stats = @import("../services/wallpapers.zig").nativeStatsForTest();
         try std.testing.expectEqual(@as(usize, 2000), stats.total);
@@ -370,6 +387,17 @@ fn draw() !void {
         try std.testing.expectEqual(state.DrawerTab.Anime, state.app.browse_source);
         try std.testing.expect(dvui.focusedWidgetId() != null);
     }
+    if (current.fullscreen_comics and frames >= 4) {
+        const rect = @import("shell.zig").sidebarBoundsForTest().sidebar;
+        // In fullscreen the hover drawer must remain on the left, with the
+        // loaded comic grid fixed underneath it rather than moving the drawer.
+        try std.testing.expectApproxEqAbs(dvui.windowRectPixels().x, rect.x, 1);
+        try std.testing.expect(rect.y > dvui.windowRectPixels().y);
+        const toggle = @import("shell.zig").sidebarToggleBoundsForTest();
+        try std.testing.expect(toggle.w > 0 and toggle.h > 0);
+        try std.testing.expect(toggle.y >= 0 and toggle.y + toggle.h <= rect.y + 1);
+        try std.testing.expect(toggle.x + toggle.w <= dvui.windowRectPixels().w);
+    }
     if (frames >= 4 and current.route != .player) {
         const bounds = @import("shell.zig").sidebarBoundsForTest();
         const primary = @import("shell.zig").sidebarPrimaryBoundsForTest();
@@ -388,17 +416,19 @@ fn draw() !void {
         if (!overlaying) try std.testing.expect(bounds.sidebar.x + bounds.sidebar.w <= bounds.content.x + 1);
         if (overlaying) {
             // Revealing labels must not shift or shrink the page underneath.
-            const rail_end = bounds.sidebar.x + 48 * dvui.windowNaturalScale();
+            const rail_end = bounds.sidebar.x + 48 * state.app.ui_scale * dvui.windowNaturalScale();
             try std.testing.expect(bounds.content.x >= rail_end);
-            try std.testing.expect(bounds.content.x <= rail_end + 16 * dvui.windowNaturalScale());
+            try std.testing.expect(bounds.content.x <= rail_end + 16 * state.app.ui_scale * dvui.windowNaturalScale());
         }
         try std.testing.expect(bounds.content.x + bounds.content.w <= viewport.x + viewport.w + 1);
         if (current.sidebar) |expanded| {
             // Clicking a rail item leaves the pointer over it, so hover expansion
             // remains active during the navigation fixture.
-            const expected: f32 = if (expanded or (current.navigate_anime and frames >= 5) or (current.hover_sidebar and frames <= 5)) 208 else 48;
-            if (!current.hover_sidebar or frames == 5 or frames == 8)
-                try std.testing.expect(@abs(bounds.sidebar.w - expected * dvui.windowNaturalScale()) <= 1);
+            const expected: f32 = if (expanded or (current.navigate_anime and frames >= 5) or (current.hover_sidebar and frames <= 5) or (current.toggle_sidebar and frames >= 5 and frames <= 6)) 208 else 48;
+            // Shrinking a pinned sidebar needs one DVUI measurement frame;
+            // check its settled width on the following frame as well.
+            if ((!current.hover_sidebar or frames == 5 or frames == 8) and !(current.toggle_sidebar and frames == 7))
+                try std.testing.expectApproxEqAbs(expected * state.app.ui_scale * dvui.windowNaturalScale(), bounds.sidebar.w, 1);
         }
     }
     if (current.route == .settings and frames >= 4) {
@@ -432,6 +462,7 @@ fn draw() !void {
     }
 }
 fn cleanup() void {
+    state.app.fullscreen_player_idx = null;
     @import("../services/wallpapers.zig").deinit();
     @import("wallpaper_image.zig").deinit();
     @import("anime_images.zig").deinit();
@@ -483,6 +514,10 @@ test "Native shell offline route pixel capture" {
     workers.beginShutdownAndDrain(0);
     defer workers.finishShutdown();
     const cases = [_]Case{
+        .{ .name = "fullscreen-comics-hover-scaled", .route = .browse, .tab = .Comics, .sidebar = false, .hover_sidebar = true, .fullscreen_comics = true, .ui_scale = 1.5 },
+        .{ .name = "fullscreen-comics-toggle-scaled", .route = .browse, .tab = .Comics, .sidebar = false, .fullscreen_comics = true, .toggle_sidebar = true, .ui_scale = 1.5 },
+        .{ .name = "fullscreen-comics-toggle", .route = .browse, .tab = .Comics, .sidebar = false, .fullscreen_comics = true, .toggle_sidebar = true },
+        .{ .name = "fullscreen-comics-hover", .route = .browse, .tab = .Comics, .sidebar = false, .hover_sidebar = true, .fullscreen_comics = true },
         .{ .name = "anime-episodes", .route = .browse, .tab = .Anime, .anime_episodes = true },
         .{ .name = "ranking-lupin", .route = .search, .scope = .movies_tv, .ranking_fixture = true },
         .{ .name = "submit-movies-direct", .route = .browse, .tab = .TMDB, .submit_query = true },
