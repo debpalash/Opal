@@ -18,6 +18,37 @@ normal tab navigation. Closing the last tab creates a fresh blank tab; private
 mode changes discard the old documents and recreate the browser store.
 Windows/Linux's bridge continues to use its existing single-page interface.
 
+Blank macOS tabs show a native Opal start page with search, saved bookmarks,
+recent history, connection controls and separate regular/private session
+measurements. Private browsing hides regular recents. The dashboard loads no
+remote assets and exposes neither history nor proxy credentials to JavaScript.
+Pins move tabs to the front and protect them from accidental close actions;
+unpin to close them. Pins belong to the current live browser session.
+
+The built-in shield blocks a small explicit set of known ad/tracker domains,
+alongside installed extensions. Its counters report observed blocked resource
+errors and completed removal of known analytics cookies, not all extension
+blocks or an estimate of saved bytes. Reported transfer sizes come from browser
+performance entries; cross-origin responses can hide those sizes. Measurements
+reset on app restart, with separate counters for private browsing.
+
+Connections support an owned Tor daemon and a verified pool of saved proxy
+profiles. Tor is bundled by the macOS build script when installed on the build
+host, with its license and dependent libraries; source builds can also use a
+system Tor installation. Startup is asynchronous, uses an app-owned data/config
+directory and an ephemeral loopback SOCKS port, and keeps traffic blocked until
+Tor reports bootstrap completion. Exit shuts down only the owned process.
+Tor affects this browser, not Opal's media/search/download connections, and
+does not provide the full fingerprint isolation of Tor Browser.
+
+Pool verification sends a real HTTPS request through each configured proxy,
+with direct failover disabled. Only successful exits enter the pool; leases
+expire after six hours. Empty/expired pools block traffic. Connection failures
+retire the selected exit, and rotation uses another verified exit. Discovery of
+public proxies is not automatic. HTTPS-only blocking, WebRTC blocking (always
+on for Tor), tracking-cookie cleanup and existing canvas controls are explicit
+privacy options. No blocked-cookie counter claims that all cookies are harmful.
+
 When a web field owns keyboard focus, WebKit receives its keys directly and
 SDL's field editor yields. Command-L returns input to Opal's address field.
 `zig build test-native-browser-keyboard` checks typing, key repeat, focus return

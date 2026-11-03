@@ -3,7 +3,7 @@ const std = @import("std");
 const Field = @import("wallpapers_pure.zig").Field;
 pub const max_profiles = 8;
 pub const max_extensions = 7;
-pub const ProxyKind = enum { system, http, https, socks5 };
+pub const ProxyKind = enum { system, http, https, socks5, tor, pool };
 pub const Profile = struct {
     name: Field(48) = .{},
     kind: ProxyKind = .http,
@@ -15,6 +15,11 @@ pub const Profile = struct {
 pub const Extension = struct { path: Field(1024) = .{}, name: Field(96) = .{}, enabled: bool = true, private: bool = false };
 pub const Prefs = struct {
     canvas: bool = true,
+    block_ads: bool = true,
+    block_trackers: bool = true,
+    clean_tracking_cookies: bool = true,
+    block_webrtc: bool = false,
+    https_only: bool = false,
     ubol_installed: bool = false,
     ubol_enabled: bool = true,
     ubol_private: bool = false,
@@ -43,6 +48,11 @@ const ProfileJSON = struct { name: []const u8 = "", kind: ProxyKind = .http, hos
 const ExtensionJSON = struct { path: []const u8 = "", name: []const u8 = "", enabled: bool = true, private: bool = false };
 const JSON = struct {
     canvas: bool = true,
+    block_ads: bool = true,
+    block_trackers: bool = true,
+    clean_tracking_cookies: bool = true,
+    block_webrtc: bool = false,
+    https_only: bool = false,
     ubol_installed: bool = false,
     ubol_enabled: bool = true,
     ubol_private: bool = false,
@@ -59,7 +69,7 @@ pub fn encode(prefs: *const Prefs, buffer: []u8, runtime_secrets: bool) ?[]const
     for (prefs.profiles[0..prefs.profile_count], 0..) |*p, i| profiles[i] = .{ .name = p.name.text(), .kind = p.kind, .host = p.host.text(), .port = p.port, .username = p.username.text(), .password = if (runtime_secrets) p.password.text() else "" };
     for (prefs.extensions[0..prefs.extension_count], 0..) |*e, i| extensions[i] = .{ .path = e.path.text(), .name = e.name.text(), .enabled = e.enabled, .private = e.private };
     for (prefs.canvas_exceptions[0..prefs.canvas_exception_count], 0..) |*e, i| exceptions[i] = e.text();
-    const value: JSON = .{ .canvas = prefs.canvas, .ubol_installed = prefs.ubol_installed, .ubol_enabled = prefs.ubol_enabled, .ubol_private = prefs.ubol_private, .proxy_mode = prefs.proxy_mode, .active_profile = prefs.active_profile, .profiles = profiles[0..prefs.profile_count], .extensions = extensions[0..prefs.extension_count], .canvas_exceptions = exceptions[0..prefs.canvas_exception_count] };
+    const value: JSON = .{ .canvas = prefs.canvas, .block_ads = prefs.block_ads, .block_trackers = prefs.block_trackers, .clean_tracking_cookies = prefs.clean_tracking_cookies, .block_webrtc = prefs.block_webrtc, .https_only = prefs.https_only, .ubol_installed = prefs.ubol_installed, .ubol_enabled = prefs.ubol_enabled, .ubol_private = prefs.ubol_private, .proxy_mode = prefs.proxy_mode, .active_profile = prefs.active_profile, .profiles = profiles[0..prefs.profile_count], .extensions = extensions[0..prefs.extension_count], .canvas_exceptions = exceptions[0..prefs.canvas_exception_count] };
     var writer = std.Io.Writer.fixed(buffer);
     std.json.Stringify.value(value, .{}, &writer) catch return null;
     return writer.buffered();
@@ -71,6 +81,11 @@ pub fn decode(allocator: std.mem.Allocator, text: []const u8, prefs: *Prefs) !vo
     if (json.profiles.len > max_profiles or json.extensions.len > max_extensions or json.canvas_exceptions.len > 16) return error.TooManyEntries;
     var next: Prefs = .{};
     next.canvas = json.canvas;
+    next.block_ads = json.block_ads;
+    next.block_trackers = json.block_trackers;
+    next.clean_tracking_cookies = json.clean_tracking_cookies;
+    next.block_webrtc = json.block_webrtc;
+    next.https_only = json.https_only;
     next.ubol_installed = json.ubol_installed;
     next.ubol_enabled = json.ubol_enabled;
     next.ubol_private = json.ubol_private;
@@ -89,7 +104,7 @@ pub fn decode(allocator: std.mem.Allocator, text: []const u8, prefs: *Prefs) !vo
         if (!validProfile(row)) return error.InvalidProfile;
         next.profile_count += 1;
     }
-    if (next.active_profile >= next.profile_count and next.proxy_mode != .system) return error.InvalidProfile;
+    if (next.active_profile >= next.profile_count and next.proxy_mode != .system and next.proxy_mode != .tor and next.proxy_mode != .pool) return error.InvalidProfile;
     for (json.extensions, 0..) |e, i| {
         if (e.path.len == 0 or e.path.len > 1024 or e.name.len > 96 or !std.fs.path.isAbsolute(e.path)) return error.InvalidExtension;
         next.extensions[i].path.set(e.path);
@@ -104,6 +119,22 @@ pub fn decode(allocator: std.mem.Allocator, text: []const u8, prefs: *Prefs) !vo
         next.canvas_exception_count += 1;
     }
     prefs.* = next;
+}
+test "Tor and empty pools persist without inventing a direct fallback profile" {
+    var prefs: Prefs = .{};
+    for ([_]ProxyKind{ .tor, .pool }) |mode| {
+        prefs.proxy_mode = mode;
+        prefs.https_only = true;
+        prefs.block_webrtc = true;
+        var buffer: [32768]u8 = undefined;
+        const text = encode(&prefs, &buffer, false).?;
+        var restored: Prefs = .{};
+        try decode(std.testing.allocator, text, &restored);
+        try std.testing.expectEqual(mode, restored.proxy_mode);
+        try std.testing.expectEqual(@as(usize, 0), restored.profile_count);
+        try std.testing.expect(restored.https_only and restored.block_webrtc);
+        try std.testing.expect(restored.block_ads and restored.block_trackers and restored.clean_tracking_cookies);
+    }
 }
 test "browser profiles reject URLs commands missing ports and control characters" {
     for ([_][]const u8{ "127.0.0.1", "localhost", "proxy.example.org", "::1", "[::1]" }) |host| try std.testing.expect(validHost(host));

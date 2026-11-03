@@ -935,6 +935,7 @@ pub fn appDeinit() void {
     // allocator it may publish into are released. 800 ms is the diagnostic
     // threshold, not permission for a worker to outlive shared state.
     @import("services/native_browser.zig").deinit();
+    @import("services/browser_privacy.zig").shutdown();
     @import("services/wallpaper_desktop.zig").deinitNative();
     workers.beginShutdownAndDrain(800);
     @import("ui/local_library_ui.zig").deinit();

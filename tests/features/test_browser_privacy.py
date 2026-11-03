@@ -6,6 +6,30 @@ from pathlib import Path
 from .harness import PROJECT_DIR, test
 ROOT = Path(PROJECT_DIR)
 
+@test("Browser session measurements report real deltas without exposing browsing URLs", "Browser")
+def test_session_measurements():
+    node = shutil.which('node')
+    if not node:
+        return 'skip', 'Node is optional; native privacy fixtures cover real WebKit measurements'
+    result = subprocess.run([node, 'tests/test_browser_security.js'], cwd=ROOT, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, (result.stderr or result.stdout)[-1200:]
+    return 'pass', 'actual isolated-world script: observed bytes/blocks, numeric-only messages, no double counting'
+
+@test("Browser new tabs offer private recents bookmarks stats and connection controls", "Browser")
+def test_start_page_and_connections():
+    page = (ROOT / 'src/ui/browser_start.zig').read_text()
+    browser = (ROOT / 'src/services/browser.zig').read_text()
+    native = (ROOT / 'src/macos/browser_security.m').read_text()
+    assert 'native.presented = false' in browser and 'render(.start)' in browser
+    assert 'state.app.incognito_mode) return &.{}' in browser
+    assert 'ORDER BY last_visit DESC' in browser
+    assert all(s in page for s in ('Bookmarks', 'Recents', 'Tracking cookies removed', 'privacy.stats()', 'openSection(2)'))
+    assert 'nw_proxy_config_set_failover_allowed(proxy, false)' in native
+    assert 'config.proxyConfigurations = @[make_proxy' in native
+    assert '21600' in native and 'tor_task.running' in native
+    assert 'task terminate' in native and 'waitUntilExit' not in native
+    return 'pass', 'native start surface, hidden private history, measured counters, checked proxy leases and owned asynchronous Tor lifecycle'
+
 @test("Browser canvas protection blocks readback with exact site exceptions", "Browser")
 def test_canvas_guard():
     node = shutil.which('node')

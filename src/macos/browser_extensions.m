@@ -2,12 +2,15 @@
 #import <AppKit/AppKit.h>
 #import <WebKit/WebKit.h>
 #import <Network/Network.h>
+#import "browser_security.h"
 #include <string.h>
 #include <CommonCrypto/CommonDigest.h>
 static __weak WKWebView *page;
 static void (*wake)(void);
 static NSDictionary *settings;
 static NSString *canvas_source;
+static NSString *security_source;
+static NSMapTable<WKWebView *, NSURLRequest *> *waiting_privacy_requests;
 static unsigned long long settings_applications;
 static unsigned long long settings_revision, applied_settings_revision;
 static __weak WKUserContentController *settings_content;
@@ -194,8 +197,14 @@ static void apply_proxy(WKWebsiteDataStore *store) {
             else {
             NSArray *profiles = settings[@"profiles"];
             NSUInteger index = [settings[@"active_profile"] unsignedIntegerValue];
-            if (index >= profiles.count) return; // Validated before committing preferences.
-            NSDictionary *profile = profiles[index]; NSString *host_name = profile[@"host"];
+            NSDictionary *profile = nil;
+            if ([mode isEqual:@"tor"]) profile = @{@"host":@"127.0.0.1", @"port":@(opal_security_tor_port()), @"kind":@"socks5"};
+            else if ([mode isEqual:@"pool"]) profile = opal_security_pool_profile();
+            else if (index < profiles.count) profile = profiles[index];
+            // An unready Tor route or empty/expired pool points at a closed
+            // local port with failover disabled, never at the system route.
+            if (!profile) profile = @{@"host":@"127.0.0.1", @"port":@9, @"kind":@"socks5"};
+            NSString *host_name = profile[@"host"];
             if ([host_name hasPrefix:@"["] && [host_name hasSuffix:@"]"]) host_name = [host_name substringWithRange:NSMakeRange(1, host_name.length - 2)];
             nw_endpoint_t endpoint = nw_endpoint_create_host(host_name.UTF8String, [profile[@"port"] stringValue].UTF8String);
             NSString *kind = profile[@"kind"];
@@ -225,12 +234,15 @@ static void apply_settings(BOOL network) {
         NSString *script = [canvas_source stringByReplacingOccurrencesOfString:@"__OPAL_EXCEPTIONS__" withString:json];
         [content addUserScript:[[WKUserScript alloc] initWithSource:script injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
     }
+    opal_security_install(page.configuration, incognito);
 }
+void opal_extensions_security_configure(const char *script) { security_source = [NSString stringWithUTF8String:script]; }
 void opal_extensions_configure(const char *json, const char *script, int reload) {
     NSData *data = [[NSString stringWithUTF8String:json] dataUsingEncoding:NSUTF8StringEncoding];
     NSDictionary *decoded = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
     if (![decoded isKindOfClass:NSDictionary.class]) return;
     settings = decoded; canvas_source = [NSString stringWithUTF8String:script];
+    opal_security_configure(settings, security_source, signal_ui);
     ++settings_revision;
     prepare_guard();
     if (page && proxy_selected() && !proxy_guard) {
@@ -238,6 +250,10 @@ void opal_extensions_configure(const char *json, const char *script, int reload)
         [page stopLoading]; [page loadHTMLString:@"<title>Preparing proxy protection</title>" baseURL:nil];
     }
     apply_settings(YES); if (reload && page.URL) { [page stopLoading]; [page reload]; }
+    if (opal_security_route_ready(settings[@"proxy_mode"])) {
+        NSMapTable *waiting = waiting_privacy_requests; waiting_privacy_requests = nil;
+        for (WKWebView *web in waiting) [web loadRequest:[waiting objectForKey:web]];
+    }
 }
 void opal_extensions_prepare(WKWebViewConfiguration *config, int is_private, void (*notify)(void)) {
     ++generation; incognito = is_private; wake = notify;
@@ -297,6 +313,7 @@ void opal_extensions_close(void) {
     [popup close]; popup = nil;
     [picker cancel:nil]; picker = nil; import_path = nil; import_name = nil;
     waiting_proxy_urls = nil;
+    waiting_privacy_requests = nil;
     browser_tabs = nil; current_tab = nil; page = nil; controller = nil; host = nil; contexts = nil; statuses = nil; names = nil; messages = nil;
 }
 int opal_extensions_ready(void) { return page != nil; }
@@ -408,6 +425,15 @@ int opal_extensions_navigation_allowed(WKWebView *web, NSURL *url) {
     return 1;
 }
 int opal_browser_proxy_guard_ready(void) { return proxy_guard != nil; }
+int opal_browser_security_navigation_allowed(NSURL *url) {
+    if ([settings[@"https_only"] boolValue] && [url.scheme.lowercaseString isEqual:@"http"]) return 0;
+    return opal_security_route_ready(settings[@"proxy_mode"]);
+}
+void opal_browser_security_wait(WKWebView *web, NSURLRequest *request) {
+    if (opal_security_route_ready(settings[@"proxy_mode"]) || ![request.HTTPMethod isEqual:@"GET"] || request.HTTPBody.length) return;
+    if (!waiting_privacy_requests) waiting_privacy_requests = [NSMapTable weakToStrongObjectsMapTable];
+    [waiting_privacy_requests setObject:request forKey:web];
+}
 int opal_extensions_test_tab_count(void) { return (int)[host tabsForWebExtensionContext:nil].count; }
 
 void opal_extension_test_hide_popup(int hide) { test_hide_popup = hide; }

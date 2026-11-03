@@ -144,6 +144,130 @@ test "Native embedded browser keyboard types each character once and returns foc
 test "Native embedded browser keyboard menu actions wake without mirrored SDL keys" {
     try @import("../macos/app_menu.zig").verifyWakeForTest();
 }
+test "Native embedded browser security measures owned traffic and removes tracking cookies" {
+    const privacy = @import("../services/browser_privacy.zig");
+    const browser = @import("../services/browser.zig");
+    const old_private = state.app.incognito_mode;
+    state.app.incognito_mode = true;
+    defer state.app.incognito_mode = old_private;
+    browser.resetTabsForTest();
+    defer browser.resetTabsForTest();
+    var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-shield-regression", .persist_window_geometry = false, .size = .{ .w = 800, .h = 600 }, .vsync = false, .title = "Opal privacy regression", .hidden = true });
+    defer backend.deinit();
+    var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
+    defer window.deinit();
+    theme.markUiThread();
+    for (0..8) |i| try frame(&window, i, true);
+    try std.testing.expectEqual(@as(usize, 0), browser.recentsForStart().len);
+    privacy.api.opal_extensions_security_configure(@embedFile("../services/browser_security.js"));
+    privacy.api.opal_extensions_configure("{\"canvas\":false,\"proxy_mode\":\"system\",\"block_ads\":true,\"block_trackers\":true,\"clean_tracking_cookies\":true}", "", 0);
+    defer privacy.api.opal_extensions_configure("{\"canvas\":true,\"proxy_mode\":\"system\"}", @embedFile("../services/browser_canvas_guard.js"), 0);
+    for (0..500) |_| {
+        native.api.opal_browser_test_pump();
+        if (privacy.api.opal_security_rules_ready() != 0) break;
+    }
+    try std.testing.expect(privacy.api.opal_security_rules_ready() != 0);
+    privacy.resetStats();
+    var server = try (try std.Io.net.IpAddress.parse("127.0.0.1", 0)).listen(io.io(), .{ .reuse_address = true });
+    defer server.deinit(io.io());
+    var fixture: TabServer = .{};
+    var response = try io.io().concurrent(TabServer.serve, .{ &server, &fixture });
+    defer {
+        fixture.stopping.store(true, .release);
+        if (server.socket.address.connect(io.io(), .{ .mode = .stream })) |connection| connection.close(io.io()) else |_| {}
+        _ = response.cancel(io.io());
+    }
+    try ownedNavigate(server.socket.address.getPort(), "a", "First A");
+    var out: [256]u8 = undefined;
+    _ = try pageScript("document.cookie='_ga=tracking;path=/';document.cookie='sessionid=keep;path=/';let ad=new Image();ad.src='https://pagead2.googlesyndication.com/opal-native-fixture.gif';document.body.append(ad);'set'", &out);
+    for (0..800) |_| {
+        native.api.opal_browser_test_pump();
+        const stats = privacy.stats();
+        if (stats.bytes > 0 and stats.ads > 0 and stats.cookies > 0) break;
+    }
+    const stats = privacy.stats();
+    try std.testing.expect(stats.bytes > 0);
+    try std.testing.expect(stats.ads > 0);
+    try std.testing.expect(stats.cookies > 0);
+    try std.testing.expectEqualStrings("1", try pageScript("!document.cookie.includes('_ga=') && document.cookie.includes('sessionid=keep')", &out));
+    privacy.resetStats();
+    try std.testing.expectEqual(@as(u64, 0), privacy.stats().cookies);
+}
+test "Native embedded browser security pool verifies the proxy route and expires leases" {
+    const privacy = @import("../services/browser_privacy.zig");
+    const Fixture = struct {
+        seen: std.atomic.Value(bool) = .init(false),
+        fn serve(listener: *std.Io.net.Server, self: *@This()) void {
+            const stream = listener.accept(io.io()) catch return;
+            defer stream.close(io.io());
+            var ready = [_]std.posix.pollfd{.{ .fd = stream.socket.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+            if ((std.posix.poll(&ready, 1500) catch return) == 0) return;
+            var input: [4096]u8 = undefined;
+            var reader = stream.reader(io.io(), &input);
+            const line = reader.interface.takeDelimiterInclusive('\n') catch return;
+            self.seen.store(std.mem.startsWith(u8, line, "CONNECT example.com:443 "), .release);
+            var output: [256]u8 = undefined;
+            var writer = stream.writer(io.io(), &output);
+            writer.interface.writeAll("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n") catch return;
+            writer.interface.flush() catch {};
+        }
+    };
+    try prepareProfile();
+    var server = try (try std.Io.net.IpAddress.parse("127.0.0.1", 0)).listen(io.io(), .{ .reuse_address = true });
+    defer server.deinit(io.io());
+    var fixture: Fixture = .{};
+    var response = try io.io().concurrent(Fixture.serve, .{ &server, &fixture });
+    defer {
+        if (server.socket.address.connect(io.io(), .{ .mode = .stream })) |connection| connection.close(io.io()) else |_| {}
+        _ = response.cancel(io.io());
+    }
+    var config: [1024:0]u8 = @splat(0);
+    _ = try std.fmt.bufPrint(&config, "{{\"proxy_mode\":\"pool\",\"profiles\":[{{\"kind\":\"http\",\"host\":\"127.0.0.1\",\"port\":{d}}},{{\"kind\":\"http\",\"host\":\"127.0.0.1\",\"port\":9}}]}}", .{server.socket.address.getPort()});
+    privacy.api.opal_extensions_configure(&config, "", 0);
+    defer privacy.api.opal_extensions_configure("{\"proxy_mode\":\"system\"}", "", 0);
+    privacy.api.opal_security_pool_scan();
+    for (0..1200) |_| {
+        native.api.opal_browser_test_pump();
+        if (privacy.api.opal_security_pool_health(0) != 1 and privacy.api.opal_security_pool_health(1) != 1) break;
+    }
+    try std.testing.expect(fixture.seen.load(.acquire));
+    try std.testing.expectEqual(@as(c_int, -1), privacy.api.opal_security_pool_health(0));
+    try std.testing.expectEqual(@as(c_int, 0), privacy.api.opal_security_pool_count());
+    privacy.api.opal_security_test_pool_lease(0, 60);
+    privacy.api.opal_security_test_pool_lease(1, 60);
+    try std.testing.expectEqual(@as(c_int, 0), privacy.api.opal_security_pool_selected());
+    privacy.api.opal_security_pool_rotate();
+    try std.testing.expectEqual(@as(c_int, 1), privacy.api.opal_security_pool_selected());
+    privacy.api.opal_security_test_pool_lease(0, -1);
+    privacy.api.opal_security_test_pool_lease(1, -1);
+    try std.testing.expectEqual(@as(c_int, -1), privacy.api.opal_security_pool_selected());
+    try std.testing.expectEqual(@as(c_int, 0), privacy.api.opal_security_pool_count());
+}
+test "Native embedded browser security starts and stops the real Tor daemon without blocking UI" {
+    const privacy = @import("../services/browser_privacy.zig");
+    try prepareProfile();
+    var base: [1024]u8 = undefined;
+    var directory: [2048:0]u8 = @splat(0);
+    _ = try std.fmt.bufPrint(&directory, "{s}/opal-tor-fixture-{d}", .{ io.tmpDir(&base), io.milliTimestamp() });
+    defer io.cwdDeleteTree(std.mem.sliceTo(&directory, 0)) catch {};
+    defer privacy.shutdown();
+    privacy.api.opal_security_tick(&directory, 1);
+    if (privacy.api.opal_security_tor_pid() == 0) return error.SkipZigTest;
+    try std.testing.expectEqual(@as(c_int, 1), privacy.api.opal_security_tor_status());
+    // Bootstrap is asynchronous. Until it completes, the browser uses a closed
+    // local port, rather than a foreign listener or an unverified route.
+    try std.testing.expectEqual(@as(c_int, 9), privacy.api.opal_security_tor_port());
+    var listening = false;
+    for (0..500) |_| {
+        native.api.opal_browser_test_pump();
+        listening = privacy.api.opal_security_test_tor_listener() != 0;
+        if (listening) break;
+    }
+    try std.testing.expect(listening);
+    privacy.api.opal_security_tick(&directory, 0);
+    try std.testing.expectEqual(@as(c_int, 0), privacy.api.opal_security_tor_status());
+    try std.testing.expectEqual(@as(c_int, 0), privacy.api.opal_security_tor_pid());
+}
 test "Native embedded browser keyboard command tab shortcuts are owned by the macOS menu" {
     const browser = @import("../services/browser.zig");
     browser.resetTabsForTest();
@@ -183,7 +307,9 @@ test "Native embedded browser renders HTML and extracts actual DOM text" {
     defer state.app.incognito_mode = old_private;
     theme.markUiThread();
     for (0..8) |i| try frame(&window, i, true);
-    try std.testing.expectEqual(@as(c_int, 1), opal_browser_test_visible());
+    // Blank tabs use Opal's native dashboard, with the WebKit child hidden.
+    try std.testing.expectEqual(@as(c_int, 0), opal_browser_test_visible());
+    try std.testing.expect(@import("browser_start.zig").rendered_for_test);
     try std.testing.expectEqual(@as(c_int, 1), native.api.opal_browser_test_attached());
     const Fixture = struct {
         const html = "<html><head><title>Opal embedded fixture</title></head><body><input value='Native typing'><button onclick=\"document.body.dataset.clicked='yes'\">Click</button><p>Native WebKit page</p><script>document.querySelector('button').click();document.title += document.body.dataset.clicked === 'yes' ? ' interactive' : ' broken';</script></body></html>";
@@ -322,6 +448,10 @@ test "Native embedded browser aligns address controls above tabs and hover leave
         var before: @TypeOf(native.viewport) = .{};
         var selected_new: u32 = 0;
         for (0..25) |index| {
+            if (index == 2) {
+                native.api.opal_browser_test_html("<title>Layout document</title><p>Viewport fixture</p>");
+                try pageTitle("Layout document");
+            }
             try window.begin(@as(i128, @intCast(index + 1)) * 16_666_667);
             @import("native_browser.zig").beginFrame();
             if (index == 0) _ = try window.addEventMouseMotion(.{ .pt = .{ .x = dvui.windowRectPixels().w - 10, .y = dvui.windowRectPixels().h - 10 } });
@@ -380,7 +510,7 @@ test "Native embedded browser aligns address controls above tabs and hover leave
                 try std.testing.expectApproxEqAbs(more.center().y, address.center().y, 1);
                 try std.testing.expectApproxEqAbs(before.x, native.viewport.x, 1);
                 try std.testing.expectApproxEqAbs(before.w, native.viewport.w, 1);
-                try std.testing.expectEqual(@as(c_int, 1), opal_browser_test_visible());
+                try std.testing.expectEqual(@as(c_int, if (browser.isStartPage()) 0 else 1), opal_browser_test_visible());
                 if (width >= 400 and index < 13) {
                     try std.testing.expect(opal_browser_test_clip_width() < opal_browser_test_page_width());
                     try std.testing.expectApproxEqAbs(208 * scale * size.scale, shell.sidebarBoundsForTest().sidebar.w, 1);

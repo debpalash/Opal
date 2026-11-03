@@ -12,11 +12,32 @@ var revision: std.atomic.Value(u32) = .init(1);
 var applied_revision: u32 = 0;
 var applied_generation: u32 = 0;
 var signatures: [8]u64 = @splat(0);
+var security_prepared = false;
+var route_token: u64 = 0;
 pub const api = struct {
     pub extern fn opal_extensions_supported() c_int;
     pub extern fn opal_extensions_ready() c_int;
     pub extern fn opal_extensions_generation() c_uint;
     pub extern fn opal_extensions_configure(json: [*:0]const u8, script: [*:0]const u8, reload: c_int) void;
+    pub extern fn opal_extensions_security_configure(script: [*:0]const u8) void;
+    pub extern fn opal_security_tick(directory: [*:0]const u8, tor: c_int) void;
+    pub extern fn opal_security_shutdown() void;
+    pub extern fn opal_security_stats(private: c_int, bytes: *u64, ads: *u64, trackers: *u64, cookies: *u64) void;
+    pub extern fn opal_security_reset_stats(private: c_int) void;
+    pub extern fn opal_security_tor_status() c_int;
+    pub extern fn opal_security_tor_pid() c_int;
+    pub extern fn opal_security_test_tor_listener() c_int;
+    pub extern fn opal_security_rules_ready() c_int;
+    pub extern fn opal_security_tor_progress() c_int;
+    pub extern fn opal_security_tor_port() c_int;
+    pub extern fn opal_security_tor_message(out: [*]u8, cap: usize) usize;
+    pub extern fn opal_security_tor_retry() void;
+    pub extern fn opal_security_pool_scan() void;
+    pub extern fn opal_security_pool_health(index: c_int) c_int;
+    pub extern fn opal_security_pool_count() c_int;
+    pub extern fn opal_security_pool_selected() c_int;
+    pub extern fn opal_security_pool_rotate() void;
+    pub extern fn opal_security_test_pool_lease(index: c_int, seconds: f64) void;
     pub extern fn opal_extension_load(slot: c_int, path: [*:0]const u8) void;
     pub extern fn opal_extension_unload(slot: c_int) void;
     pub extern fn opal_extension_status(slot: c_int, name: [*]u8, name_cap: usize, message: [*]u8, cap: usize) c_int;
@@ -89,6 +110,10 @@ fn download() void {
 }
 pub fn tick() void {
     if (comptime !supported) return;
+    if (!security_prepared) {
+        api.opal_extensions_security_configure(@embedFile("browser_security.js"));
+        security_prepared = true;
+    }
     const loaded = state.app.config_loaded.load(.acquire) or builtin.is_test;
     // Startup configuration may still be written by its owned loader thread.
     if (!loaded) {
@@ -98,6 +123,17 @@ pub fn tick() void {
         json_buf[text.len] = 0;
         api.opal_extensions_configure(&json_buf, @embedFile("browser_canvas_guard.js"), 0);
         return;
+    }
+    if (!builtin.is_test) {
+        var directory: [2048:0]u8 = @splat(0);
+        var base: [1024]u8 = undefined;
+        _ = std.fmt.bufPrint(&directory, "{s}/browser-tor", .{@import("../core/paths.zig").configDir(&base)}) catch return;
+        api.opal_security_tick(&directory, @intFromBool(prefs.proxy_mode == .tor));
+    }
+    const token = (@as(u64, @intCast(api.opal_security_tor_port())) << 8) | @as(u64, @intCast(api.opal_security_pool_selected() + 1));
+    if (token != route_token) {
+        route_token = token;
+        _ = revision.fetchAdd(1, .acq_rel);
     }
     if (download_state.cmpxchgStrong(.ready, .idle, .acq_rel, .acquire) == null) {
         prefs.ubol_installed = true;
@@ -142,6 +178,18 @@ pub fn tick() void {
         const row = &prefs.extensions[i];
         reconcile(i + 1, row.path.text(), i < prefs.extension_count and row.enabled and (!private or row.private));
     }
+}
+pub const Stats = struct { bytes: u64 = 0, ads: u64 = 0, trackers: u64 = 0, cookies: u64 = 0 };
+pub fn stats() Stats {
+    var result: Stats = .{};
+    if (comptime supported) api.opal_security_stats(@intFromBool(state.app.incognito_mode), &result.bytes, &result.ads, &result.trackers, &result.cookies);
+    return result;
+}
+pub fn resetStats() void {
+    if (comptime supported) api.opal_security_reset_stats(@intFromBool(state.app.incognito_mode));
+}
+pub fn shutdown() void {
+    if (comptime supported) api.opal_security_shutdown();
 }
 fn reconcile(slot: usize, path: []const u8, enabled: bool) void {
     const signature = if (enabled) std.hash.Wyhash.hash(1, path) | 1 else 0;

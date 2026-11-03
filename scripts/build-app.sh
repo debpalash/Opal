@@ -322,6 +322,24 @@ DYLIB_DIR="$APP_DIR/Contents/Frameworks"
 HOMEBREW_PREFIX=${HOMEBREW_PREFIX:-$(brew --prefix)}
 mkdir -p "$DYLIB_DIR"
 
+# Tor is optional when building from source. Bundle an installed daemon and
+# its dependency closure so the packaged browser does not depend on Homebrew.
+TOR_SOURCE=$(command -v tor || true)
+if [ -n "$TOR_SOURCE" ] && [ -x "$TOR_SOURCE" ]; then
+    echo "[build-app] Bundling Tor…"
+    TOR_DEST="$APP_DIR/Contents/Resources/tor"
+    cp "$TOR_SOURCE" "$TOR_DEST"
+    chmod u+w "$TOR_DEST"
+    for DEP in $(otool -L "$TOR_DEST" | awk 'NR>1 {print $1}' | grep -E '^/opt/homebrew|^/usr/local' || true); do
+        NAME="$(basename "$DEP")"
+        cp -L "$DEP" "$DYLIB_DIR/$NAME"
+        install_name_tool -change "$DEP" "@executable_path/../Frameworks/$NAME" "$TOR_DEST"
+    done
+    TOR_PREFIX=$(dirname "$(dirname "$TOR_SOURCE")")
+    TOR_LICENSE="$TOR_PREFIX/opt/tor/LICENSE"
+    if [ -f "$TOR_LICENSE" ]; then cp "$TOR_LICENSE" "$APP_DIR/Contents/Resources/licenses/tor.txt"; fi
+fi
+
 for DEP in $(otool -L "$APP_DIR/Contents/MacOS/Opal" 2>/dev/null | awk 'NR>1 {print $1}' | grep -E "^/opt/homebrew|^/usr/local|^@rpath/" || true); do
     NAME="$(basename "$DEP")"
     SOURCE="$DEP"
@@ -392,6 +410,9 @@ fi
 # preserves that — users then can't `xattr -cr` the installed bundle without
 # sudo (Gatekeeper-workaround UX). Normalize to owner-writable before signing.
 chmod -R u+w "$APP_DIR"
+if [ -x "$APP_DIR/Contents/Resources/tor" ]; then
+    codesign --force --sign "${CODESIGN_IDENTITY:--}" "$APP_DIR/Contents/Resources/tor"
+fi
 
 # ── 6. Optional codesign ───────────────────────────────────────
 if [ -n "${CODESIGN_IDENTITY:-}" ]; then

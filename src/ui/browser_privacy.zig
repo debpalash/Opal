@@ -6,22 +6,29 @@ const theme = @import("theme.zig");
 const state = @import("../core/state.zig");
 const privacy = @import("../services/browser_privacy.zig");
 const pure = privacy.pure;
+const icons = @import("icons").tvg.lucide;
 var open = false;
 var tab: usize = 0;
 var edit_index: ?usize = null;
 var draft: pure.Profile = .{};
 var port_buf: [8]u8 = @splat(0);
+pub fn openSection(section: usize) void {
+    open = true;
+    tab = @min(section, 2);
+    state.wakeUi();
+}
 fn note(src: std.builtin.SourceLocation, text: []const u8) void {
     c.bodyText(src, text, theme.colors.text_secondary);
 }
 pub fn render(part: @import("../services/native_browser.zig").Chrome) void {
+    if (part == .start) {
+        @import("browser_start.zig").render();
+        return;
+    }
     if (part == .toolbar) {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
         defer row.deinit();
-        const clicked = if (dvui.windowRect().w / state.app.ui_scale < 1100)
-            c.iconButton(@src(), @import("icons").tvg.lucide.puzzle, "Extensions", open)
-        else
-            c.actionButton(@src(), "Extensions", if (open) .primary else .secondary, 71300);
+        const clicked = c.iconButton(@src(), icons.puzzle, "Extensions and privacy", open);
         if (clicked) open = !open;
         return;
     }
@@ -29,14 +36,22 @@ pub fn render(part: @import("../services/native_browser.zig").Chrome) void {
     var panel = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .background = true, .color_fill = .{ .color = theme.colors.bg_surface }, .padding = dvui.Rect.all(10), .margin = .{ .y = 4, .h = 4 }, .corners = theme.dims.rad_sm });
     defer panel.deinit();
     var header = dvui.box(@src(), .{ .dir = if (dvui.windowRect().w < 420) .vertical else .horizontal }, .{ .expand = .horizontal });
-    if (c.segment(@src(), &.{ "Extensions", "Privacy", "Proxies" }, tab)) |index| tab = index;
-    if (c.actionButton(@src(), "Done", .secondary, 71301)) open = false;
+    const labels = [_][]const u8{ "Extensions", "Privacy", "Connections" };
+    const glyphs = [_][]const u8{ icons.puzzle, icons.@"shield-check", icons.network };
+    for (labels, glyphs, 0..) |label, icon, index| {
+        var item = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = index, .gravity_y = 0.5 });
+        if (c.iconButton(@src(), icon, label, tab == index)) tab = index;
+        if (tab == index) note(@src(), label);
+        item.deinit();
+    }
+    _ = dvui.spacer(@src(), .{ .expand = .horizontal });
+    if (c.iconButton(@src(), icons.x, "Close browser settings", false)) open = false;
     header.deinit();
     if (!state.app.config_loaded.load(.acquire) and !@import("builtin").is_test) {
         note(@src(), "Loading browser settings…");
         return;
     }
-    const height = @min(@as(f32, 280), dvui.windowRect().h * 0.45);
+    const height = @min(@as(f32, 320), dvui.windowRect().h * 0.45);
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .horizontal, .min_size_content = .{ .h = height }, .max_size_content = .{ .w = std.math.floatMax(f32), .h = height } });
     defer scroll.deinit();
     var contents = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
@@ -52,9 +67,9 @@ fn extensions() void {
         note(@src(), "Browser extensions require macOS 15.4 or later. Canvas and proxy controls are available in their tabs.");
         return;
     }
-    note(@src(), "uBlock Origin Lite");
-    note(@src(), "Blocks ads and trackers. Installing allows it to read and filter websites in Opal.");
     if (!privacy.prefs.ubol_installed) {
+        note(@src(), "uBlock Origin Lite");
+        note(@src(), "Blocks ads and trackers. Installing allows it to read and filter websites in Opal.");
         switch (privacy.downloadStatus()) {
             .downloading, .ready => note(@src(), "Downloading the verified official extension…"),
             .failed => {
@@ -64,40 +79,63 @@ fn extensions() void {
             .idle => if (c.actionButton(@src(), "Install uBlock Origin Lite", .primary, 71303)) privacy.installUbol(),
         }
     } else {
-        extensionControls(0, &privacy.prefs.ubol_enabled, &privacy.prefs.ubol_private);
+        extensionControls(0, "uBlock Origin Lite", &privacy.prefs.ubol_enabled, &privacy.prefs.ubol_private);
     }
     for (0..privacy.prefs.extension_count) |i| {
         const row = &privacy.prefs.extensions[i];
         var box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = @intCast(71400 + i), .expand = .horizontal, .padding = .{ .y = 6, .h = 6 } });
-        note(@src(), row.name.text());
-        extensionControls(i + 1, &row.enabled, &row.private);
-        if (c.actionButton(@src(), "Remove", .danger, 71430 + i)) {
+        extensionControls(i + 1, row.name.text(), &row.enabled, &row.private);
+        if (c.iconButton(@src(), icons.@"trash-2", "Remove extension", false)) {
             privacy.removeExtension(i);
             box.deinit();
             break;
         }
         box.deinit();
     }
-    if (privacy.prefs.extension_count < 7 and c.actionButton(@src(), "Add extension…", .secondary, 71304)) privacy.api.opal_extension_pick();
+    var add = dvui.box(@src(), .{ .dir = .horizontal }, .{ .margin = .{ .y = 8 }, .expand = .horizontal });
+    if (privacy.prefs.extension_count < 7 and c.iconButton(@src(), icons.plus, "Add extension…", false)) privacy.api.opal_extension_pick();
+    note(@src(), "Add extension");
+    add.deinit();
     note(@src(), "Add a WebKit-compatible extension ZIP or unpacked folder. Firefox and Chrome-only extensions may use unsupported APIs.");
 }
-fn extensionControls(slot: usize, enabled: *bool, private: *bool) void {
-    const before = enabled.*;
-    const before_private = private.*;
-    c.toggleRow(@src(), "Enabled", null, enabled);
-    c.toggleRow(@src(), "Allow in private browsing", null, private);
-    if (before != enabled.* or before_private != private.*) privacy.changed();
-    const status = privacy.extensionStatus(slot);
-    note(@src(), if (state.app.incognito_mode and !private.*) "Off in private browsing" else if (!enabled.*) "Disabled" else if (status.message[0] != 0) std.mem.sliceTo(&status.message, 0) else "Starting…");
-    var row = dvui.box(@src(), .{ .dir = if (dvui.windowRect().w < 420) .vertical else .horizontal }, .{ .expand = .horizontal });
-    defer row.deinit();
-    if (status.code == 2) {
-        if (c.actionButton(@src(), "Open controls", .secondary, 71500 + slot * 4)) privacy.api.opal_extension_action(@intCast(slot), 0);
-        if (c.actionButton(@src(), "Settings", .secondary, 71501 + slot * 4)) privacy.api.opal_extension_action(@intCast(slot), 1);
+fn extensionControls(slot: usize, title: []const u8, enabled: *bool, private: *bool) void {
+    var card = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = slot, .expand = .horizontal, .background = true, .color_fill = .{ .color = theme.colors.bg_elevated }, .corners = theme.dims.rad_sm, .padding = dvui.Rect.all(12), .margin = .{ .h = 6 } });
+    defer card.deinit();
+    var header = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+    dvui.icon(@src(), "", if (slot == 0) icons.@"shield-check" else icons.puzzle, .{}, .{ .min_size_content = .{ .w = 20, .h = 20 }, .gravity_y = 0.5, .color_text = .{ .color = theme.colors.accent }, .margin = .{ .w = 8 } });
+    _ = dvui.label(@src(), "{s}", .{title}, .{ .expand = .horizontal, .gravity_y = 0.5, .color_text = .{ .color = theme.colors.text_primary } });
+    if (c.iconButton(@src(), icons.power, if (enabled.*) "Disable extension" else "Enable extension", enabled.*)) {
+        enabled.* = !enabled.*;
+        privacy.changed();
     }
-    if (c.actionButton(@src(), "Reload", .secondary, 71502 + slot * 4)) privacy.reloadExtension(slot);
+    header.deinit();
+    const status = privacy.extensionStatus(slot);
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+    defer row.deinit();
+    _ = dvui.label(@src(), "{s}", .{if (state.app.incognito_mode and !private.*) "Off in private browsing" else if (!enabled.*) "Disabled" else if (status.code == 2) "Enabled" else if (status.code < 0) "Needs attention" else "Starting…"}, .{ .expand = .horizontal, .gravity_y = 0.5, .color_text = .{ .color = if (enabled.* and status.code == 2) theme.colors.accent else theme.colors.text_secondary } });
+    if (c.iconButton(@src(), icons.@"eye-off", "Allow in private browsing", private.*)) {
+        private.* = !private.*;
+        privacy.changed();
+    }
+    if (status.code == 2) {
+        if (c.iconButton(@src(), icons.@"sliders-horizontal", "Open controls", false)) privacy.api.opal_extension_action(@intCast(slot), 0);
+        if (c.iconButton(@src(), icons.settings, "Settings", false)) privacy.api.opal_extension_action(@intCast(slot), 1);
+    }
+    if (c.iconButton(@src(), icons.@"rotate-cw", "Reload extension", false)) privacy.reloadExtension(slot);
+    if (status.code < 0 and status.message[0] != 0) note(@src(), std.mem.sliceTo(&status.message, 0));
 }
 fn protections() void {
+    const old_ads = privacy.prefs.block_ads;
+    const old_trackers = privacy.prefs.block_trackers;
+    const old_cookies = privacy.prefs.clean_tracking_cookies;
+    const old_rtc = privacy.prefs.block_webrtc;
+    const old_https = privacy.prefs.https_only;
+    c.toggleRow(@src(), "Block known advertising domains", "Native protection works alongside installed extensions.", &privacy.prefs.block_ads);
+    c.toggleRow(@src(), "Block known tracking domains", null, &privacy.prefs.block_trackers);
+    c.toggleRow(@src(), "Remove known tracking cookies", "Removes analytics cookies such as _ga and _fbp. Other cookies stay available for sign-in.", &privacy.prefs.clean_tracking_cookies);
+    c.toggleRow(@src(), "Block WebRTC", "Disables peer connections after reload. Always enabled on the Tor route.", &privacy.prefs.block_webrtc);
+    c.toggleRow(@src(), "HTTPS only", "Blocks insecure HTTP pages and requests.", &privacy.prefs.https_only);
+    if (old_ads != privacy.prefs.block_ads or old_trackers != privacy.prefs.block_trackers or old_cookies != privacy.prefs.clean_tracking_cookies or old_rtc != privacy.prefs.block_webrtc or old_https != privacy.prefs.https_only) privacy.changed();
     const before = privacy.prefs.canvas;
     c.toggleRow(@src(), "Protect canvas readback", "Prevents sites reading canvas pixels for fingerprinting. Drawing still works; allow trusted editors below when exports are needed.", &privacy.prefs.canvas);
     if (before != privacy.prefs.canvas) privacy.changed();
@@ -167,20 +205,50 @@ fn proxies() void {
         privacy.changed();
     }
     row.deinit();
+    var connection = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+    if (c.actionButton(@src(), "Tor", if (privacy.prefs.proxy_mode == .tor) .primary else .secondary, 71900)) {
+        privacy.prefs.proxy_mode = .tor;
+        privacy.changed();
+    }
+    if (c.actionButton(@src(), "Verified pool", if (privacy.prefs.proxy_mode == .pool) .primary else .secondary, 71901)) {
+        privacy.prefs.proxy_mode = .pool;
+        privacy.changed();
+    }
+    if (c.iconButton(@src(), icons.@"scan-line", "Verify saved proxies through HTTPS", false)) privacy.api.opal_security_pool_scan();
+    if (c.iconButton(@src(), icons.shuffle, "Rotate to another verified exit", false)) privacy.api.opal_security_pool_rotate();
+    connection.deinit();
+    if (privacy.prefs.proxy_mode == .tor) {
+        var status: [256]u8 = undefined;
+        const n = privacy.api.opal_security_tor_message(&status, status.len);
+        note(@src(), status[0..n]);
+        if (privacy.api.opal_security_tor_status() == 1) {
+            var progress: [64]u8 = undefined;
+            note(@src(), std.fmt.bufPrint(&progress, "Connecting: {d}%", .{privacy.api.opal_security_tor_progress()}) catch "Connecting…");
+        }
+        if (c.iconButton(@src(), icons.@"rotate-cw", "Reconnect Tor", false)) privacy.api.opal_security_tor_retry();
+        note(@src(), "Routes this browser through Tor while Opal is open. Other app traffic uses its own connection.");
+    }
+    note(@src(), "Pool checks use HTTPS through each saved proxy. Verified exits expire after six hours; empty pools block traffic.");
     for (0..privacy.prefs.profile_count) |i| {
         const p = &privacy.prefs.profiles[i];
         var r = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = @intCast(71720 + i), .expand = .horizontal });
-        if (c.actionButton(@src(), p.name.text(), if (privacy.prefs.active_profile == i and privacy.prefs.proxy_mode != .system) .primary else .secondary, 71740 + i)) {
+        if (c.actionButton(@src(), p.name.text(), if (privacy.prefs.active_profile == i and privacy.prefs.proxy_mode == p.kind) .primary else .secondary, 71740 + i)) {
             privacy.prefs.active_profile = i;
             privacy.prefs.proxy_mode = p.kind;
             privacy.changed();
         }
+        note(@src(), switch (privacy.api.opal_security_pool_health(@intCast(i))) {
+            1 => "Checking…",
+            2 => "Verified",
+            -1 => "Unavailable",
+            else => "Unchecked",
+        });
         if (c.actionButton(@src(), "Edit", .secondary, 71760 + i)) {
             beginEdit(i);
             editing = true;
         }
         if (c.actionButton(@src(), "Remove", .danger, 71780 + i)) {
-            if (privacy.prefs.active_profile == i) privacy.prefs.proxy_mode = .system;
+            if (privacy.prefs.active_profile == i and privacy.prefs.proxy_mode == p.kind) privacy.prefs.proxy_mode = .system;
             if (privacy.prefs.active_profile > i) privacy.prefs.active_profile -= 1;
             for (i..privacy.prefs.profile_count - 1) |j| privacy.prefs.profiles[j] = privacy.prefs.profiles[j + 1];
             privacy.prefs.profile_count -= 1;
@@ -221,6 +289,7 @@ fn proxies() void {
             return;
         }
         const index = edit_index orelse privacy.prefs.profile_count;
+        if (edit_index != null and privacy.prefs.active_profile == index and privacy.prefs.proxy_mode == privacy.prefs.profiles[index].kind) privacy.prefs.proxy_mode = draft.kind;
         privacy.prefs.profiles[index] = draft;
         if (edit_index == null) privacy.prefs.profile_count += 1;
         editing = false;

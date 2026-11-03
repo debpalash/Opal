@@ -56,19 +56,26 @@ pub fn render() void {
     });
     defer strip.deinit();
     const available = dvui.windowRect().w / state.app.ui_scale - 44;
-    const width = std.math.clamp(available / @as(f32, @floatFromInt(model.count)) - 2, 96, 220);
-    const tabs_width = @min(available, (width + 2) * @as(f32, @floatFromInt(model.count)));
+    var pinned_count: usize = 0;
+    for (model.items[0..model.count]) |tab| if (tab.pinned) {
+        pinned_count += 1;
+    };
+    const pinned_width = 58 * @as(f32, @floatFromInt(pinned_count));
+    const width = std.math.clamp((available - pinned_width) / @as(f32, @floatFromInt(@max(1, model.count - pinned_count))) - 2, 110, 240);
+    const tabs_width = @min(available, pinned_width + (width + 2) * @as(f32, @floatFromInt(model.count - pinned_count)));
     var scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .hide, .vertical = .none }, .{ .expand = .vertical, .min_size_content = .{ .w = tabs_width }, .max_size_content = .{ .w = tabs_width, .h = height } });
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .vertical });
     var select: ?u32 = null;
     var close: ?u32 = null;
+    var pin: ?u32 = null;
     for (model.items[0..model.count], 0..) |*tab, index| {
         const active = index == model.active;
+        const tab_width = if (tab.pinned) @as(f32, 56) else width;
         var button: dvui.ButtonWidget = undefined;
         button.init(@src(), .{}, .{
             .id_extra = tab.id,
-            .min_size_content = .{ .w = width - 12, .h = 24 },
-            .max_size_content = .{ .w = width - 12, .h = 24 },
+            .min_size_content = .{ .w = tab_width - 12, .h = 24 },
+            .max_size_content = .{ .w = tab_width - 12, .h = 24 },
             .color_fill = .{ .color = if (active) theme.colors.bg_elevated else theme.transparent },
             .color_fill_hover = .{ .color = theme.colors.bg_hover },
             .color_text = .{ .color = if (active) theme.colors.text_primary else theme.colors.text_secondary },
@@ -89,10 +96,13 @@ pub fn render() void {
         var contents = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
         if (tab.loading) dvui.spinner(@src(), .{ .min_size_content = .{ .w = 12, .h = 12 }, .gravity_y = 0.5, .color_text = .{ .color = theme.colors.accent } }) else dvui.icon(@src(), "Page", icons.tvg.lucide.globe, .{}, .{ .min_size_content = .{ .w = 12, .h = 12 }, .gravity_y = 0.5, .color_text = .{ .color = theme.colors.text_tertiary } });
         var title_data: dvui.WidgetData = undefined;
-        _ = dvui.label(@src(), "{s}", .{if (tab.title.len > 0) tab.title.text() else "New tab"}, .{ .data_out = &title_data, .expand = .horizontal, .gravity_y = 0.5, .padding = dvui.Rect.all(0), .margin = .{ .x = 6 }, .color_text = .{ .color = if (active) theme.colors.text_primary else theme.colors.text_secondary } });
-        if (@import("builtin").is_test) title_bounds_for_test[index] = title_data.borderRectScale().r;
+        if (!tab.pinned) {
+            _ = dvui.label(@src(), "{s}", .{if (tab.title.len > 0) tab.title.text() else "New tab"}, .{ .data_out = &title_data, .expand = .horizontal, .gravity_y = 0.5, .padding = dvui.Rect.all(0), .margin = .{ .x = 6 }, .color_text = .{ .color = if (active) theme.colors.text_primary else theme.colors.text_secondary } });
+            if (@import("builtin").is_test) title_bounds_for_test[index] = title_data.borderRectScale().r;
+        } else @import("components.zig").tip(@src(), button.data().*, if (tab.title.len > 0) tab.title.text() else "Pinned tab");
+        if (@import("components.zig").iconButton(@src(), if (tab.pinned) icons.tvg.lucide.@"pin-off" else icons.tvg.lucide.pin, if (tab.pinned) "Unpin tab" else "Pin tab", tab.pinned)) pin = tab.id;
         var close_data: dvui.WidgetData = undefined;
-        if (dvui.buttonIcon(@src(), "Close tab", icons.tvg.lucide.x, .{}, .{}, .{
+        if (!tab.pinned and dvui.buttonIcon(@src(), "Close tab", icons.tvg.lucide.x, .{}, .{}, .{
             .data_out = &close_data,
             .gravity_y = 0.5,
             .min_size_content = .{ .w = 12, .h = 12 },
@@ -103,11 +113,11 @@ pub fn render() void {
             .color_text = .{ .color = theme.colors.text_secondary },
             .corners = theme.dims.rad_sm,
         })) close = tab.id;
-        if (@import("builtin").is_test) close_bounds_for_test[index] = close_data.borderRectScale().r;
+        if (@import("builtin").is_test) close_bounds_for_test[index] = if (tab.pinned) .{} else close_data.borderRectScale().r;
         contents.deinit();
         // Children consume close clicks before the containing tab can activate.
         button.processEvents();
-        if (button.clicked() and close == null) select = tab.id;
+        if (button.clicked() and close == null and pin == null) select = tab.id;
         button.drawFocus();
         button.deinit();
     }
@@ -126,6 +136,8 @@ pub fn render() void {
         .corners = theme.dims.rad_sm,
     });
     if (@import("builtin").is_test) new_bounds_for_test = new_data.borderRectScale().r;
-    if (close) |id| browser.closeTab(id) else if (select) |id| browser.selectTab(id);
+    if (pin) |id| {
+        if (model.index(id)) |i| browser.pinTab(id, !model.items[i].pinned);
+    } else if (close) |id| browser.closeTab(id) else if (select) |id| browser.selectTab(id);
     if (create) browser.newTab("");
 }
