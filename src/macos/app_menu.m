@@ -16,6 +16,8 @@ enum {
     OPAL_MENU_SEEK_FORWARD = 8,
     OPAL_MENU_FULLSCREEN = 9,
     OPAL_MENU_ABOUT = 10,
+    OPAL_MENU_NEW_BROWSER_TAB = 11,
+    OPAL_MENU_CLOSE = 12,
 };
 
 #define OPAL_MENU_QUEUE_CAP 16
@@ -23,6 +25,9 @@ static pthread_mutex_t g_menu_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_menu_queue[OPAL_MENU_QUEUE_CAP];
 static int g_menu_head = 0;
 static int g_menu_count = 0;
+static BOOL g_browser_context;
+void opal_app_menu_browser_context(int active) { g_browser_context = active != 0; }
+void opal_app_close_window(void) { [NSApp.keyWindow performClose:nil]; }
 
 static void opal_menu_push(int action) {
     pthread_mutex_lock(&g_menu_lock);
@@ -61,6 +66,12 @@ void opal_app_identity_init(void) {
     opal_menu_push(OPAL_MENU_ABOUT);
 }
 - (void)openFile:(id)sender { (void)sender; opal_menu_push(OPAL_MENU_OPEN); }
+- (void)newBrowserTab:(id)sender { (void)sender; opal_menu_push(OPAL_MENU_NEW_BROWSER_TAB); }
+- (void)closeTabOrWindow:(id)sender { (void)sender; opal_menu_push(OPAL_MENU_CLOSE); }
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+    if (item.action == @selector(closeTabOrWindow:)) item.title = g_browser_context ? @"Close Tab" : @"Close Window";
+    return YES;
+}
 - (void)openSettings:(id)sender { (void)sender; opal_menu_push(OPAL_MENU_SETTINGS); }
 - (void)showHome:(id)sender { (void)sender; opal_menu_push(OPAL_MENU_HOME); }
 - (void)showSearch:(id)sender { (void)sender; opal_menu_push(OPAL_MENU_SEARCH); }
@@ -121,8 +132,9 @@ void opal_app_menu_init(const unsigned char *logo, size_t logo_len) {
 
         NSMenu *file = [[NSMenu alloc] initWithTitle:@"File"];
         [file addItem:opal_item(@"Open…", @selector(openFile:), @"o", target)];
+        [file addItem:opal_item(@"New Browser Tab", @selector(newBrowserTab:), @"t", target)];
         [file addItem:[NSMenuItem separatorItem]];
-        [file addItem:opal_item(@"Close Window", @selector(performClose:), @"w", nil)];
+        [file addItem:opal_item(@"Close Window", @selector(closeTabOrWindow:), @"w", target)];
         opal_add_menu(bar, @"File", file);
 
         NSMenu *edit = [[NSMenu alloc] initWithTitle:@"Edit"];

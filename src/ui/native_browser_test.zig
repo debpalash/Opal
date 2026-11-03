@@ -14,6 +14,62 @@ extern fn opal_browser_test_snapshot(path: [*:0]const u8) void;
 extern fn opal_browser_test_snapshot_result() c_int;
 extern fn opal_browser_test_page_width() f64;
 extern fn opal_browser_test_clip_width() f64;
+extern fn opal_extensions_test_tab_count() c_int;
+const TabServer = struct {
+    stopping: std.atomic.Value(bool) = .init(false),
+    fn serve(listener: *std.Io.net.Server, self: *@This()) void {
+        while (!self.stopping.load(.acquire)) {
+            const stream = listener.accept(io.io()) catch return;
+            defer stream.close(io.io());
+            if (self.stopping.load(.acquire)) return;
+            var ready = [_]std.posix.pollfd{.{ .fd = stream.socket.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+            if ((std.posix.poll(&ready, 1000) catch continue) == 0) continue;
+            var incoming: [4096]u8 = undefined;
+            var reader = stream.reader(io.io(), &incoming);
+            const request = reader.interface.takeDelimiterInclusive('\n') catch continue;
+            const second = std.mem.indexOf(u8, request, "/second") != null;
+            const next = std.mem.indexOf(u8, request, "/b ") != null;
+            while (true) {
+                const line = reader.interface.takeDelimiterInclusive('\n') catch break;
+                if (std.mem.eql(u8, line, "\r\n")) break;
+            }
+            const body = if (second) "<title>Second tab</title><input id='entry' value='second tab'>" else if (next) "<title>First B</title><p>Separate navigation</p>" else "<title>First A</title><input id='entry' value='original'><iframe srcdoc='<p>Frame ready</p>'></iframe>";
+            var outgoing: [2048]u8 = undefined;
+            var writer = stream.writer(io.io(), &outgoing);
+            writer.interface.print("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {d}\r\nCache-Control: max-age=60\r\nConnection: close\r\n\r\n{s}", .{ body.len, body }) catch continue;
+            writer.interface.flush() catch {};
+        }
+    }
+};
+fn ownedNavigate(port: u16, path: []const u8, title: []const u8) !void {
+    var url: [128:0]u8 = @splat(0);
+    _ = try std.fmt.bufPrint(&url, "http://127.0.0.1:{d}/{s}", .{ port, path });
+    native.api.opal_browser_navigate(&url);
+    try pageTitle(title);
+}
+fn pageTitle(wanted: []const u8) !void {
+    var url: [2048]u8 = @splat(0);
+    var title: [256]u8 = @splat(0);
+    var err: [256]u8 = @splat(0);
+    var loading: c_int = 0;
+    var found: c_int = 0;
+    for (0..1000) |_| {
+        native.api.opal_browser_test_pump();
+        _ = native.api.opal_browser_poll(&url, url.len, &title, title.len, &err, err.len, &loading, &found);
+        if (loading == 0 and std.mem.eql(u8, std.mem.sliceTo(&title, 0), wanted)) return;
+    }
+    std.debug.print("Tab fixture expected {s}, received {s}\n", .{ wanted, std.mem.sliceTo(&title, 0) });
+    return error.Timeout;
+}
+fn pageScript(script: [*:0]const u8, out: []u8) ![]const u8 {
+    const api = @import("../services/browser_privacy.zig").api;
+    api.opal_extensions_test_eval(script);
+    for (0..1000) |_| {
+        native.api.opal_browser_test_pump();
+        if (api.opal_extensions_test_result(out.ptr, out.len) != 0) return std.mem.sliceTo(out, 0);
+    }
+    return error.Timeout;
+}
 fn frame(window: *dvui.Window, index: usize, show: bool) !void {
     try window.begin(@as(i128, @intCast(index + 1)) * 16_666_667);
     @import("native_browser.zig").beginFrame();
@@ -136,7 +192,7 @@ test "Native embedded browser renders HTML and extracts actual DOM text" {
     }
 }
 
-test "Native embedded browser uses one shell toolbar and hover leaves content fixed" {
+test "Native embedded browser aligns address controls above tabs and hover leaves content fixed" {
     const shell = @import("shell.zig");
     const browser = @import("../services/browser.zig");
     const workers = @import("../core/workers.zig");
@@ -151,6 +207,7 @@ test "Native embedded browser uses one shell toolbar and hover leaves content fi
         state.app.browse_source = old_source;
         state.app.ui_scale = old_scale;
         shell.setSidebarFixtureForTest(null);
+        browser.resetTabsForTest();
     }
     state.app.router.current = .browse;
     state.app.browse_source = .Web;
@@ -158,6 +215,7 @@ test "Native embedded browser uses one shell toolbar and hover leaves content fi
     theme.markUiThread();
     const Size = struct { width: f32, scale: f32 = 1 };
     for ([_]Size{ .{ .width = 1280 }, .{ .width = 800 }, .{ .width = 640 }, .{ .width = 375 }, .{ .width = 1280, .scale = 1.5 } }) |size| {
+        browser.resetTabsForTest();
         const width = size.width;
         state.app.ui_scale = size.scale;
         var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-browser-layout-fixture", .persist_window_geometry = false, .size = .{ .w = width, .h = 720 }, .vsync = false, .title = "Opal compact browser fixture", .hidden = true });
@@ -168,13 +226,21 @@ test "Native embedded browser uses one shell toolbar and hover leaves content fi
         shell.setSidebarFixtureForTest(false);
         browser.requestBridgeView();
         var before: @TypeOf(native.viewport) = .{};
-        for (0..12) |index| {
+        var selected_new: u32 = 0;
+        for (0..25) |index| {
             try window.begin(@as(i128, @intCast(index + 1)) * 16_666_667);
             @import("native_browser.zig").beginFrame();
             if (index == 0) _ = try window.addEventMouseMotion(.{ .pt = .{ .x = dvui.windowRectPixels().w - 10, .y = dvui.windowRectPixels().h - 10 } });
             if (index == 6 and width >= 400) {
                 const rail = shell.sidebarBoundsForTest().sidebar;
                 _ = try window.addEventMouseMotion(.{ .pt = .{ .x = rail.x + 16, .y = rail.y + 16 } });
+            }
+            const tab_ui = @import("browser_tabs.zig");
+            if (index == 13 or index == 17 or index == 21) {
+                const bounds = if (index == 13) tab_ui.new_bounds_for_test else tab_ui.close_bounds_for_test[0];
+                _ = try window.addEventMouseMotion(.{ .pt = bounds.center() });
+                _ = try window.addEventMouseButton(.left, .press);
+                _ = try window.addEventMouseButton(.left, .release);
             }
             var scaled = dvui.scale(@src(), .{ .scale = &state.app.ui_scale }, .{ .expand = .both });
             try shell.render();
@@ -184,25 +250,120 @@ test "Native embedded browser uses one shell toolbar and hover leaves content fi
             const address = browser.addressBoundsForTest();
             const more = shell.moreBoundsForTest();
             const available = dvui.windowRectPixels();
+            if (index >= 8) {
+                const tabs = browser.tabsView();
+                for (0..tabs.count) |n| {
+                    const r = tab_ui.tab_bounds_for_test[n];
+                    const title = tab_ui.title_bounds_for_test[n];
+                    const close = tab_ui.close_bounds_for_test[n];
+                    try std.testing.expect(title.y >= r.y and title.y + title.h <= r.y + r.h);
+                    try std.testing.expectApproxEqAbs(title.center().y, close.center().y, 1);
+                }
+            }
             _ = try window.end(.{});
             if (index == 5) before = native.viewport;
+            if (index == 16) {
+                const tabs = browser.tabsView();
+                try std.testing.expectEqual(@as(usize, 2), tabs.count);
+                selected_new = tabs.items[tabs.active].id;
+            }
+            if (index == 20) {
+                const tabs = browser.tabsView();
+                try std.testing.expectEqual(@as(usize, 1), tabs.count);
+                try std.testing.expectEqual(selected_new, tabs.items[tabs.active].id);
+            }
+            if (index == 24) {
+                const tabs = browser.tabsView();
+                try std.testing.expectEqual(@as(usize, 1), tabs.count);
+                try std.testing.expect(tabs.items[tabs.active].id != selected_new);
+                try std.testing.expectEqual(@as(c_int, 1), opal_extensions_test_tab_count());
+            }
             if (index >= 8) {
-                try std.testing.expect(native.viewport.y <= 58 * scale * size.scale);
+                try std.testing.expect(native.viewport.y <= 96 * scale * size.scale);
                 try std.testing.expect(address.w >= 32 * scale);
                 try std.testing.expect(more.w > 0 and more.x + more.w <= available.w + 1);
                 try std.testing.expect(address.x + address.w <= more.x);
+                try std.testing.expectApproxEqAbs(more.center().y, address.center().y, 1);
                 try std.testing.expectApproxEqAbs(before.x, native.viewport.x, 1);
                 try std.testing.expectApproxEqAbs(before.w, native.viewport.w, 1);
                 try std.testing.expectEqual(@as(c_int, 1), opal_browser_test_visible());
-                if (width >= 400) {
+                if (width >= 400 and index < 13) {
                     try std.testing.expect(opal_browser_test_clip_width() < opal_browser_test_page_width());
                     try std.testing.expectApproxEqAbs(208 * scale * size.scale, shell.sidebarBoundsForTest().sidebar.w, 1);
                 }
             }
         }
     }
+    if (io.getenv("OPAL_NATIVE_CAPTURE_DIR") != null) {
+        const Preview = struct {
+            fn setup() !void {
+                browser.resetTabsForTest();
+                state.app.ui_scale = 1;
+                shell.setSidebarFixtureForTest(false);
+                browser.newTab("");
+                browser.newTab("");
+                native.focus_address = false;
+            }
+            fn draw() !void {
+                @import("native_browser.zig").beginFrame();
+                try shell.render();
+                @import("native_browser.zig").endFrame();
+            }
+            fn cleanup() void {
+                browser.resetTabsForTest();
+            }
+        };
+        for ([_]u32{ 1280, 640, 375 }) |width| try @import("native_capture.zig").capture(width, 220, "browser-tabs-aligned", Preview.setup, Preview.draw, Preview.cleanup);
+    }
 }
 extern fn opal_wallpaper_status() c_int;
+test "Native embedded browser tabs retain documents independent history and extension identity" {
+    var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-live-tabs-fixture", .persist_window_geometry = false, .size = .{ .w = 800, .h = 600 }, .vsync = false, .title = "Opal isolated live tabs", .hidden = true });
+    defer backend.deinit();
+    var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
+    defer window.deinit();
+    defer native.deinit();
+    theme.markUiThread();
+    for (0..8) |i| try frame(&window, i, true);
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try address.listen(io.io(), .{ .reuse_address = true });
+    defer server.deinit(io.io());
+    var fixture: TabServer = .{};
+    var response = try io.io().concurrent(TabServer.serve, .{ &server, &fixture });
+    defer {
+        fixture.stopping.store(true, .release);
+        if (server.socket.address.connect(io.io(), .{ .mode = .stream })) |connection| connection.close(io.io()) else |_| {}
+        _ = response.cancel(io.io());
+    }
+    const port = server.socket.address.getPort();
+    try ownedNavigate(port, "a", "First A");
+    var result: [256]u8 = undefined;
+    try std.testing.expectEqualStrings("edited first tab", try pageScript("document.querySelector('#entry').value='edited first tab'", &result));
+    try std.testing.expectEqualStrings("Frame ready", try pageScript("document.querySelector('iframe').contentDocument.body.textContent", &result));
+    try ownedNavigate(port, "b", "First B");
+    native.command(0);
+    try pageTitle("First A");
+    _ = try pageScript("document.cookie='shared=value; path=/'; document.querySelector('#entry').value='edited first tab'", &result);
+    try std.testing.expect(native.selectTab(2));
+    native.endFrame(true, 0, true);
+    try ownedNavigate(port, "second", "Second tab");
+    try std.testing.expectEqualStrings("1", try pageScript("document.cookie.includes('shared=value')", &result));
+    try std.testing.expectEqual(@as(c_int, 2), opal_extensions_test_tab_count());
+    try std.testing.expect(native.selectTab(1));
+    native.endFrame(true, 0, true);
+    try pageTitle("First A");
+    try std.testing.expectEqualStrings("edited first tab", try pageScript("document.querySelector('#entry').value", &result));
+    native.command(1);
+    try pageTitle("First B");
+    try std.testing.expect(native.selectTab(2));
+    native.endFrame(true, 0, true);
+    try pageTitle("Second tab");
+    try std.testing.expectEqualStrings("second tab", try pageScript("document.querySelector('#entry').value", &result));
+    try std.testing.expect(native.selectTab(1));
+    native.closeTab(2);
+    try std.testing.expectEqual(@as(c_int, 1), opal_extensions_test_tab_count());
+    try pageTitle("First B");
+}
 test "Native embedded browser companion wallpaper is below icons and never takes focus" {
     const workers = @import("../core/workers.zig");
     workers.init();

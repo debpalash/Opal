@@ -10,6 +10,8 @@ const enabled = builtin.os.tag == .macos and !@import("build_options").headless;
 extern fn opal_app_identity_init() void;
 extern fn opal_app_menu_init(logo: [*]const u8, logo_len: usize) void;
 extern fn opal_app_menu_poll() c_int;
+extern fn opal_app_menu_browser_context(active: c_int) void;
+extern fn opal_app_close_window() void;
 
 pub fn initIdentity() void {
     if (enabled) opal_app_identity_init();
@@ -24,6 +26,8 @@ pub fn init() void {
 
 pub fn frameTick() void {
     if (!enabled) return;
+    const browser_active = state.app.router.current == .browse and state.app.browse_source == .Web and @import("../ui/browser_hub.zig").browsing();
+    opal_app_menu_browser_context(@intFromBool(browser_active));
     var budget: u8 = 8;
     while (budget > 0) : (budget -= 1) {
         switch (opal_app_menu_poll()) {
@@ -47,6 +51,16 @@ pub fn frameTick() void {
             10 => {
                 state.app.settings_tab = .About;
                 state.app.router.navigate(.settings);
+            },
+            11 => {
+                @import("../services/browser.zig").newTab("");
+                state.navigateToTabNow(.Web);
+            },
+            12 => {
+                if (state.app.router.current == .browse and state.app.browse_source == .Web and @import("../ui/browser_hub.zig").browsing()) {
+                    const tabs = @import("../services/browser.zig").tabsView();
+                    @import("../services/browser.zig").closeTab(tabs.items[tabs.active].id);
+                } else opal_app_close_window();
             },
             else => {},
         }

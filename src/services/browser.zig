@@ -10,6 +10,102 @@ const pure = @import("browser_pure.zig");
 const io_g = @import("../core/io_global.zig");
 const player = @import("../player/player.zig");
 pub const native = @import("native_browser.zig");
+pub const tab_model = @import("embedded_tabs_pure.zig");
+var browser_tabs: tab_model.Model = .{};
+var tabs_private: bool = false;
+pub fn resetTabsForTest() void {
+    if (!builtin.is_test) return;
+    browser_tabs = .{};
+    native.deinit();
+}
+
+pub fn tabsView() *const tab_model.Model {
+    ensureTabs();
+    return &browser_tabs;
+}
+fn ensureTabs() void {
+    if (browser_tabs.count > 0 and tabs_private != state.app.incognito_mode) {
+        browser_tabs = .{};
+        native.deinit();
+        state.app.browser.url_len = 0;
+        state.app.browser.url_buf[0] = 0;
+        state.app.browser.title_len = 0;
+    }
+    tabs_private = state.app.incognito_mode;
+    if (browser_tabs.count == 0) {
+        _ = browser_tabs.create();
+        const b = &state.app.browser;
+        if (b.url_len > 0) browser_tabs.current().url.set(b.url_buf[0..b.url_len]);
+    }
+}
+fn showSelectedTab() void {
+    const tab = browser_tabs.current();
+    _ = native.selectTab(tab.id);
+    const b = &state.app.browser;
+    const url = tab.url.text();
+    b.url_len = @min(url.len, b.url_buf.len - 1);
+    @memcpy(b.url_buf[0..b.url_len], url[0..b.url_len]);
+    b.url_buf[b.url_len] = 0;
+    b.title_len = @min(tab.title.len, b.title.len);
+    @memcpy(b.title[0..b.title_len], tab.title.text()[0..b.title_len]);
+    b.is_loading.store(tab.loading, .release);
+    nav_stage_lock.lock();
+    nav_stage_dirty = false;
+    nav_stage_url_len = 0;
+    nav_stage_title_len = 0;
+    nav_stage_lock.unlock();
+    url_bar_focused = false;
+    find_open = false;
+    reader_open = false;
+    reader_len = 0;
+    state.wakeUi();
+}
+pub fn selectTab(id: u32) void {
+    if (comptime !native.supported) return;
+    ensureTabs();
+    if (browser_tabs.current().id == id or !browser_tabs.select(id)) return;
+    showSelectedTab();
+}
+pub fn newTab(url: []const u8) void {
+    if (comptime !native.supported) return;
+    const had_tabs = browser_tabs.count > 0 and tabs_private == state.app.incognito_mode;
+    ensureTabs();
+    if (had_tabs and browser_tabs.create() == null) {
+        state.showToast("Close a tab before opening another (16 tab limit)");
+        return;
+    }
+    showSelectedTab();
+    if (url.len > 0 and @import("native_browser_pure.zig").allowedUrl(url)) navigate(url) else native.focus_address = true;
+    requestBridgeView();
+}
+pub fn closeTab(id: u32) void {
+    if (comptime !native.supported) return;
+    ensureTabs();
+    const previous = browser_tabs.current().id;
+    if (!browser_tabs.close(id)) return;
+    if (browser_tabs.current().id != previous) showSelectedTab();
+    native.closeTab(id);
+    state.wakeUi();
+}
+pub fn cycleTab(backwards: bool) void {
+    if (comptime !native.supported) return;
+    ensureTabs();
+    browser_tabs.cycle(backwards);
+    showSelectedTab();
+}
+pub fn refreshTabs() void {
+    if (comptime !native.supported) return;
+    ensureTabs();
+    for (browser_tabs.items[0..browser_tabs.count]) |*tab| {
+        var url: [2048]u8 = @splat(0);
+        var title: [256]u8 = @splat(0);
+        var loading: c_int = 0;
+        if (native.api.opal_browser_tab_info(tab.id, &url, url.len, &title, title.len, &loading) == 0) continue;
+        tab.url.set(std.mem.sliceTo(&url, 0));
+        tab.title.set(std.mem.sliceTo(&title, 0));
+        tab.loading = loading != 0;
+    }
+}
 
 // Keep the anti-block scrape-fetch layer (services/scrape_fetch.zig) in the
 // build graph and compile-checked even before any scraper is wired through it
@@ -1533,7 +1629,9 @@ fn applyStagedNav(b: *@TypeOf(state.app.browser)) void {
 pub fn renderContent() void {
     var root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer root.deinit();
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
     renderToolbar();
+    row.deinit();
     renderPageContent();
 }
 
@@ -1543,6 +1641,7 @@ pub fn addressBoundsForTest() dvui.Rect.Physical {
     return address_rect_for_test;
 }
 pub fn renderToolbar() void {
+    if (comptime native.supported) ensureTabs();
     const b = &state.app.browser;
     const icons = @import("icons");
     const toolbar_width = dvui.windowRect().w / state.app.ui_scale;
@@ -1568,6 +1667,14 @@ pub fn renderToolbar() void {
             native.focus_find = true;
         }
         if (flags & 8 != 0) state.app.command_palette_open = true;
+        if (flags & 64 != 0) {
+            var target: [2048]u8 = @splat(0);
+            if (native.api.opal_browser_tab_requested(&target, target.len) != 0) newTab(std.mem.sliceTo(&target, 0));
+        }
+        if (flags & 256 != 0) newTab("");
+        if (flags & 512 != 0) closeTab(browser_tabs.current().id);
+        if (flags & 1024 != 0) cycleTab(false);
+        if (flags & 2048 != 0) cycleTab(true);
         if (flags & 16 != 0) find_count.store(found, .release);
         if (flags & 32 != 0) reader_len = native.api.opal_browser_reader(&reader_buf, reader_buf.len);
         if (flags & 1 != 0 and error_text[0] != 0) state.showToast(std.mem.sliceTo(&error_text, 0));
@@ -1617,13 +1724,15 @@ pub fn renderToolbar() void {
     {
         var url_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
-            .background = true,
-            .color_fill = .{ .color = theme.colors.bg_surface },
+            .gravity_y = 0.5,
+            .padding = .{ .x = 6, .w = 6 },
+            .background = false,
+            .color_fill = .{ .color = theme.transparent },
         });
         defer url_row.deinit();
 
         const icon_btn_style = dvui.Options{
+            .gravity_y = 0.5,
             .color_fill = .{ .color = theme.transparent },
             .color_text = .{ .color = theme.colors.text_secondary },
             .corners = theme.dims.rad_sm,
@@ -1658,6 +1767,7 @@ pub fn renderToolbar() void {
                 });
             } else if (native.supported or bridge_ready.load(.acquire)) {
                 dvui.icon(@src(), "browser-ready", icons.tvg.lucide.@"circle-check", .{}, .{
+                    .gravity_y = 0.5,
                     .color_text = .{ .color = theme.colors.accent },
                     .min_size_content = .{ .w = 14, .h = 14 },
                     .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
@@ -1671,6 +1781,7 @@ pub fn renderToolbar() void {
         var te = dvui.widgetAlloc(dvui.TextEntryWidget);
         te.init(@src(), .{ .text = .{ .buffer = &b.url_buf } }, .{
             .expand = .horizontal,
+            .gravity_y = 0.5,
             .min_size_content = .{ .w = if (tiny_toolbar) 32 else 72, .h = 18 },
             .color_fill = .{ .color = theme.colors.bg_elevated },
             .color_border = .{ .color = theme.colors.border_strong },
@@ -1752,6 +1863,7 @@ pub fn renderToolbar() void {
 
         // Go (play icon)
         const clicked_go = !tiny_toolbar and dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
+            .gravity_y = 0.5,
             .color_fill = .{ .color = theme.colors.accent },
             .color_text = .{ .color = dvui.Color.white },
             .corners = theme.dims.rad_sm,

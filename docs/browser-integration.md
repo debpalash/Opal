@@ -10,6 +10,25 @@ menus and web media directly; there is no JPEG capture or remote input protocol
 in this path. The toolbar routes navigation, history, refresh, zoom, find and
 reader text to WebKit. Command-L/F/K return focus to Opal's controls.
 
+The macOS browser has an aligned address toolbar and a separate tab strip below
+it. Up to 16 tabs retain live WebKit documents, form state and independent
+back/forward history while sharing the current browser profile's cookies and
+extension controller. New/close buttons, Command-T/W and Control-Tab support
+normal tab navigation. Closing the last tab creates a fresh blank tab; private
+mode changes discard the old documents and recreate the browser store.
+Windows/Linux's bridge continues to use its existing single-page interface.
+
+Hover expansion of the sidebar overlays the page without resizing it. The
+native view is clipped beneath the sidebar while retaining its full viewport;
+pinning the sidebar still reserves space.
+
+Embedded-browser compatibility does not imply Chrome fingerprint parity.
+Standard `about:blank` and `about:srcdoc` subframes are supported. Canvas guards,
+extensions, proxies and embedded-engine limitations can affect challenges;
+Cloudflare documents these factors in its [browser support guidance](https://developers.cloudflare.com/cloudflare-challenges/reference/supported-browsers/).
+Spoofing a Chrome user agent does not turn WebKit into Chromium or guarantee
+Turnstile acceptance.
+
 The view follows the browser pane, backing scale and window size. It hides when
 leaving the page or when an overlapping DVUI popup/modal needs the area. Normal
 browsing uses an Opal-owned WebKit data store; private browsing recreates the
