@@ -51,6 +51,10 @@ pub fn render(part: @import("../services/native_browser.zig").Chrome) void {
     if (part == .toolbar) {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
         defer row.deinit();
+        if (@import("browser_hub.zig").renderWorkspaceAction()) {
+            open = false;
+            closeEditor();
+        }
         const clicked = c.iconButton(@src(), icons.puzzle, "Extensions and privacy", open);
         if (clicked) {
             open = !open;

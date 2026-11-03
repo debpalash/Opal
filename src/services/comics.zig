@@ -3789,6 +3789,171 @@ fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
 // Called from ui.zig grid cell when provider == .comic_viewer
 // ══════════════════════════════════════════════════════════
 
+pub const ReaderToolbarLayout = struct {
+    row: dvui.Rect.Physical = .{},
+    chapter: dvui.Rect.Physical = .{},
+    title: dvui.Rect.Physical = .{},
+    info: dvui.Rect.Physical = .{},
+    mode: dvui.Rect.Physical = .{},
+    previous: dvui.Rect.Physical = .{},
+    next: dvui.Rect.Physical = .{},
+    ocr: dvui.Rect.Physical = .{},
+    narration: dvui.Rect.Physical = .{},
+    more: dvui.Rect.Physical = .{},
+    close: dvui.Rect.Physical = .{},
+};
+pub var reader_toolbar_for_test: ReaderToolbarLayout = .{};
+test "Native Browse comic reader toolbar stays on one row and keeps navigation reachable" {
+    const comic = &state.app.comic;
+    const saved = .{ .title = comic.title, .title_len = comic.title_len, .url = comic.url_buf, .url_len = comic.url_len, .prev_len = comic.prev_url_len, .next_len = comic.next_url_len, .page = comic.current_page, .count = comic.page_count, .progress = comic.dl_progress.load(.acquire), .mode = comic.view_mode, .jump = comic.scroll_to_page, .picker = md_chapter_picker };
+    defer {
+        comic.title = saved.title;
+        comic.title_len = saved.title_len;
+        comic.url_buf = saved.url;
+        comic.url_len = saved.url_len;
+        comic.prev_url_len = saved.prev_len;
+        comic.next_url_len = saved.next_len;
+        comic.current_page = saved.page;
+        comic.page_count = saved.count;
+        comic.dl_progress.store(saved.progress, .release);
+        comic.view_mode = saved.mode;
+        comic.scroll_to_page = saved.jump;
+        md_chapter_picker = saved.picker;
+    }
+    const Fixture = struct {
+        fn frame(window: *dvui.Window, index: usize, click: ?dvui.Rect.Physical) !void {
+            try window.begin(@as(i128, @intCast(index + 1)) * 16_666_667);
+            errdefer _ = window.end(.{}) catch null;
+            components.beginFrame();
+            theme.setTheme();
+            if (click) |bounds| {
+                _ = try window.addEventMouseMotion(.{ .pt = bounds.center() });
+                _ = try window.addEventMouseButton(.left, .press);
+                _ = try window.addEventMouseButton(.left, .release);
+            }
+            var root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+            renderReaderToolbar();
+            root.deinit();
+            _ = try window.end(.{});
+        }
+    };
+    theme.markUiThread();
+    const title = "The Mighty Thor (2015) #1 — A very long chapter title with 日本語 and extra words that must never force the controls into another row";
+    @memcpy(comic.title[0..title.len], title);
+    comic.title_len = title.len;
+    const route = "mangadex:801513ba-a712-498c-8f57-cae55b38cc92";
+    @memcpy(comic.url_buf[0..route.len], route);
+    comic.url_len = route.len;
+    comic.prev_url_len = 1;
+    comic.next_url_len = 1;
+    comic.page_count = 34;
+    comic.dl_progress.store(34, .release);
+    for ([_]f32{ 1280, 800, 480, 375, 320, 240 }) |width| {
+        comic.current_page = 3;
+        comic.view_mode = .scroll;
+        comic.scroll_to_page = false;
+        md_chapter_picker = false;
+        var backend = try dvui.backend.initWindow(.{ .io = io_global.io(), .org = "debpalash", .app = "Opal-comic-toolbar", .persist_window_geometry = false, .size = .{ .w = width, .h = 600 }, .vsync = false, .title = "Opal comic toolbar regression", .hidden = true });
+        defer backend.deinit();
+        var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
+        defer window.deinit();
+        for (0..8) |i| try Fixture.frame(&window, i, null);
+        const layout = reader_toolbar_for_test;
+        const scale = backend.pixelSize().w / width;
+        if (layout.chapter.w == 0 or layout.close.w == 0 or (width < 480 and layout.more.w == 0)) std.debug.print("Comic toolbar width={d}: {any}\n", .{ width, layout });
+        try std.testing.expect(layout.row.h <= 36 * scale);
+        for ([_]dvui.Rect.Physical{ layout.chapter, layout.info, layout.mode, layout.previous, layout.next, layout.close, if (width < 480) layout.more else layout.ocr, if (width < 480) layout.more else layout.narration }) |r| {
+            try std.testing.expect(r.w > 0 and r.h > 0);
+            try std.testing.expectApproxEqAbs(layout.mode.center().y, r.center().y, 1);
+            try std.testing.expect(r.x >= layout.row.x);
+            try std.testing.expect(r.x + r.w <= layout.row.x + layout.row.w + 1);
+        }
+        try std.testing.expect(layout.title.x + layout.title.w <= layout.info.x + 1);
+        try Fixture.frame(&window, 8, layout.next);
+        try std.testing.expectEqual(@as(usize, 4), comic.current_page);
+        try Fixture.frame(&window, 9, reader_toolbar_for_test.mode);
+        try std.testing.expect(comic.view_mode == .single_page);
+        try Fixture.frame(&window, 10, reader_toolbar_for_test.chapter);
+        try std.testing.expect(md_chapter_picker);
+    }
+}
+fn readerButton(src: std.builtin.SourceLocation, icon: []const u8, label: []const u8, enabled: bool, active: bool, danger: bool, bounds: *dvui.Rect.Physical) bool {
+    var data: dvui.WidgetData = undefined;
+    const style: dvui.Options = .{ .data_out = &data, .min_size_content = .{ .w = 16, .h = 16 }, .padding = dvui.Rect.all(4), .margin = dvui.Rect.all(1), .gravity_y = 0.5, .corners = theme.dims.rad_sm, .color_fill = .{ .color = if (active) theme.colors.accent else theme.transparent }, .color_fill_hover = .{ .color = theme.colors.bg_hover }, .color_text = .{ .color = if (!enabled) theme.colors.text_tertiary else if (danger) theme.colors.danger else if (active) theme.colors.text_on_accent else theme.colors.text_primary } };
+    const clicked = if (enabled) dvui.buttonIcon(src, label, icon, .{}, .{}, style) else disabled: {
+        dvui.icon(src, label, icon, .{}, style);
+        break :disabled false;
+    };
+    bounds.* = data.borderRectScale().r;
+    reader_components.tip(src, data, label);
+    return clicked;
+}
+fn readerMenuItem(src: std.builtin.SourceLocation, label: []const u8) bool {
+    return dvui.menuItemLabel(src, label, .{}, .{ .expand = .horizontal, .color_fill = .{ .color = theme.colors.bg_surface }, .color_fill_hover = .{ .color = theme.colors.bg_hover }, .color_text = .{ .color = theme.colors.text_primary } }) != null;
+}
+/// One stable-height strip. Long titles scroll within the remaining width;
+/// narrow panes keep secondary actions in a menu instead of adding rows.
+pub fn renderReaderToolbar() void {
+    const comic = &state.app.comic;
+    var layout: ReaderToolbarLayout = .{};
+    const available = dvui.parentGet().data().contentRect().w;
+    const compact = available < 480;
+    const chapters = western.pure.splitRoute(comic.url_buf[0..comic.url_len]) != null or pure.mangaIdFromRoute(comic.url_buf[0..comic.url_len]) != null;
+    var info_buffer: [64]u8 = undefined;
+    const first = if (comic.view_mode == .single_page) comic.current_page + 1 else comic.dl_progress.load(.acquire);
+    const info = std.fmt.bufPrint(&info_buffer, "{d}/{d}{s}", .{ first, comic.page_count, if (compact or comic.view_mode == .single_page) "" else " loaded" }) catch "";
+    const info_font = dvui.themeGet().font_body.withSize(theme.font_size.small);
+    const button_count: usize = 4 + @as(usize, @intFromBool(chapters)) + (if (compact) @as(usize, 1) else 2 + @as(usize, @intFromBool(comic.prev_url_len > 0)) + @as(usize, @intFromBool(comic.next_url_len > 0)));
+    const title_width = @max(0, available - @as(f32, @floatFromInt(button_count)) * 26 - info_font.textSize(info).w - 16);
+    var spare: dvui.Rect.Physical = .{};
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .background = true, .color_fill = .{ .color = theme.colors.bg_surface }, .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 } });
+    if (chapters and readerButton(@src(), icons.tvg.lucide.list, if (md_chapter_picker) "Hide chapters" else "Choose chapter", true, md_chapter_picker, false, &layout.chapter)) md_chapter_picker = !md_chapter_picker;
+    if (!compact and comic.prev_url_len > 0 and readerButton(@src(), icons.tvg.lucide.@"chevrons-left", "Previous issue", true, false, false, &spare)) loadComic(comic.prev_url[0..comic.prev_url_len]);
+    var title = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .hide, .vertical = .none }, .{ .min_size_content = .{ .w = title_width, .h = 24 }, .max_size_content = .{ .w = title_width, .h = 24 }, .gravity_y = 0.5 });
+    const text = safeUtf8(comic.title[0..comic.title_len]);
+    _ = dvui.label(@src(), "{s}", .{text}, .{ .color_text = .{ .color = theme.colors.text_primary }, .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 } });
+    layout.title = title.data().borderRectScale().r;
+    reader_components.tip(@src(), title.data().*, text);
+    title.deinit();
+    var info_data: dvui.WidgetData = undefined;
+    _ = dvui.label(@src(), "{s}", .{info}, .{ .data_out = &info_data, .font = dvui.themeGet().font_body.withSize(theme.font_size.small), .color_text = .{ .color = theme.colors.text_secondary }, .gravity_y = 0.5, .padding = .{ .x = 4, .w = 4 } });
+    layout.info = info_data.borderRectScale().r;
+    if (readerButton(@src(), if (comic.view_mode == .scroll) icons.tvg.lucide.@"scroll-text" else icons.tvg.lucide.@"book-open", "Switch reading mode", true, false, false, &layout.mode)) comic.view_mode = if (comic.view_mode == .scroll) .single_page else .scroll;
+    if (readerButton(@src(), icons.tvg.lucide.@"chevron-left", "Previous page", comic.current_page > 0, false, false, &layout.previous)) {
+        comic.current_page -= 1;
+        comic.scroll_to_page = true;
+    }
+    if (readerButton(@src(), icons.tvg.lucide.@"chevron-right", "Next page", comic.current_page + 1 < comic.page_count, false, false, &layout.next)) {
+        comic.current_page += 1;
+        comic.scroll_to_page = true;
+    }
+    if (!compact) {
+        if (comic.next_url_len > 0 and readerButton(@src(), icons.tvg.lucide.@"chevrons-right", "Next issue", true, false, false, &spare)) loadComic(comic.next_url[0..comic.next_url_len]);
+        if (readerButton(@src(), icons.tvg.lucide.@"scan-text", "Read text from page", true, comic.show_ocr_overlay, false, &layout.ocr)) ocrCurrentPage();
+        if (readerButton(@src(), if (comic.narrating) icons.tvg.lucide.@"circle-stop" else icons.tvg.lucide.@"volume-2", "Toggle narration", true, comic.narrating, false, &layout.narration)) toggleNarration();
+    } else {
+        var more = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
+        var menu = dvui.menu(@src(), .horizontal, .{ .background = false, .color_fill = .{ .color = theme.transparent }, .padding = dvui.Rect.all(0), .margin = dvui.Rect.all(1) });
+        if (dvui.menuItemIcon(@src(), "More reader controls", icons.tvg.lucide.@"ellipsis-vertical", .{ .submenu = true }, .{ .min_size_content = .{ .w = 16, .h = 16 }, .padding = dvui.Rect.all(4), .color_fill = .{ .color = theme.transparent }, .color_text = .{ .color = theme.colors.text_primary } })) |anchor| {
+            var popup = dvui.floatingMenu(@src(), .{ .from = anchor }, .{});
+            defer popup.deinit();
+            var items = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = .{ .color = theme.colors.bg_surface }, .border = dvui.Rect.all(1), .color_border = .{ .color = theme.colors.border_subtle } });
+            defer items.deinit();
+            if (comic.prev_url_len > 0 and readerMenuItem(@src(), "Previous issue")) loadComic(comic.prev_url[0..comic.prev_url_len]);
+            if (comic.next_url_len > 0 and readerMenuItem(@src(), "Next issue")) loadComic(comic.next_url[0..comic.next_url_len]);
+            if (readerMenuItem(@src(), "Read text from page")) ocrCurrentPage();
+            if (readerMenuItem(@src(), if (comic.narrating) "Stop narration" else "Start narration")) toggleNarration();
+        }
+        menu.deinit();
+        layout.more = more.data().borderRectScale().r;
+        more.deinit();
+    }
+    if (readerButton(@src(), icons.tvg.lucide.x, "Close reader", true, false, true, &layout.close)) closeComic();
+    layout.row = row.data().borderRectScale().r;
+    row.deinit();
+    if (@import("builtin").is_test) reader_toolbar_for_test = layout;
+}
+
 pub fn renderPaneContent(pane_idx: usize) void {
     _ = pane_idx;
     drainDecodedPages();
@@ -3808,9 +3973,9 @@ pub fn renderPaneContent(pane_idx: usize) void {
         return;
     }
 
+    renderReaderToolbar();
     const western_reader = western.pure.splitRoute(state.app.comic.url_buf[0..state.app.comic.url_len]) != null;
     if (western_reader or pure.mangaIdFromRoute(state.app.comic.url_buf[0..state.app.comic.url_len]) != null) {
-        if (reader_components.actionButton(@src(), if (md_chapter_picker) "Hide chapters" else "Choose chapter", .secondary, 72000)) md_chapter_picker = !md_chapter_picker;
         if (md_chapter_picker) {
             var chapter_scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .horizontal, .min_size_content = .{ .h = 100 }, .max_size_content = .{ .w = std.math.floatMax(f32), .h = 180 } });
             defer chapter_scroll.deinit();
@@ -3828,150 +3993,6 @@ pub fn renderPaneContent(pane_idx: usize) void {
             }
         }
     }
-
-    if (state.app.comic.title_len > 0) {
-        var title_row = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .auto_overlay, .vertical = .none }, .{ .expand = .horizontal, .min_size_content = .{ .h = 30 }, .max_size_content = dvui.Options.MaxSize.height(30) });
-        _ = dvui.label(@src(), "{s}", .{safeUtf8(state.app.comic.title[0..state.app.comic.title_len])}, .{ .color_text = .{ .color = theme.colors.text_primary }, .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 } });
-        title_row.deinit();
-    }
-
-    // Title bar + navigation + controls
-    {
-        var nav_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
-            .background = true,
-            .color_fill = .{ .color = theme.colors.bg_surface },
-        });
-        defer nav_row.deinit();
-
-        // Prev issue
-        if (state.app.comic.prev_url_len > 0) {
-            if (dvui.button(@src(), "«", .{}, .{
-                .color_fill = .{ .color = theme.colors.accent },
-                .color_text = .{ .color = theme.colors.text_on_accent },
-                .corners = theme.dims.rad_sm,
-                .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
-            })) {
-                loadComic(state.app.comic.prev_url[0..state.app.comic.prev_url_len]);
-            }
-        }
-
-        // Page info + progress
-        {
-            var info_buf: [64]u8 = undefined;
-            const info = if (state.app.comic.view_mode == .single_page)
-                @import("opal-fmt").bufPrintZ(&info_buf, "{d}/{d}", .{ state.app.comic.current_page + 1, state.app.comic.page_count }) catch "?"
-            else
-                @import("opal-fmt").bufPrintZ(&info_buf, "{d}/{d} loaded", .{ state.app.comic.dl_progress.load(.acquire), state.app.comic.page_count }) catch "?";
-            _ = dvui.label(@src(), "{s}", .{info}, .{
-                .color_text = .{ .color = theme.colors.text_secondary },
-                .padding = .{ .x = 4, .y = 0, .w = 8, .h = 0 },
-                .gravity_y = 0.5,
-            });
-        }
-
-        // View mode toggle
-        {
-            const mode_icon = if (state.app.comic.view_mode == .scroll) icons.tvg.lucide.@"scroll-text" else icons.tvg.lucide.@"book-open";
-            if (dvui.buttonIcon(@src(), "comic-view-mode", mode_icon, .{}, .{}, .{
-                .id_extra = 10,
-                .color_fill = .{ .color = theme.colors.bg_elevated },
-                .color_text = .{ .color = theme.colors.text_primary },
-                .corners = theme.dims.rad_sm,
-                .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
-                .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
-            })) {
-                state.app.comic.view_mode = if (state.app.comic.view_mode == .scroll) .single_page else .scroll;
-            }
-        }
-
-        // Page navigation (works in both modes)
-        if (state.app.comic.current_page > 0) {
-            if (dvui.button(@src(), "‹", .{}, .{
-                .id_extra = 11,
-                .color_fill = .{ .color = theme.colors.bg_elevated },
-                .color_text = .{ .color = theme.colors.text_primary },
-                .corners = theme.dims.rad_sm,
-                .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
-                .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
-            })) {
-                state.app.comic.current_page -= 1;
-                state.app.comic.scroll_to_page = true;
-            }
-        }
-        if (state.app.comic.current_page + 1 < state.app.comic.page_count) {
-            if (dvui.button(@src(), "›", .{}, .{
-                .id_extra = 12,
-                .color_fill = .{ .color = theme.colors.bg_elevated },
-                .color_text = .{ .color = theme.colors.text_primary },
-                .corners = theme.dims.rad_sm,
-                .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
-                .margin = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
-            })) {
-                state.app.comic.current_page += 1;
-                state.app.comic.scroll_to_page = true;
-            }
-        }
-
-        // Next issue
-        if (state.app.comic.next_url_len > 0) {
-            if (dvui.button(@src(), "»", .{}, .{
-                .id_extra = 1,
-                .color_fill = .{ .color = theme.colors.accent },
-                .color_text = .{ .color = theme.colors.text_on_accent },
-                .corners = theme.dims.rad_sm,
-                .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
-                .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
-            })) {
-                loadComic(state.app.comic.next_url[0..state.app.comic.next_url_len]);
-            }
-        }
-
-        // Spacer to push narration controls to the right
-        {
-            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            sp.deinit();
-        }
-
-        // OCR text toggle
-        if (dvui.buttonIcon(@src(), "comic-ocr", icons.tvg.lucide.@"scan-text", .{}, .{}, .{
-            .id_extra = 20,
-            .color_fill = .{ .color = if (state.app.comic.show_ocr_overlay) theme.colors.accent else theme.colors.bg_elevated },
-            .color_text = .{ .color = if (state.app.comic.show_ocr_overlay) theme.colors.text_on_accent else theme.colors.text_primary },
-            .corners = theme.dims.rad_sm,
-            .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
-            .margin = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
-        })) {
-            ocrCurrentPage();
-        }
-
-        // Narrate toggle
-        if (dvui.buttonIcon(@src(), "comic-narrate", if (state.app.comic.narrating) icons.tvg.lucide.@"circle-stop" else icons.tvg.lucide.@"volume-2", .{}, .{}, .{
-            .id_extra = 21,
-            .color_fill = .{ .color = if (state.app.comic.narrating) theme.colors.accent else theme.colors.bg_elevated },
-            .color_text = .{ .color = if (state.app.comic.narrating) theme.colors.text_on_accent else theme.colors.text_primary },
-            .corners = theme.dims.rad_sm,
-            .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
-            .margin = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
-        })) {
-            toggleNarration();
-        }
-
-        // Close the reader → back to the comics browse/search view.
-        if (dvui.buttonIcon(@src(), "comic-close", icons.tvg.lucide.x, .{}, .{}, .{
-            .id_extra = 2,
-            .color_fill = .{ .color = theme.colors.danger.opacity(0.15) },
-            .color_fill_hover = .{ .color = theme.colors.danger.opacity(0.28) },
-            .color_text = .{ .color = theme.colors.danger },
-            .corners = theme.dims.rad_sm,
-            .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
-            .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
-        })) {
-            closeComic();
-        }
-    }
-
     // ── Reader keyboard navigation (handled in-scope; input.zig untouched) ──
     // Left / J → previous page · Right / K → next page. Works in both view
     // modes (in scroll mode it nudges current_page + flags scroll_to_page, which

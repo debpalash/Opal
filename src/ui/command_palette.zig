@@ -55,7 +55,7 @@ fn commands() []const Command {
             .{ .label = "Novels", .icon = icons.tvg.lucide.book, .tab = .Novels },
             .{ .label = "Visual Novels", .keywords = "vndb", .icon = icons.tvg.lucide.book, .tab = .Vndb },
             .{ .label = "RSS", .icon = icons.tvg.lucide.rss, .tab = .RSS },
-            .{ .label = "Web", .icon = icons.tvg.lucide.globe, .tab = .Web },
+            .{ .label = "Browser", .icon = icons.tvg.lucide.globe, .tab = .Web },
             .{ .label = "Wallpapers", .icon = icons.tvg.lucide.image, .tab = .Wallpapers },
             .{ .label = "Connect", .icon = icons.tvg.lucide.plug, .route = .connect },
             .{ .label = "Downloads", .icon = icons.tvg.lucide.download, .tab = .Downloads },

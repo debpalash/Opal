@@ -145,6 +145,59 @@ test "Native embedded browser keyboard types each character once and returns foc
 test "Native embedded browser keyboard menu actions wake without mirrored SDL keys" {
     try @import("../macos/app_menu.zig").verifyWakeForTest();
 }
+test "Native embedded browser opens directly with sharing above the page in a modal" {
+    const hub = @import("browser_hub.zig");
+    const browser = @import("../services/browser.zig");
+    const old_route = state.app.router;
+    const old_source = state.app.browse_source;
+    state.app.router.current = .browse;
+    state.app.browse_source = .Web;
+    defer {
+        state.app.router = old_route;
+        state.app.browse_source = old_source;
+    }
+    hub.setRenderFixtureForTest(.{});
+    defer hub.setRenderFixtureForTest(null);
+    browser.resetTabsForTest();
+    defer browser.resetTabsForTest();
+    var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-browser-workspace-modal", .persist_window_geometry = false, .size = .{ .w = 1000, .h = 780 }, .vsync = false, .title = "Opal browser workspace regression", .hidden = true });
+    defer backend.deinit();
+    var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
+    defer window.deinit();
+    const Fixture = struct {
+        fn draw(w: *dvui.Window, index: usize, escape: bool) !void {
+            try prepareProfile();
+            try w.begin(@as(i128, @intCast(index + 1)) * 16_666_667);
+            errdefer _ = w.end(.{}) catch null;
+            @import("components.zig").beginFrame();
+            @import("native_browser.zig").beginFrame();
+            if (escape) _ = try w.addEventKey(.{ .code = .escape, .action = .down, .mod = .none });
+            hub.render();
+            @import("native_browser.zig").endFrame();
+            _ = try w.end(.{});
+        }
+    };
+    theme.markUiThread();
+    for (0..8) |i| try Fixture.draw(&window, i, false);
+    try std.testing.expect(hub.browsing() and browser.isStartPage());
+    try std.testing.expectEqual(@as(f32, 0), hub.workspace_modal_for_test.h);
+    native.api.opal_browser_test_html("<title>Workspace background</title><input>");
+    try pageTitle("Workspace background");
+    try Fixture.draw(&window, 8, false);
+    try std.testing.expectEqual(@as(c_int, 1), opal_browser_test_visible());
+    hub.openWorkspace();
+    for (9..17) |i| try Fixture.draw(&window, i, false);
+    try std.testing.expect(hub.workspace_modal_for_test.h > 0);
+    try std.testing.expectEqual(@as(c_int, 0), opal_browser_test_visible());
+    try Fixture.draw(&window, 17, true);
+    try Fixture.draw(&window, 18, false);
+    try std.testing.expectEqual(@as(f32, 0), hub.workspace_modal_for_test.h);
+    try std.testing.expectEqual(@as(c_int, 1), opal_browser_test_visible());
+    hub.openWorkspace();
+    browser.requestBridgeView();
+    try Fixture.draw(&window, 19, false);
+    try std.testing.expectEqual(@as(f32, 0), hub.workspace_modal_for_test.h);
+}
 test "Native embedded browser security measures owned traffic and removes tracking cookies" {
     const privacy = @import("../services/browser_privacy.zig");
     const browser = @import("../services/browser.zig");

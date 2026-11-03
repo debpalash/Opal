@@ -1352,7 +1352,7 @@ fn tabLabel(t: state.DrawerTab) []const u8 {
         .Comics => "Comics",
         .Novels => "Novels",
         .Vndb => "Visual Novels",
-        .Web => "Web",
+        .Web => "Browser",
         .Anime => "Anime",
         .Drama => "Asian Drama",
         .Podcasts => "Podcasts",

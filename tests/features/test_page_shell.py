@@ -158,7 +158,7 @@ def test_utf8_guard():
         "src/services/tmdb.zig": "safeUtf8(item.title",
         "src/services/youtube.zig": "safeUtf8(item.title",
         "src/ui/jellyfin_ui.zig": "safeUtf8Buf(item.name",
-        "src/services/comics.zig": "safeUtf8(state.app.comic.title",
+        "src/services/comics.zig": "safeUtf8(comic.title",
         "src/services/search.zig": "safeUtf8(item.name",
     }
     missing = [f for f, needle in renderers.items()

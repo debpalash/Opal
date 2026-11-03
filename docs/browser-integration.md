@@ -10,6 +10,11 @@ menus and web media directly; there is no JPEG capture or remote input protocol
 in this path. The toolbar routes navigation, history, refresh, zoom, find and
 reader text to WebKit. Command-L/F/K return focus to Opal's controls.
 
+The Browser sidebar entry opens the browser directly. Pairing, shared pages and
+detected streams live in a modal opened beside the Extensions button. It closes
+with Escape or its close button, and new navigation dismisses it. The native
+WebKit view yields while the modal is open, then returns when it closes.
+
 The macOS browser has an aligned address toolbar and a separate tab strip below
 it. Up to 32 tabs retain live WebKit documents, form state and independent
 back/forward history while sharing the current browser profile's cookies and

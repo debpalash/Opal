@@ -1,17 +1,5 @@
-//! Browse > Web: the Browser hub.
-//!
-//! The page is no longer a remote desktop. It is where the user's own browser
-//! (through the Opal Connect extension) meets Opal: which browsers are paired
-//! and when they were last seen, the page the user chose to share, and the
-//! streams the browser found on it, each with Play and Queue. The old pixel
-//! bridge is still here, behind "Advanced: built-in browser", unchanged.
-//!
-//! Nothing here reads a page by itself: the shared page exists only because the
-//! user pressed the button in the extension, and Dismiss forgets it. Everything
-//! drawn from it is untrusted text, shown clipped and as plain labels.
-//!
-//! Rows are fixed-size and drawn from a snapshot, so a page title or a stream
-//! URL cannot change a row's height; wording is in browser_hub_view_pure.zig.
+//! Native browser page with pairing, shared pages and streams in a modal.
+//! Shared content is rendered from bounded, user-approved snapshots.
 
 const brands = @import("brands.zig");
 const std = @import("std");
@@ -39,7 +27,8 @@ var seen_page_id: u32 = 0;
 var title_buf: [link_pure.MAX_TITLE + 1]u8 = std.mem.zeroes([link_pure.MAX_TITLE + 1]u8);
 var message_buf: [160]u8 = undefined;
 var message_len: usize = 0;
-var show_bridge = false;
+var workspace_open = false;
+pub var workspace_modal_for_test: dvui.Rect.Physical = .{};
 pub var test_title_entry_rect: dvui.Rect.Physical = .{};
 
 /// Offline pixel tests render fixed data instead of reading the database and
@@ -56,7 +45,7 @@ pub fn setRenderFixtureForTest(fixture: ?Fixture) void {
     fixture_for_test = fixture;
     seen_page_id = 0;
     message_len = 0;
-    show_bridge = false;
+    workspace_open = false;
     last_load_ms = 0;
 }
 
@@ -463,7 +452,7 @@ fn renderHub() void {
     }
 
     var status_buf: [48]u8 = undefined;
-    surfaces.heading(@src(), "Browser workspace", std.fmt.bufPrint(&status_buf, "{d} paired", .{link_count}) catch "Browsers");
+    surfaces.badge(@src(), std.fmt.bufPrint(&status_buf, "{d} paired", .{link_count}) catch "Browsers", theme.colors.text_secondary);
     const width = availableWidth();
     const wide = width > 760;
     const browser_width = width * 0.36;
@@ -471,13 +460,6 @@ fn renderHub() void {
     defer columns.deinit();
     var left = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = if (wide) .none else .horizontal, .min_size_content = .{ .w = if (wide) browser_width else 0 }, .max_size_content = .{ .w = if (wide) browser_width else std.math.floatMax(f32), .h = std.math.floatMax(f32) }, .margin = .{ .w = if (wide) 12 else 0 } });
     renderBrowsers();
-    {
-        var card = cardBox(@src(), 3);
-        defer card.deinit();
-        cardTitle(@src(), "Built-in browser", icons.tvg.lucide.globe);
-        note(@src(), if (@import("../services/native_browser.zig").supported) "Browse websites directly inside Opal." else "For sources that need a browser. Separate from your logins; downloads on first use.", theme.colors.text_secondary);
-        if (components.actionButton(@src(), "Open built-in browser", .secondary, 31300)) show_bridge = true;
-    }
     left.deinit();
     var right = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
     renderSharedPage();
@@ -487,49 +469,76 @@ fn renderHub() void {
 
 pub fn browsing() bool {
     adoptBridgeRequest();
-    return show_bridge;
+    return true;
 }
 
-/// Page titles live in the tab strip; this row holds browser-hub access.
+pub fn renderWorkspaceAction() bool {
+    const clicked = components.iconButton(@src(), icons.tvg.lucide.@"panels-top-left", "Pair browsers, shared pages and detected streams", workspace_open);
+    if (clicked) {
+        workspace_open = !workspace_open;
+        state.wakeUi();
+    }
+    return clicked;
+}
+pub fn openWorkspace() void {
+    workspace_open = true;
+    state.wakeUi();
+}
+pub fn dismissWhenInactive() void {
+    if (state.app.router.current != .browse or state.app.browse_source != .Web) workspace_open = false;
+}
+pub fn renderWorkspaceModal() void {
+    if (@import("builtin").is_test) workspace_modal_for_test = .{};
+    if (!workspace_open) return;
+    for (dvui.events()) |*event| {
+        if (!event.handled and event.evt == .key and event.evt.key.code == .escape and event.evt.key.action == .down) {
+            event.handled = true;
+            workspace_open = false;
+            return;
+        }
+    }
+    const size = theme.fitWindowSize(.{ .w = 880, .h = 620 }, .{ .w = 260, .h = 180 });
+    var window = dvui.floatingWindow(@src(), .{ .modal = true, .center_on = dvui.windowRect(), .window_avoid = .none, .open_flag = &workspace_open, .resize = .none }, .{ .min_size_content = size, .max_size_content = dvui.Options.MaxSize.size(size), .color_fill = .{ .color = theme.colors.bg_surface }, .color_text = .{ .color = theme.colors.text_primary }, .corners = theme.dims.rad_lg, .border = dvui.Rect.all(1), .color_border = .{ .color = theme.colors.border_subtle } });
+    defer window.deinit();
+    window.autoPosition();
+    window.autoSize();
+    window.dragAreaSet(dvui.windowHeader("Browser connections", "", &workspace_open));
+    if (@import("builtin").is_test) workspace_modal_for_test = window.data().borderRectScale().r;
+    renderHub();
+}
+
 pub fn renderToolbar() void {
-    var hub = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
-    if (components.iconButton(@src(), icons.tvg.lucide.@"panels-top-left", "Browser hub", false)) show_bridge = false;
-    hub.deinit();
+    if (comptime !@import("../services/native_browser.zig").supported) _ = renderWorkspaceAction();
     @import("../services/browser.zig").renderToolbar();
 }
-
-/// Draw the Browse > Web page. Safe to call every frame.
 fn adoptBridgeRequest() void {
-    // Consume navigation intent at the presentation boundary. A typed URL
-    // must not land behind the browser hub's informational overview.
-    if (@import("../services/browser.zig").takeBridgeViewRequest()) show_bridge = true;
+    if (@import("../services/browser.zig").takeBridgeViewRequest()) workspace_open = false;
 }
 
 test "Native browser hub reveals a service-requested destination once" {
     const browser = @import("../services/browser.zig");
-    show_bridge = false;
     _ = browser.takeBridgeViewRequest();
+    workspace_open = true;
     browser.requestBridgeView();
-    adoptBridgeRequest();
-    try std.testing.expect(show_bridge);
+    try std.testing.expect(browsing());
+    try std.testing.expect(!workspace_open);
     try std.testing.expect(!browser.takeBridgeViewRequest());
-    show_bridge = false;
 }
 
 pub fn render() void {
     adoptBridgeRequest();
-    if (show_bridge) {
-        var root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
-        defer root.deinit();
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-        renderToolbar();
-        row.deinit();
-        @import("browser_tabs.zig").render();
-        @import("../services/browser.zig").renderPageContent();
-    } else renderHub();
+    var root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+    defer root.deinit();
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+    renderToolbar();
+    row.deinit();
+    @import("browser_tabs.zig").render();
+    @import("../services/browser.zig").renderPageContent();
+    renderWorkspaceModal();
 }
 
 pub fn renderInShell() void {
     adoptBridgeRequest();
-    if (show_bridge) @import("../services/browser.zig").renderPageContent() else renderHub();
+    @import("../services/browser.zig").renderPageContent();
+    renderWorkspaceModal();
 }

@@ -159,7 +159,7 @@ fn runSeeded() !void {
         .{ .query = "Radio", .route = .browse, .tab = .Radio },        .{ .query = "Music", .route = .browse, .tab = .Music },
         .{ .query = "Comics", .route = .browse, .tab = .Comics },      .{ .query = "Novels", .route = .browse, .tab = .Novels },
         .{ .query = "Visual Novels", .route = .browse, .tab = .Vndb }, .{ .query = "RSS", .route = .browse, .tab = .RSS },
-        .{ .query = "Web", .route = .browse, .tab = .Web },            .{ .query = "Wallpapers", .route = .browse, .tab = .Wallpapers },
+        .{ .query = "Browser", .route = .browse, .tab = .Web },        .{ .query = "Wallpapers", .route = .browse, .tab = .Wallpapers },
         .{ .query = "Connect", .route = .connect },                    .{ .query = "Downloads", .route = .downloads },
         .{ .query = "Queue", .route = .queue },                        .{ .query = "History", .route = .history },
         .{ .query = "Jellyfin", .route = .browse, .tab = .Jellyfin },  .{ .query = "AI", .route = .assistant },
