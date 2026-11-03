@@ -2,6 +2,7 @@
 //! application state is changed here on the UI thread during appFrame.
 
 const builtin = @import("builtin");
+const std = @import("std");
 const c = @import("../core/c.zig");
 const state = @import("../core/state.zig");
 
@@ -10,6 +11,8 @@ const enabled = builtin.os.tag == .macos and !@import("build_options").headless;
 extern fn opal_app_identity_init() void;
 extern fn opal_app_menu_init(logo: [*]const u8, logo_len: usize) void;
 extern fn opal_app_menu_poll() c_int;
+extern fn opal_app_menu_set_wake(callback: *const fn () callconv(.c) void) void;
+extern fn opal_app_menu_test_new_tab() void;
 extern fn opal_app_menu_browser_context(active: c_int) void;
 extern fn opal_app_close_window() void;
 
@@ -19,9 +22,32 @@ pub fn initIdentity() void {
 
 pub fn init() void {
     if (enabled) {
+        opal_app_menu_set_wake(wake);
         const logo = @embedFile("../ui/opal_logo_64.png");
         opal_app_menu_init(logo.ptr, logo.len);
     }
+}
+
+fn wake() callconv(.c) void {
+    state.wakeUi();
+}
+
+pub fn verifyWakeForTest() !void {
+    if (comptime !enabled or !builtin.is_test) return;
+    const Probe = struct {
+        var called: std.atomic.Value(bool) = .init(false);
+        fn callback() callconv(.c) void {
+            called.store(true, .release);
+        }
+    };
+    while (opal_app_menu_poll() != 0) {}
+    Probe.called.store(false, .release);
+    opal_app_menu_set_wake(Probe.callback);
+    defer opal_app_menu_set_wake(wake);
+    opal_app_menu_test_new_tab();
+    try std.testing.expect(Probe.called.load(.acquire));
+    try std.testing.expectEqual(@as(c_int, 11), opal_app_menu_poll());
+    try std.testing.expectEqual(@as(c_int, 0), opal_app_menu_poll());
 }
 
 pub fn frameTick() void {

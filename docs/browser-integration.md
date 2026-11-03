@@ -11,12 +11,17 @@ in this path. The toolbar routes navigation, history, refresh, zoom, find and
 reader text to WebKit. Command-L/F/K return focus to Opal's controls.
 
 The macOS browser has an aligned address toolbar and a separate tab strip below
-it. Up to 16 tabs retain live WebKit documents, form state and independent
+it. Up to 32 tabs retain live WebKit documents, form state and independent
 back/forward history while sharing the current browser profile's cookies and
 extension controller. New/close buttons, Command-T/W and Control-Tab support
 normal tab navigation. Closing the last tab creates a fresh blank tab; private
 mode changes discard the old documents and recreate the browser store.
 Windows/Linux's bridge continues to use its existing single-page interface.
+
+When a web field owns keyboard focus, WebKit receives its keys directly and
+SDL's field editor yields. Command-L returns input to Opal's address field.
+`zig build test-native-browser-keyboard` checks typing, key repeat, focus return
+and event-filter cleanup without screenshots.
 
 Hover expansion of the sidebar overlays the page without resizing it. The
 native view is clipped beneath the sidebar while retaining its full viewport;
@@ -28,6 +33,19 @@ extensions, proxies and embedded-engine limitations can affect challenges;
 Cloudflare documents these factors in its [browser support guidance](https://developers.cloudflare.com/cloudflare-challenges/reference/supported-browsers/).
 Spoofing a Chrome user agent does not turn WebKit into Chromium or guarantee
 Turnstile acceptance.
+
+Tab labels refresh on native metadata changes. Unchanged frames do not reset
+WebKit geometry, appearance or the shared protection scripts. Tab switching
+preserves the existing document, zoom and protection configuration, and does not
+write another history visit for the same document.
+
+`zig build test-native-browser-performance` loads 20 owned documents with 1,500
+DOM cards and a canvas workload each, then checks 120 seeded switch, zoom, find
+and reader interactions, form retention and frame latency. It also checks that
+unchanged frames avoid metadata queries and native setters. This hidden-window
+fixture measures Opal's UI work; it is not a benchmark of visible site animation.
+For broader interaction checks without screenshot artifacts, run
+`OPAL_NATIVE_NO_CAPTURE=1 zig build test-native-ui`.
 
 The view follows the browser pane, backing scale and window size. It hides when
 leaving the page or when an overlapping DVUI popup/modal needs the area. Normal

@@ -13,9 +13,18 @@ pub const native = @import("native_browser.zig");
 pub const tab_model = @import("embedded_tabs_pure.zig");
 var browser_tabs: tab_model.Model = .{};
 var tabs_private: bool = false;
+var tabs_revision: ?u64 = null;
+var test_visit_count: usize = 0;
+pub fn visitCountForTest() usize {
+    return test_visit_count;
+}
+pub fn zoomForTest() f32 {
+    return zoom_level;
+}
 pub fn resetTabsForTest() void {
     if (!builtin.is_test) return;
     browser_tabs = .{};
+    tabs_revision = null;
     native.deinit();
 }
 
@@ -41,6 +50,12 @@ fn ensureTabs() void {
 fn showSelectedTab() void {
     const tab = browser_tabs.current();
     _ = native.selectTab(tab.id);
+    zoom_level = native.zoomFactor();
+    // A background navigation may have changed the current URL. Keep its
+    // previous host until the staged navigation applies the new site's zoom.
+    const host = pure.urlHost(tab.last_visit.text());
+    zoom_host_len = @min(host.len, zoom_host.len);
+    @memcpy(zoom_host[0..zoom_host_len], host[0..zoom_host_len]);
     const b = &state.app.browser;
     const url = tab.url.text();
     b.url_len = @min(url.len, b.url_buf.len - 1);
@@ -71,7 +86,7 @@ pub fn newTab(url: []const u8) void {
     const had_tabs = browser_tabs.count > 0 and tabs_private == state.app.incognito_mode;
     ensureTabs();
     if (had_tabs and browser_tabs.create() == null) {
-        state.showToast("Close a tab before opening another (16 tab limit)");
+        state.showToast("Close a tab before opening another (32 tab limit)");
         return;
     }
     showSelectedTab();
@@ -96,6 +111,9 @@ pub fn cycleTab(backwards: bool) void {
 pub fn refreshTabs() void {
     if (comptime !native.supported) return;
     ensureTabs();
+    const revision = native.api.opal_browser_tabs_revision();
+    if (tabs_revision == revision) return;
+    tabs_revision = revision;
     for (browser_tabs.items[0..browser_tabs.count]) |*tab| {
         var url: [2048]u8 = @splat(0);
         var title: [256]u8 = @splat(0);
@@ -1146,6 +1164,7 @@ fn toggleBookmark() void {
 
 /// Upsert one visit. Only http(s) pages count; incognito never records.
 fn recordVisit(url: []const u8, title: []const u8) void {
+    if (builtin.is_test) test_visit_count += 1;
     if (state.app.incognito_mode) return;
     if (!std.mem.startsWith(u8, url, "http")) return;
     var safe_buf: [2048]u8 = undefined;
@@ -1597,8 +1616,9 @@ fn applyStagedNav(b: *@TypeOf(state.app.browser)) void {
         const staged = nav_stage_url[0..nav_stage_url_len];
 
         // Record the visit ONCE per navigation (the stage can stay dirty for
-        // many frames while the URL bar is focused — dedup by last URL).
-        if (!std.mem.eql(u8, staged, last_visit_url[0..last_visit_url_len])) {
+        // many frames while the URL bar is focused — dedup per live document).
+        const new_visit = if (native.supported) browser_tabs.current().recordVisit(staged) else !std.mem.eql(u8, staged, last_visit_url[0..last_visit_url_len]);
+        if (new_visit) {
             const vn = @min(staged.len, last_visit_url.len);
             @memcpy(last_visit_url[0..vn], staged[0..vn]);
             last_visit_url_len = vn;
@@ -1619,7 +1639,7 @@ fn applyStagedNav(b: *@TypeOf(state.app.browser)) void {
     }
 
     // CSS zoom is per-document — re-apply after every navigation.
-    if (zoom_level != 1.0) sendZoom(zoom_level);
+    if (native.supported or zoom_level != 1.0) sendZoom(zoom_level);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1648,7 +1668,11 @@ pub fn renderToolbar() void {
     const tiny_toolbar = toolbar_width < 500;
 
     if (comptime native.supported) {
-        if (native.api.opal_browser_has_focus() != 0) url_bar_focused = false;
+        if (native.api.opal_browser_has_focus() != 0) {
+            url_bar_focused = false;
+            // Yield SDL's field editor as well as our URL-editing flag.
+            dvui.focusWidget(null, null, null);
+        }
         var error_text: [256]u8 = @splat(0);
         var loading: c_int = 0;
         var found: c_int = -1;

@@ -14,9 +14,11 @@ pub const api = struct {
     pub extern fn opal_browser_tab_close(id: u32) void;
     pub extern fn opal_browser_tab_navigate(id: u32, url: [*:0]const u8) void;
     pub extern fn opal_browser_tab_info(id: u32, url: [*]u8, url_cap: usize, title: [*]u8, title_cap: usize, loading: *c_int) c_int;
+    pub extern fn opal_browser_tabs_revision() u64;
     pub extern fn opal_browser_tab_requested(url: [*]u8, cap: usize) c_int;
     pub extern fn opal_browser_command(command: c_int) void;
     pub extern fn opal_browser_zoom(zoom: f64) void;
+    pub extern fn opal_browser_zoom_factor() f64;
     pub extern fn opal_browser_find(text: [*:0]const u8, backwards: c_int) void;
     pub extern fn opal_browser_read() void;
     pub extern fn opal_browser_poll(url: [*]u8, url_cap: usize, title: [*]u8, title_cap: usize, err: [*]u8, err_cap: usize, loading: *c_int, found: *c_int) c_uint;
@@ -106,6 +108,10 @@ pub fn command(cmd: c_int) void {
 }
 pub fn zoom(factor: f32) void {
     if (comptime supported) api.opal_browser_zoom(factor);
+}
+pub fn zoomFactor() f32 {
+    if (comptime supported) if (initialized) return @floatCast(api.opal_browser_zoom_factor());
+    return 1;
 }
 pub fn find(text: []const u8, backwards: bool) void {
     if (comptime !supported) return;

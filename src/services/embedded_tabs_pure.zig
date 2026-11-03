@@ -1,6 +1,6 @@
 //! Stable tab identities; page engines own the live documents and history.
 const std = @import("std");
-pub const max_tabs = 16;
+pub const max_tabs = 32;
 pub const Text = struct {
     bytes: [2048:0]u8 = @splat(0),
     len: usize = 0,
@@ -17,7 +17,18 @@ pub const Text = struct {
         return self.bytes[0..self.len];
     }
 };
-pub const Tab = struct { id: u32 = 0, url: Text = .{}, title: Text = .{}, loading: bool = false };
+pub const Tab = struct {
+    id: u32 = 0,
+    url: Text = .{},
+    title: Text = .{},
+    last_visit: Text = .{},
+    loading: bool = false,
+    pub fn recordVisit(self: *@This(), url: []const u8) bool {
+        if (std.mem.eql(u8, url, self.last_visit.text())) return false;
+        self.last_visit.set(url);
+        return true;
+    }
+};
 pub const Model = struct {
     items: [max_tabs]Tab = @splat(.{}),
     count: usize = 0,
@@ -88,4 +99,31 @@ test "tab capacity cycling and wrapped identities remain bounded and unique" {
     try std.testing.expectEqual(@as(u32, 2), model.create().?);
     try std.testing.expect(!model.select(99));
     try std.testing.expect(!model.close(99));
+}
+test "twenty browser tabs retain unique identities through repeated switching" {
+    var model: Model = .{};
+    for (0..20) |_| try std.testing.expect(model.create() != null);
+    try std.testing.expectEqual(@as(usize, 20), model.count);
+    for (0..200) |i| {
+        model.cycle(i % 3 == 0);
+        try std.testing.expect(model.current().id != 0);
+        for (model.items[0..model.count], 0..) |tab, j| {
+            for (model.items[j + 1 .. model.count]) |other| try std.testing.expect(tab.id != other.id);
+        }
+    }
+}
+test "tab activation does not duplicate visits but real navigation does" {
+    var model: Model = .{};
+    const a = model.create().?;
+    try std.testing.expect(model.current().recordVisit("https://a.test/"));
+    const b = model.create().?;
+    try std.testing.expect(model.current().recordVisit("https://b.test/"));
+    for (0..30) |_| {
+        try std.testing.expect(model.select(a));
+        try std.testing.expect(!model.current().recordVisit("https://a.test/"));
+        try std.testing.expect(model.select(b));
+        try std.testing.expect(!model.current().recordVisit("https://b.test/"));
+    }
+    try std.testing.expect(model.current().recordVisit("https://b.test/next"));
+    try std.testing.expect(model.current().recordVisit("https://b.test/"));
 }

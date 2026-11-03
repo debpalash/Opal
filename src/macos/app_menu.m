@@ -25,6 +25,8 @@ static pthread_mutex_t g_menu_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_menu_queue[OPAL_MENU_QUEUE_CAP];
 static int g_menu_head = 0;
 static int g_menu_count = 0;
+static void (*g_menu_wake)(void);
+void opal_app_menu_set_wake(void (*wake)(void)) { pthread_mutex_lock(&g_menu_lock); g_menu_wake = wake; pthread_mutex_unlock(&g_menu_lock); }
 static BOOL g_browser_context;
 void opal_app_menu_browser_context(int active) { g_browser_context = active != 0; }
 void opal_app_close_window(void) { [NSApp.keyWindow performClose:nil]; }
@@ -37,7 +39,9 @@ static void opal_menu_push(int action) {
     }
     g_menu_queue[(g_menu_head + g_menu_count) % OPAL_MENU_QUEUE_CAP] = action;
     g_menu_count++;
+    void (*wake)(void) = g_menu_wake;
     pthread_mutex_unlock(&g_menu_lock);
+    if (wake) wake();
 }
 
 int opal_app_menu_poll(void) {
@@ -85,6 +89,8 @@ void opal_app_identity_init(void) {
     [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://github.com/debpalash/Opal"]];
 }
 @end
+
+void opal_app_menu_test_new_tab(void) { [[OpalMenuTarget new] newBrowserTab:nil]; }
 
 static NSMenuItem *opal_item(NSString *title, SEL action, NSString *key, id target) {
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:action keyEquivalent:key ?: @""];

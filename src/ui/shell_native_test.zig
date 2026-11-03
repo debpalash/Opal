@@ -375,7 +375,9 @@ fn draw() !void {
         const viewport = dvui.windowRectPixels();
         try std.testing.expect(bounds.sidebar.w > 0 and bounds.content.w > 0);
         try std.testing.expect(bounds.sidebar.x >= viewport.x);
-        const overlaying = (current.hover_sidebar and frames <= 5) or (current.navigate_anime and frames >= 5 and current.sidebar == false);
+        // The Movies click also leaves the pointer over the collapsed rail
+        // until the query-field click on the following frame.
+        const overlaying = (current.hover_sidebar and frames <= 5) or (current.navigate_anime and frames >= 5 and current.sidebar == false) or (current.navigate_movies and frames == 4 and viewport.w / dvui.windowNaturalScale() < 900);
         if (!overlaying) try std.testing.expect(bounds.sidebar.x + bounds.sidebar.w <= bounds.content.x + 1);
         if (overlaying) {
             // Revealing labels must not shift or shrink the page underneath.

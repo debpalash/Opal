@@ -387,7 +387,14 @@ fn buildSupported(b: *std.Build) void {
     const privacy_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native browser protections"} });
     b.step("test-native-browser-privacy", "Verify actual WebKit extensions and browser protections").dependOn(&b.addRunArtifact(privacy_tests).step);
     const native_browser_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native embedded browser"} });
-    b.step("test-native-browser", "Verify embedded WebKit and desktop wallpaper on macOS").dependOn(&b.addRunArtifact(native_browser_tests).step);
+    const run_native_browser_tests = b.addRunArtifact(native_browser_tests);
+    b.step("test-native-browser", "Verify embedded WebKit and desktop wallpaper on macOS").dependOn(&run_native_browser_tests.step);
+    const browser_perf_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{ "Native embedded browser and macOS desktop wallpaper", "Native embedded browser performance" } });
+    const run_browser_perf_tests = b.addRunArtifact(browser_perf_tests);
+    b.step("test-native-browser-performance", "Exercise browser performance without screenshots").dependOn(&run_browser_perf_tests.step);
+    const browser_keyboard_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{ "Native embedded browser and macOS desktop wallpaper", "Native embedded browser keyboard" } });
+    const run_browser_keyboard_tests = b.addRunArtifact(browser_keyboard_tests);
+    b.step("test-native-browser-keyboard", "Verify native browser typing and focus routing").dependOn(&run_browser_keyboard_tests.step);
     const browser_hub_ui_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native browser hub"} });
     browser_hub_ui_tests.use_llvm = true;
     const run_browser_hub_ui_tests = b.addRunArtifact(browser_hub_ui_tests);
@@ -458,6 +465,9 @@ fn buildSupported(b: *std.Build) void {
         .{ .run = run_episode_tests, .name = "episodes" },
         .{ .run = run_gallery_tests, .name = "gallery" },
         .{ .run = run_performance_tests, .name = "performance" },
+        .{ .run = run_browser_perf_tests, .name = "browser-performance" },
+        .{ .run = run_native_browser_tests, .name = "browser" },
+        .{ .run = run_browser_keyboard_tests, .name = "browser-keyboard" },
         .{ .run = run_media_tests, .name = "media" },
         .{ .run = run_shell_tests, .name = "shell" },
         .{ .run = run_audio_output_tests, .name = "audio-output" },

@@ -17,7 +17,8 @@ def test_native_browser_route():
     assert '[window.contentView addSubview:clip_host]' in native
     assert '[clip_host addSubview:view]' in native
     assert 'clip_host.layer.masksToBounds = YES' in native
-    assert 'view.frame = NSMakeRect(-covered, 0, width * sx, height * sy)' in native
+    assert 'NSRect page_frame = NSMakeRect(-covered, 0, width * sx, height * sy)' in native
+    assert 'if (!NSEqualRects(view.frame, page_frame))' in native
     assert 'WKWebsiteDataStore.nonPersistentDataStore' in native
     assert 'sw.modal or pure.intersects' in (ROOT / 'src/ui/native_browser.zig').read_text()
     assert 'native_browser.zig").beginFrame()' in main

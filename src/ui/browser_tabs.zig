@@ -18,6 +18,12 @@ pub fn handleShortcuts() void {
     for (dvui.events()) |*event| {
         if (event.handled or event.evt != .key or event.evt.key.action != .down) continue;
         const key = event.evt.key;
+        // AppKit has already dispatched these native menu equivalents. Their
+        // SDL mirrors must not create/close a second tab while a field owns focus.
+        if (key.mod.command() and (key.code == .t or key.code == .w)) {
+            event.handled = true;
+            continue;
+        }
         const command = key.mod.command() or key.mod.control();
         if (command and key.code == .t) {
             browser.newTab("");
