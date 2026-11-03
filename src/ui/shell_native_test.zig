@@ -372,6 +372,13 @@ fn draw() !void {
     }
     if (frames >= 4 and current.route != .player) {
         const bounds = @import("shell.zig").sidebarBoundsForTest();
+        const primary = @import("shell.zig").sidebarPrimaryBoundsForTest();
+        const home = primary[0];
+        const browser = primary[1];
+        const all_content = primary[2];
+        try std.testing.expect(home.h > 0 and browser.h > 0 and all_content.h > 0);
+        try std.testing.expectApproxEqAbs(home.y + home.h, browser.y, 1);
+        try std.testing.expectApproxEqAbs(browser.y + browser.h, all_content.y, 1);
         const viewport = dvui.windowRectPixels();
         try std.testing.expect(bounds.sidebar.w > 0 and bounds.content.w > 0);
         try std.testing.expect(bounds.sidebar.x >= viewport.x);

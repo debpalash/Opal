@@ -225,6 +225,8 @@ fn buildSupported(b: *std.Build) void {
             exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/live_wallpaper.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
             exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/browser_extensions.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
             exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/browser_security.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
+            exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/browser_integration.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
+            exe.root_module.linkFramework("ImageIO", .{});
             exe.root_module.linkFramework("Network", .{});
             exe.root_module.linkFramework("WebKit", .{});
             exe.root_module.linkFramework("QuartzCore", .{});
@@ -386,7 +388,9 @@ fn buildSupported(b: *std.Build) void {
     const popover_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{ "Native browser protections module", "Native browser protections load actual extensions" } });
     b.step("test-native-browser-popover", "Verify native extension popup sizing and lifecycle").dependOn(&b.addRunArtifact(popover_tests).step);
     const privacy_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native browser protections"} });
-    b.step("test-native-browser-privacy", "Verify actual WebKit extensions and browser protections").dependOn(&b.addRunArtifact(privacy_tests).step);
+    const run_privacy_tests = b.addRunArtifact(privacy_tests);
+    if (b.graph.environ_map.get("OPAL_UBOL_TEST_PACKAGE")) |package| run_privacy_tests.setEnvironmentVariable("OPAL_UBOL_TEST_PACKAGE", package);
+    b.step("test-native-browser-privacy", "Verify actual WebKit extensions and browser protections").dependOn(&run_privacy_tests.step);
     const native_browser_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native embedded browser"} });
     const run_native_browser_tests = b.addRunArtifact(native_browser_tests);
     b.step("test-native-browser", "Verify embedded WebKit and desktop wallpaper on macOS").dependOn(&run_native_browser_tests.step);
@@ -1698,6 +1702,8 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_youtube_player_pure).step);
+    const handoff_tests = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/services/browser_handoff_pure.zig"), .target = target, .optimize = optimize }) });
+    test_step.dependOn(&b.addRunArtifact(handoff_tests).step);
 
     // mpv ytdl-raw-options: the exact option string handed to mpv, incl. the
     // regression guard that no YouTube player client is ever pinned again.

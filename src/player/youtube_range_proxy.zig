@@ -9,6 +9,7 @@ const std = @import("std");
 const pure = @import("../services/youtube_player_pure.zig");
 const sync = @import("../core/sync.zig");
 const io_g = @import("../core/io_global.zig");
+const browser_context = @import("../services/browser_integration.zig");
 
 const MAX_STREAMS = 8;
 const PORT_START: u16 = 45778;
@@ -118,7 +119,9 @@ pub fn start(streams: pure.Streams) ?Handle {
         return null;
     }
     const slot_u8: u8 = @intCast(i);
+    browser_context.retain(streams.native_session);
     s.thread = @import("../core/workers.zig").spawnLegacy(acceptLoop, .{slot_u8}) catch {
+        browser_context.release(streams.native_session);
         if (s.listener) |*listener| listener.deinit(io_g.io());
         s.* = .{};
         mutex.unlock();
@@ -198,8 +201,10 @@ fn acceptLoop(slot: u8) void {
     }
     mutex.lock();
     if (slots[slot].listener) |*listener| listener.deinit(io_g.io());
+    const native_session = slots[slot].streams.native_session;
     slots[slot] = .{};
     mutex.unlock();
+    browser_context.release(native_session);
 }
 
 fn handleThread(args: ConnArgs) void {
@@ -274,7 +279,7 @@ fn responseHead(conn: std.Io.net.Stream, partial: bool, range: ByteRange, total:
     return true;
 }
 
-fn fetchChunk(selected: *const pure.Stream, start_byte: u64, end_byte: u64, buf: []u8) ?[]const u8 {
+fn fetchChunk(selected: *const pure.Stream, streams: *const pure.Streams, audio: bool, start_byte: u64, end_byte: u64, buf: []u8) ?[]const u8 {
     const length: usize = @intCast(end_byte - start_byte + 1);
     // The videoplayback endpoint has a first-class `range=` query contract.
     // It is more reliable across its keep-alive/CDN frontends than issuing a
@@ -293,6 +298,18 @@ fn fetchChunk(selected: *const pure.Stream, start_byte: u64, end_byte: u64, buf:
         // other, so a failed attempt retries with the alternate: the `range=`
         // query first, then a `Range:` header on the untouched URL.
         const use_header = attempt % 2 == 1;
+        if (comptime browser_context.supported) if (streams.native_session != 0) {
+            var native_url: [pure.MAX_URL + 65:0]u8 = @splat(0);
+            const source = if (use_header) selected.slice() else ranged_url;
+            @memcpy(native_url[0..source.len], source);
+            var native_range: [96:0]u8 = @splat(0);
+            if (use_header) @memcpy(native_range[0..range_value.len], range_value);
+            var code: c_int = 0;
+            const headers = if (audio) &streams.audio_headers else &streams.video_headers;
+            const n = browser_context.api.opal_browser_media_fetch(streams.native_session, &native_url, headers, &native_range, buf.ptr, buf.len, &code);
+            if (n == length and (code == 200 or code == 206)) return buf[0..n];
+            continue;
+        };
         const body = @import("../core/http.zig").fetchDirect(if (use_header) selected.slice() else ranged_url, buf, .{
             .timeout_secs = 12,
             .user_agent = pure.VR_USER_AGENT,
@@ -312,8 +329,10 @@ fn handleConnection(args: ConnArgs) !void {
     mutex.lock();
     const live = slots[args.slot].in_use and slots[args.slot].id == args.id;
     const streams = slots[args.slot].streams;
+    browser_context.retain(streams.native_session);
     const token = slots[args.slot].token;
     mutex.unlock();
+    defer browser_context.release(streams.native_session);
     if (!live) return;
 
     var request_buf: [4096]u8 = undefined;
@@ -344,7 +363,7 @@ fn handleConnection(args: ConnArgs) !void {
         .start = requested.start,
         .end = @min(requested.end, requested.start +| (UPSTREAM_CHUNK - 1)),
     };
-    const mime = if (selected.height == 0) "audio/mp4" else if (selected.codec_rank == 1) "video/webm" else "video/mp4";
+    const mime = if (selected.height == 0) (if (selected.codec_rank == 1) "audio/webm" else "audio/mp4") else if (selected.codec_rank == 1) "video/webm" else "video/mp4";
     if (is_head) {
         _ = responseHead(args.conn, true, served, total, mime);
         return;
@@ -352,7 +371,7 @@ fn handleConnection(args: ConnArgs) !void {
 
     const body_buf = @import("../core/alloc.zig").allocator.alloc(u8, UPSTREAM_CHUNK + 1) catch return status(args.conn, "503 Service Unavailable", total);
     defer @import("../core/alloc.zig").allocator.free(body_buf);
-    const body = fetchChunk(selected, served.start, served.end, body_buf) orelse return status(args.conn, "502 Bad Gateway", total);
+    const body = fetchChunk(selected, &streams, std.mem.startsWith(u8, path, "/a/"), served.start, served.end, body_buf) orelse return status(args.conn, "502 Bad Gateway", total);
     if (!responseHead(args.conn, true, served, total, mime)) return;
     io_g.streamWriteAll(args.conn, body) catch return;
 }

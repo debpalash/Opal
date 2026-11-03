@@ -6,6 +6,16 @@ from pathlib import Path
 from .harness import PROJECT_DIR, test
 ROOT = Path(PROJECT_DIR)
 
+@test("Browser media handoff preserves requests and rejects navigation confusion", "Browser")
+def test_browser_media_integration():
+    node = shutil.which('node')
+    if not node:
+        return 'skip', 'Node is optional; pure handoff parsing remains covered by Zig tests'
+    result = subprocess.run([node, 'tests/test_browser_integration.js'], cwd=ROOT, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, (result.stderr or result.stdout)[-1400:]
+    assert 'browser-integration' in (ROOT / 'scripts/build-app.sh').read_text()
+    return 'pass', 'real extension scripts: captured headers, trusted clicks, timestamp, SPA reset and frame validation'
+
 @test("Browser session measurements report real deltas without exposing browsing URLs", "Browser")
 def test_session_measurements():
     node = shutil.which('node')

@@ -34,6 +34,7 @@ pub const browser_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " ++
 
 pub const Request = struct {
     url: []const u8,
+    browser_handoff: bool = false,
     audio_only: bool = false,
     /// Optional second URL for the same logical item. The player tries this
     /// exactly once only when the primary fails before FILE_LOADED. It shares

@@ -30,6 +30,7 @@ echo "[build-app] Compiling ReleaseFast…"
 echo "[build-app] Building $APP_DIR"
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+cp -R "$ROOT/assets/browser-integration" "$APP_DIR/Contents/Resources/browser-integration"
 
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/Opal"
 # MCP server for coding agents; Opal looks for it next to its own executable.

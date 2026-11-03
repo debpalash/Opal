@@ -10,6 +10,60 @@ const privacy = @import("../services/browser_privacy.zig");
 var query: [2048]u8 = @splat(0);
 pub var search_bounds_for_test: dvui.Rect.Physical = .{};
 pub var rendered_for_test = false;
+const integration = @import("../services/browser_integration.zig");
+const CachedIcon = struct { key: u64 = 0, revision: u64 = 0, bytes: [32768]u8 = undefined, len: usize = 0 };
+var recent_icons: [8]CachedIcon = @splat(.{});
+pub var recent_bounds_for_test: [8]dvui.Rect.Physical = @splat(.{});
+
+pub fn recents(rows: []const state.BrowserLink) void {
+    heading(@src(), "Recents", icons.history);
+    if (rows.len == 0) {
+        c.bodyText(@src(), if (state.app.incognito_mode) "Recents stay hidden in private browsing." else "Your recently visited pages will appear here.", theme.colors.text_tertiary);
+        return;
+    }
+    var scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{ .expand = .horizontal, .min_size_content = .{ .h = 124 }, .max_size_content = .{ .w = std.math.floatMax(f32), .h = 124 } });
+    defer scroll.deinit();
+    var rail = dvui.box(@src(), .{ .dir = .horizontal }, .{});
+    defer rail.deinit();
+    for (rows[0..@min(rows.len, 8)], 0..) |*link, i| {
+        const url = link.url[0..link.url_len];
+        const host = @import("../services/browser_pure.zig").urlHost(url);
+        const key = std.hash.Wyhash.hash(0, host);
+        const cached = &recent_icons[i];
+        const revision = integration.iconRevision();
+        if (cached.key != key or cached.revision != revision) {
+            cached.len = integration.icon(url, &cached.bytes).len;
+            cached.key = key;
+            cached.revision = revision;
+        }
+        var button: dvui.ButtonWidget = undefined;
+        button.init(@src(), .{}, .{ .id_extra = i, .min_size_content = .{ .w = 100, .h = 88 }, .max_size_content = .{ .w = 100, .h = 88 }, .padding = dvui.Rect.all(8), .margin = .{ .w = 8 }, .background = true, .color_fill = .{ .color = theme.colors.bg_surface }, .color_fill_hover = .{ .color = theme.colors.bg_hover }, .color_fill_press = .{ .color = theme.colors.bg_elevated }, .color_text = .{ .color = theme.colors.text_primary }, .corners = theme.dims.rad_sm });
+        button.processHover();
+        button.drawBackground();
+        if (@import("builtin").is_test) recent_bounds_for_test[i] = button.data().borderRectScale().r;
+        var card = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+        var tile = dvui.box(@src(), .{ .dir = .vertical }, .{ .min_size_content = .{ .w = 44, .h = 44 }, .max_size_content = .{ .w = 44, .h = 44 }, .gravity_x = 0.5, .background = true, .color_fill = .{ .color = theme.colors.bg_elevated }, .corners = theme.dims.rad_sm, .margin = .{ .h = 8 } });
+        if (cached.len > 0) {
+            _ = dvui.image(@src(), .{ .source = .{ .imageFile = .{ .bytes = cached.bytes[0..cached.len], .invalidation = .bytes } } }, .{ .min_size_content = .{ .w = 28, .h = 28 }, .max_size_content = .{ .w = 28, .h = 28 }, .gravity_x = 0.5, .gravity_y = 0.5 });
+        } else {
+            const letter = [_]u8{if (host.len > 0 and std.ascii.isAlphanumeric(host[0])) std.ascii.toUpper(host[0]) else '?'};
+            dvui.labelNoFmt(@src(), &letter, .{}, .{ .font = dvui.themeGet().font_heading, .gravity_x = 0.5, .gravity_y = 0.5, .color_text = .{ .color = theme.colors.accent } });
+        }
+        tile.deinit();
+        const title = if (link.text_len > 0) link.text[0..link.text_len] else host;
+        var caption = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        dvui.labelNoFmt(@src(), title, .{}, .{ .expand = .horizontal, .max_size_content = dvui.Options.MaxSize.width(70), .gravity_y = 0.5, .color_text = .{ .color = theme.colors.text_primary }, .font = dvui.themeGet().font_body.withSize(theme.font_size.small) });
+        const new_tab = c.iconButton(@src(), icons.@"arrow-up-right", "Open in new tab", false);
+        caption.deinit();
+        card.deinit();
+        button.processEvents();
+        c.tip(@src(), button.data().*, title);
+        button.drawFocus();
+        const clicked = button.clicked();
+        button.deinit();
+        if (new_tab) browser.newTab(url) else if (clicked) browser.navigate(url);
+    }
+}
 
 fn glyph(src: std.builtin.SourceLocation, icon: []const u8) void {
     dvui.icon(src, "", icon, .{}, .{ .min_size_content = .{ .w = 18, .h = 18 }, .gravity_y = 0.5, .color_text = .{ .color = theme.colors.accent }, .margin = .{ .w = 8 } });
@@ -76,6 +130,7 @@ pub fn render() void {
             @memset(&query, 0);
         }
     }
+    recents(browser.recentsForStart());
     const stats = privacy.stats();
     const columns: usize = if (available >= 1000) 4 else if (available >= 520) 2 else 1;
     const labels = [_][]const u8{ "Reported data", "Ads blocked", "Trackers blocked", "Tracking cookies removed" };
@@ -108,8 +163,7 @@ pub fn render() void {
     }
     routes.deinit();
     if (state.app.incognito_mode) c.bodyText(@src(), "Pages visited here are not added to history. Downloads and bookmarks you save remain.", theme.colors.text_secondary);
-    var lists = dvui.box(@src(), .{ .dir = if (available < 760) .vertical else .horizontal }, .{ .expand = .horizontal });
+    var lists = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
     links("Bookmarks", icons.bookmark, browser.bookmarksForStart(), "Use the bookmark button on a page to save it here.", 72101);
-    links("Recents", icons.history, browser.recentsForStart(), if (state.app.incognito_mode) "Recents stay hidden in private browsing." else "Your recently visited pages will appear here.", 72102);
     lists.deinit();
 }

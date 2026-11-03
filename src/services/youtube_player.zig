@@ -4,16 +4,21 @@ const sync = @import("../core/sync.zig");
 const workers = @import("../core/workers.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 const pure = @import("youtube_player_pure.zig");
+const browser_context = @import("browser_integration.zig");
 
 const Job = struct {
     id: [11]u8,
     target_address: usize,
     load_serial: u64,
+    browser_session: u64 = 0,
+    config: [2048:0]u8 = @splat(0),
+    agent: [513]u8 = @splat(0),
 };
 const Publication = struct {
     target_address: usize = 0,
     load_serial: u64 = 0,
     success: bool = false,
+    browser_session: u64 = 0,
     streams: pure.Streams = .{},
 };
 
@@ -37,11 +42,41 @@ pub fn invalidateCached(url: []const u8) void {
 }
 
 pub fn resolveAsync(url: []const u8, target: *@import("../player/player.zig").MediaPlayer, load_serial: u64) bool {
+    if (target.youtube_streams.native_session != 0) return false;
     const id = pure.videoId(url) orelse return false;
     var job: Job = .{ .id = undefined, .target_address = @intFromPtr(target), .load_serial = load_serial };
     @memcpy(&job.id, id);
     workers.spawn(resolveWorker, .{job}) catch return false;
     return true;
+}
+pub fn resolveBrowserAsync(url: []const u8, target: *@import("../player/player.zig").MediaPlayer, serial: u64, session: u64, config: []const u8, agent: []const u8) bool {
+    const id = pure.videoId(url) orelse return false;
+    var job: Job = .{ .id = undefined, .target_address = @intFromPtr(target), .load_serial = serial, .browser_session = session };
+    if (config.len >= job.config.len or agent.len >= job.agent.len) return false;
+    @memcpy(&job.id, id);
+    @memcpy(job.config[0..config.len], config);
+    @memcpy(job.agent[0..agent.len], agent);
+    browser_context.retain(session);
+    workers.spawn(resolveBrowserWorker, .{job}) catch {
+        browser_context.release(session);
+        return false;
+    };
+    return true;
+}
+fn resolveBrowserWorker(job: Job) void {
+    var url: [96]u8 = undefined;
+    const watch = std.fmt.bufPrint(&url, "https://www.youtube.com/watch?v={s}", .{job.id}) catch unreachable;
+    const buffer = alloc.alloc(u8, 1024 * 1024) catch {
+        publishResult(job, null);
+        return;
+    };
+    defer alloc.free(buffer);
+    const result = @import("../core/bounded_process.zig").run(&.{ @import("ytdlp.zig").binary(), "--ignore-config", "--config-locations", std.mem.sliceTo(&job.config, 0), "--no-warnings", "--no-playlist", "-J", watch }, buffer, .{ .timeout_ms = 30_000, .terminate_grace_ms = 150 });
+    var streams: pure.Streams = .{};
+    if (result.ok() and pure.parseYtdlpStreams(alloc, result.output, &streams) and @import("browser_handoff_pure.zig").extractorHeaders(alloc, result.output, std.mem.sliceTo(&job.agent, 0), &streams)) {
+        streams.native_session = job.browser_session;
+        publishResult(job, streams);
+    } else publishResult(job, null);
 }
 
 fn publish(job: Job, streams: ?pure.Streams) void {
@@ -57,6 +92,7 @@ fn publishResult(job: Job, streams: ?pure.Streams) void {
     publication_mutex.lock();
     defer publication_mutex.unlock();
     if (publication_count == publications.len) {
+        browser_context.release(publications[0].browser_session);
         // Keep the newest completion under pathological multi-player bursts.
         std.mem.copyForwards(Publication, publications[0 .. publications.len - 1], publications[1..]);
         publication_count -= 1;
@@ -64,6 +100,7 @@ fn publishResult(job: Job, streams: ?pure.Streams) void {
     const publication = &publications[publication_count];
     publication_count += 1;
     publication.* = .{ .target_address = job.target_address, .load_serial = job.load_serial, .success = streams != null };
+    publication.browser_session = job.browser_session;
     if (streams) |resolved| publication.streams = resolved;
     state.wakeUi();
 }
@@ -213,12 +250,16 @@ pub fn drainResolved() void {
         std.mem.copyForwards(Publication, publications[0..publication_count], publications[1 .. publication_count + 1]);
     publication_mutex.unlock();
 
+    defer browser_context.release(result.browser_session);
+
     const target: ?*@import("../player/player.zig").MediaPlayer = for (state.app.players.items) |p| {
         if (@intFromPtr(p) == result.target_address and p.load_serial == result.load_serial) break p;
     } else null;
     const p = target orelse return;
     if (result.success)
         p.commitYoutubeStreams(result.streams)
+    else if (result.browser_session != 0)
+        p.failBrowserHandoff()
     else
         p.commitYoutubeFallback();
 }

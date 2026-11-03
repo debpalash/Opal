@@ -42,6 +42,9 @@ pub const api = struct {
     pub extern fn opal_extension_unload(slot: c_int) void;
     pub extern fn opal_extension_status(slot: c_int, name: [*]u8, name_cap: usize, message: [*]u8, cap: usize) c_int;
     pub extern fn opal_extension_action(slot: c_int, options: c_int) void;
+    pub extern fn opal_extension_action_at(slot: c_int, x: f64, y: f64, w: f64, h: f64) void;
+    pub extern fn opal_extension_icon_revision() u64;
+    pub extern fn opal_extension_icon_copy(slot: c_int, out: [*]u8, cap: usize) usize;
     pub extern fn opal_extension_pick() void;
     pub extern fn opal_extension_take_error(out: [*]u8, cap: usize) usize;
     pub extern fn opal_browser_proxy_supported() c_int;
@@ -63,6 +66,10 @@ pub fn extensionsAvailable() bool {
 }
 pub fn changed() void {
     _ = revision.fetchAdd(1, .acq_rel);
+    state.markConfigDirty();
+    state.wakeUi();
+}
+pub fn pinChanged() void {
     state.markConfigDirty();
     state.wakeUi();
 }
@@ -110,6 +117,7 @@ fn download() void {
 }
 pub fn tick() void {
     if (comptime !supported) return;
+    @import("browser_integration.zig").tick();
     if (!security_prepared) {
         api.opal_extensions_security_configure(@embedFile("browser_security.js"));
         security_prepared = true;
@@ -189,6 +197,7 @@ pub fn resetStats() void {
     if (comptime supported) api.opal_security_reset_stats(@intFromBool(state.app.incognito_mode));
 }
 pub fn shutdown() void {
+    @import("browser_integration.zig").shutdown();
     if (comptime supported) api.opal_security_shutdown();
 }
 fn reconcile(slot: usize, path: []const u8, enabled: bool) void {
