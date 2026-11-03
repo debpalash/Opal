@@ -96,6 +96,7 @@ fn saveChecked() !void {
     setKey("taste_suggestions", if (state.app.taste_enabled) "1" else "0");
     setKey("content_cache_enabled", if (state.app.content_cache_enabled) "1" else "0");
     setKey("auto_download_subs", if (state.app.auto_download_subs) "1" else "0");
+    setKey("auto_check_updates", if (state.app.auto_check_updates) "1" else "0");
     setKey("wanted_follow_tv", if (state.app.wanted_follow_tv) "1" else "0");
     setKey("agent_tasks_enabled", if (state.app.agent_tasks_enabled) "1" else "0");
     setKey("browser_share_agents", if (state.app.browser_share_agents) "1" else "0");
@@ -677,6 +678,8 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.operator_daily_cents = std.math.clamp(std.fmt.parseInt(u32, val, 10) catch 100, 5, 5000);
     } else if (std.mem.eql(u8, key, "auto_download_subs")) {
         state.app.auto_download_subs = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "auto_check_updates")) {
+        state.app.auto_check_updates = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "save_path")) {
         if (val.len > 0 and val.len < state.app.save_path_buf.len) {
             @memcpy(state.app.save_path_buf[0..val.len], val);

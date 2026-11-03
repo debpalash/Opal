@@ -41,6 +41,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate release tag and app version
         run: python3 scripts/check-release-version.py "$OPAL_RELEASE_TAG"
+      - name: Require a fresh release visual
+        run: python3 scripts/release-media.py "$OPAL_RELEASE_TAG"
 
   macos-arm64:
     needs: validate-release

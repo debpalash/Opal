@@ -49,6 +49,9 @@ test "Native media offline SDL fixture" {
 test "Native shell offline route pixel capture" {
     if (!@import("build_options").headless) _ = @import("ui/shell_native_test.zig");
 }
+test "Native updater" {
+    if (!@import("build_options").headless) _ = @import("ui/update_prompt_native_test.zig");
+}
 test "Native global modals offline SDL pixel capture" {
     if (!@import("build_options").headless) _ = @import("ui/modals_native_test.zig");
 }
@@ -557,7 +560,6 @@ fn scheduleDeferredNetworkWarmups(media_first_launch: bool) void {
                 @import("services/tv_calendar.zig").refreshOnce();
             }
             if (workers.isQuitting()) return;
-            @import("services/updater.zig").checkAsync();
         }
     }.worker, .{media_first_launch}) catch {};
 }
@@ -1036,6 +1038,7 @@ pub fn appDeinit() void {
     // Teardown is done; disarm the deadline before the leak dump, whose stack
     // symbolization can take seconds and was being cut off mid-report.
     workers.finishShutdown();
+    @import("services/updater.zig").shutdown();
     // Profile switch: everything above is closed; re-execute into the new profile.
     @import("services/profiles.zig").restartAfterShutdown();
     // Trigger GeneralPurposeAllocator leak dump on exit
@@ -1240,6 +1243,8 @@ fn appFrame() !dvui.App.Result {
     if (@import("ui/titlebar.zig").close_requested) return .close;
     // Profile switch: quit normally; appDeinit re-executes into the new profile.
     if (@import("services/profiles.zig").restartRequested()) return .close;
+    if (@import("services/updater.zig").restartRequested()) return .close;
+    @import("services/updater.zig").tick();
 
     // A true startup_frame_submitted means the preceding callback returned,
     // Window.end completed, and SDL_RenderPresent populated the hidden native
@@ -1906,6 +1911,7 @@ fn appFrame() !dvui.App.Result {
     ui.renderWorkspaceModals();
     @import("ui/footer.zig").renderResumePrompt();
     ui.renderToast();
+    @import("ui/update_prompt.zig").render();
 
     // Slash-command autocomplete popover — shows only when the omnibox input's
     // first char is '/'. (The omnibox chat overlay that used to render here was

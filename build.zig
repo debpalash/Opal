@@ -226,6 +226,7 @@ fn buildSupported(b: *std.Build) void {
             exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/browser_extensions.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
             exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/browser_security.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
             exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/browser_integration.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
+            exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/updater.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
             exe.root_module.linkFramework("ImageIO", .{});
             exe.root_module.linkFramework("Network", .{});
             exe.root_module.linkFramework("WebKit", .{});
@@ -360,6 +361,10 @@ fn buildSupported(b: *std.Build) void {
     const run_shell_tests = b.addRunArtifact(shell_tests);
     if (is_windows) run_shell_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-shell", "Capture native shell routes with isolated offline fixtures").dependOn(&run_shell_tests.step);
+    const update_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native updater"} });
+    const run_update_tests = b.addRunArtifact(update_tests);
+    if (is_windows) run_update_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    b.step("test-native-updater", "Verify update prompt layout and interactions").dependOn(&run_update_tests.step);
     const audio_output_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native shell offline audio connection"} });
     const run_audio_output_tests = b.addRunArtifact(audio_output_tests);
     if (is_windows) run_audio_output_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
@@ -425,7 +430,7 @@ fn buildSupported(b: *std.Build) void {
     if (is_windows) run_toast_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-toast", "Verify toasts overlay expanded content without diagnostic borders").dependOn(&run_toast_tests.step);
     const native_suite = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{
-        "Native toast", "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native agent tasks offline", "Native operator activity offline", "Native agents overview offline", "Native browser hub", "Native embedded browser", "Native browser protections", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
+        "Native updater", "Native toast", "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native agent tasks offline", "Native operator activity offline", "Native agents overview offline", "Native browser hub", "Native embedded browser", "Native browser protections", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
     } });
     const run_native_suite = b.addRunArtifact(native_suite);
     if (is_windows) run_native_suite.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
@@ -479,6 +484,7 @@ fn buildSupported(b: *std.Build) void {
         .{ .run = run_comic_toolbar_tests, .name = "comic-toolbar" },
         .{ .run = run_media_tests, .name = "media" },
         .{ .run = run_shell_tests, .name = "shell" },
+        .{ .run = run_update_tests, .name = "updater" },
         .{ .run = run_audio_output_tests, .name = "audio-output" },
         .{ .run = run_modal_tests, .name = "modals" },
         .{ .run = run_activity_tests, .name = "activity" },
@@ -1706,6 +1712,8 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(handoff_tests).step);
     const comic_handoff_tests = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/services/comic_handoff_pure.zig"), .target = target, .optimize = optimize }) });
     test_step.dependOn(&b.addRunArtifact(comic_handoff_tests).step);
+    const updater_tests = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/services/updater_pure.zig"), .target = target, .optimize = optimize }) });
+    test_step.dependOn(&b.addRunArtifact(updater_tests).step);
 
     // mpv ytdl-raw-options: the exact option string handed to mpv, incl. the
     // regression guard that no YouTube player client is ever pinned again.

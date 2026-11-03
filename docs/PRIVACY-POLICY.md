@@ -2,7 +2,7 @@
 
 **Opal — Play everything** (config dir: `opal`)
 
-_Last updated: 2026-09-13_
+_Last updated: 2026-11-04_
 
 Opal is a **local-first** desktop media runtime. It is built so that your data
 stays on your machine. **There is no telemetry, no analytics, no crash
@@ -101,10 +101,12 @@ us, and the service's own privacy policy governs that interaction.
 ### Requests that fire automatically on launch
 
 Two outbound requests can occur at startup without an explicit per-use action.
-They are flagged in the source as candidates for opt-in:
 
 1. **Update check** — a request to GitHub Releases to see if a newer Opal
-   version exists.
+   version exists. In v0.9.2 and later, automatic checks begin after startup and
+   run at most daily during a session. Turn them off in **Settings → About**.
+   Downloads start only after you choose **Update**; installation starts only
+   after you choose **Restart** (or open the platform installer).
 2. **yt-dlp download** — a one-time download of the `yt-dlp` binary from GitHub
    if it is missing (used for YouTube playback).
 

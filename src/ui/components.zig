@@ -1031,6 +1031,8 @@ pub fn loadingState(label: []const u8) void {
 ///     (for confirm-gated destruction use confirmDangerButton)
 pub const ActionKind = enum { primary, secondary, danger };
 
+pub var action_bounds_for_test: dvui.Rect.Physical = .{};
+
 pub fn actionButton(
     src: std.builtin.SourceLocation,
     label: []const u8,
@@ -1038,7 +1040,8 @@ pub fn actionButton(
     id_extra: usize,
 ) bool {
     const fills = actionFills(kind);
-    return dvui.button(src, label, .{}, .{
+    var button: dvui.ButtonWidget = undefined;
+    const options: dvui.Options = .{
         .id_extra = id_extra,
         .color_fill = @import("color_compat.zig").wrap(fills[0]),
         .color_fill_hover = @import("color_compat.zig").wrap(fills[1]),
@@ -1058,7 +1061,16 @@ pub fn actionButton(
         // middle of the whole panel and draws on top of unrelated widgets —
         // "Apply Port" landed on the Confirm-password field that way. Callers
         // that want vertical centering should put the button in a row box.
-    });
+    };
+    button.init(src, .{}, options);
+    button.processEvents();
+    button.drawBackground();
+    const clicked = button.clicked();
+    dvui.labelNoFmt(@src(), label, .{ .align_x = 0.5, .align_y = 0.5 }, options.strip().override(button.style()).override(.{ .gravity_x = 0.5, .gravity_y = 0.5 }));
+    button.drawFocus();
+    if (@import("builtin").is_test) action_bounds_for_test = button.data().borderRectScale().r;
+    button.deinit();
+    return clicked;
 }
 
 /// Rest / hover / press fills for actionButton-family buttons. Primary stays

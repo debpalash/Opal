@@ -14,6 +14,8 @@ extern fn opal_browser_test_snapshot(path: [*:0]const u8) void;
 extern fn opal_browser_test_snapshot_result() c_int;
 extern fn opal_browser_test_page_width() f64;
 extern fn opal_browser_test_clip_width() f64;
+extern fn opal_browser_test_popup_hole() c_int;
+extern fn opal_browser_test_popup_passthrough() c_int;
 extern fn opal_extensions_test_tab_count() c_int;
 extern fn opal_browser_test_metadata_reads() u64;
 extern fn opal_browser_test_presentation_writes() u64;
@@ -481,6 +483,16 @@ test "Native embedded browser renders HTML and extracts actual DOM text" {
     try std.testing.expectEqual(@as(c_int, 0), opal_browser_test_visible());
     state.app.command_palette_open = false;
     try frame(&window, 12, true);
+    // A corner notification reveals SDL widgets and passes their clicks through
+    // while the surrounding webpage remains visible and keeps its viewport.
+    const pixels = window.rect_pixels;
+    native.api.opal_browser_occlude_popup(pixels.w - 300, pixels.h - 250, 280, 200, pixels.w, pixels.h);
+    try std.testing.expectEqual(@as(c_int, 1), opal_browser_test_visible());
+    try std.testing.expectEqual(@as(c_int, 1), opal_browser_test_popup_hole());
+    try std.testing.expectEqual(@as(c_int, 1), opal_browser_test_popup_passthrough());
+    native.api.opal_browser_occlude_popup(0, 0, 0, 0, pixels.w, pixels.h);
+    try std.testing.expectEqual(@as(c_int, 0), opal_browser_test_popup_hole());
+
     if (io.getenv("OPAL_NATIVE_BROWSER_SNAPSHOT")) |path| {
         var path_z: [2048:0]u8 = @splat(0);
         if (path.len >= path_z.len) return error.PathTooLong;

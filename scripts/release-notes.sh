@@ -72,6 +72,10 @@ else
     printf '_No highlights were written for %s — see the changes below._\n\n' "$TAG"
 fi
 
+# Images resolve against the immutable release tag, never a moving main branch.
+python3 "$ROOT/scripts/release-media.py" "$TAG" --markdown --optional --repo "$REPO"
+printf '\n'
+
 # ── Changes ───────────────────────────────────────────────────────────────
 # One pass over the log; each commit is bucketed by its conventional-commit
 # type. Anything unprefixed lands in "Other" rather than being dropped — a

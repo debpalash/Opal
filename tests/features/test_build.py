@@ -459,9 +459,9 @@ def test_reliable_fetch_secret_seam():
         and "secret_headers" in _src("src/services/ai_context.zig")
         and "abort_flag = &chat.gen_abort" in _src("src/services/ai_context.zig"),
         "curl_secret retired": not os.path.exists(os.path.join(PROJECT_DIR, "src/core/curl_secret.zig")),
-        "updater atomic+https": "reliable_fetch.download(" in _src("src/services/updater.zig")
+        "updater atomic+https": "fetch.download(" in _src("src/services/updater.zig")
         and "https_only = true" in _src("src/services/updater.zig")
-        and "verifyReleaseChecksum(dmg_path" in _src("src/services/updater.zig"),
+        and "verifyReleaseChecksum(file, release)" in _src("src/services/updater.zig"),
         "model downloads atomic+https": "reliable_fetch.zig\").download(" in _src("src/core/deps.zig")
         and "https_only = true" in _src("src/core/deps.zig")
         and "downloadedFileMatches(stage_path" in _src("src/core/deps.zig"),
@@ -1635,3 +1635,23 @@ def test_shutdown_port_and_leaks():
     if missing:
         return "fail", "shutdown regression: " + ", ".join(missing)
     return "pass", "second instance skips the busy port; id caches freed; leak report runs after the deadline is disarmed"
+
+
+@test("Prompted app updates stage safely and roll back failed launches", "Packaging")
+def test_prompted_app_updates():
+    if os.name == "nt":
+        return "skip", "macOS installer helper requires a POSIX shell"
+    result = subprocess.run([sys.executable, "tests/test_update_install.py"], cwd=PROJECT_DIR,
+                            capture_output=True, text=True, timeout=60)
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1500:]
+    return "pass", "owned app fixtures: wait, signed staging, version checks, restart and rollback"
+
+
+@test("Release visuals exist and cannot drift to a different tag", "Packaging")
+def test_release_visuals():
+    result = subprocess.run([sys.executable, "tests/test_release_media.py"], cwd=PROJECT_DIR,
+                            capture_output=True, text=True, timeout=15)
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "fresh release assets validated; missing, stale, unsafe and invalid visuals rejected"

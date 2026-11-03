@@ -286,10 +286,14 @@ def test_smoothness_repaint():
         return "fail", "display-rate playback timer still duplicates frame callbacks"
     if "dvui.refresh(null" in settings or "dvui.refresh(null" in fileassoc:
         return "fail", "settings worker status still drives an unbounded repaint loop"
-    # Twelve remaining status paths use bounded polling. The former thirteenth
-    # path belonged to the removed external-player launch service.
-    if settings.count("components.pollRefresh(") < 12 or "components.pollRefresh(" not in fileassoc:
+    # Eleven Settings status paths still poll. Update download progress moved
+    # to its own corner card; its worker wakes the UI on completion even hidden.
+    if settings.count("components.pollRefresh(") < 11 or "components.pollRefresh(" not in fileassoc:
         return "fail", "settings worker status is not covered by bounded polling"
+    update_prompt = _src("src/ui/update_prompt.zig")
+    updater = _src("src/services/updater.zig")
+    if "c.pollRefresh(100_000)" not in update_prompt or "state.wakeUi();" not in updater:
+        return "fail", "update card progress or background completion wake is missing"
     if "dvui_win" not in ps or "dvui.refresh(win" not in ps:
         return "fail", "poster worker does not wake the UI after decode"
     if "dvui_win" not in ac or "refresh(win" not in ac:

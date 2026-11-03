@@ -356,7 +356,7 @@ fn renderRightPane(compact: bool) void {
     // Crossfade tab switches — the inner settings navigation popped instantly
     // while every shell route fades with the same motion tokens.
     var tab_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motionDuration(theme.motion.base), .easing = theme.motion.enter }, .{
-        .id_extra = @intFromEnum(state.app.settings_tab),
+        .id_extra = @backingInt(state.app.settings_tab),
         .expand = .both,
     });
     defer tab_fade.deinit();
@@ -365,7 +365,7 @@ fn renderRightPane(compact: bool) void {
     // dvui scroll position, so switching from deep in Playback opened Storage
     // pre-scrolled to Playback's offset.
     var scroll = dvui.scrollArea(@src(), .{}, .{
-        .id_extra = @intFromEnum(state.app.settings_tab),
+        .id_extra = @backingInt(state.app.settings_tab),
         .expand = .both,
         .background = false,
     });
@@ -1322,9 +1322,7 @@ fn renderGeneralTab() void {
 fn renderAboutTab() void {
     // Extracted from the Playback tab into its own page. btn_* mirror the
     // Playback tab's local button tokens the block references.
-    const btn_active = theme.colors.accent;
     const btn_inactive = theme.colors.bg_elevated;
-    const btn_text_active = theme.colors.text_on_accent;
 
     // ── About / Updater ── (no card chrome; whitespace + the brand row)
     sectionHeader("About", "Version, updates, credits & support", 25, @src());
@@ -1469,47 +1467,17 @@ fn renderAboutTab() void {
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.xs },
         });
 
-        // Status row — only show once we have a signal.
+        const auto_check_before = state.app.auto_check_updates;
+        components.toggleRow(@src(), "Check for updates automatically", "Show an update card; downloads and restarts always wait for you", &state.app.auto_check_updates);
+        if (auto_check_before != state.app.auto_check_updates) state.markConfigDirty();
         if (update.has_update) {
             components.divider();
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-            defer row.deinit();
-            _ = dvui.label(@src(), "Latest", .{}, .{ .color_text = @import("color_compat.zig").wrap(labelText()), .gravity_y = 0.5 });
-            _ = dvui.label(@src(), "  v{s}", .{update.latestTag()}, .{ .id_extra = 2520, .color_text = @import("color_compat.zig").wrap(theme.colors.success), .gravity_y = 0.5 });
-            {
-                var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-                spacer.deinit();
-            }
-            if (update.is_downloading) {
-                components.pollRefresh(100_000);
-                _ = dvui.label(@src(), "Downloading…", .{}, .{ .id_extra = 2521, .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .gravity_y = 0.5 });
-            } else if (@import("builtin").os.tag != .macos) {
-                _ = dvui.label(@src(), "Update using your package manager or the release download", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary) });
-            } else if (update.dl_url_len > 0) {
-                if (dvui.button(@src(), "Download & Open Installer", .{}, .{
-                    .id_extra = 2522,
-                    .color_fill = @import("color_compat.zig").wrap(btn_active),
-                    .color_text = @import("color_compat.zig").wrap(btn_text_active),
-                    .border = dvui.Rect.all(0),
-                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-                    .corners = theme.dims.rad_md,
-                })) {
-                    updater.downloadAndOpenAsync();
-                }
-            } else {
-                _ = dvui.label(@src(), "No .dmg asset on release", .{}, .{ .id_extra = 2523, .color_text = @import("color_compat.zig").wrap(theme.colors.warning), .gravity_y = 0.5 });
-            }
-        } else if (update.last_check_ts > 0 and !update.is_checking) {
-            components.divider();
-            _ = dvui.label(@src(), "Up to date", .{}, .{ .id_extra = 2530, .color_text = @import("color_compat.zig").wrap(theme.colors.success) });
+            _ = dvui.label(@src(), "Opal v{s} is available", .{update.latestTag()}, .{ .color_text = .{ .color = theme.colors.accent } });
+            if (components.actionButton(@src(), if (update.is_ready) "Update ready" else if (update.is_downloading) "Show download" else "View update", .primary, 2522)) updater.show();
+        } else if (update.last_check_ts > 0 and !update.is_checking and update.last_error_len == 0) {
+            components.bodyText(@src(), "Up to date", theme.colors.success);
         }
-
-        if (update.last_error_len > 0) {
-            _ = dvui.label(@src(), "  {s}", .{update.lastError()}, .{ .id_extra = 2540, .color_text = @import("color_compat.zig").wrap(theme.colors.warning), .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
-        }
-        if (@import("builtin").os.tag == .macos and update.has_update) {
-            _ = dvui.label(@src(), "Update operation: curl -L --fail to a temporary DMG › SHA-256 verification › open in Finder.", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary) });
-        }
+        if (update.last_error_len > 0) components.bodyText(@src(), update.lastError(), theme.colors.warning);
     }
 }
 
@@ -1567,8 +1535,8 @@ fn renderPlaybackTab() void {
         const opts = [_][]const u8{ skip_policy.modeLabel(.off), skip_policy.modeLabel(.button), skip_policy.modeLabel(.auto) };
         if (components.segment(@src(), &opts, @min(state.app.skip_mode, 2))) |picked| {
             const m = skip_policy.modeFromInt(@intCast(picked));
-            if (@intFromEnum(m) != state.app.skip_mode) {
-                state.app.skip_mode = @intFromEnum(m);
+            if (@backingInt(m) != state.app.skip_mode) {
+                state.app.skip_mode = @backingInt(m);
                 state.app.skip_mode_loaded = true;
                 state.app.anime_skip_enabled = skip_policy.legacyEnabled(m);
                 state.markConfigDirty();

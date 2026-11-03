@@ -1,375 +1,314 @@
-//! App self-update — polls GitHub releases for latest tag, downloads the
-//! .dmg asset to /tmp, and `open`s it so macOS can handle install. No
-//! silent replacement (trust + signing). Idempotent + non-blocking.
-//!
-//! Release asset convention: `Opal-<version>-macos-arm64.dmg` (produced by
-//! scripts/build-app.sh when create-dmg is available).
-
+//! Background release checks; downloading and restarting require separate user actions.
 const std = @import("std");
-const io_global = @import("../core/io_global.zig");
+const builtin = @import("builtin");
+const io = @import("../core/io_global.zig");
+const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
 const workers = @import("../core/workers.zig");
-var mutex: @import("../core/sync.zig").Mutex = .{};
 const alloc = @import("../core/alloc.zig").allocator;
-
-/// Current app version, injected from build.zig.zon at build time.
-///
-/// This was a hand-maintained constant "kept in sync" with the zon. It drifted:
-/// v0.6.1 shipped with it still reading "0.6.0", so the About page showed the
-/// wrong version AND every 0.6.1 user was told an update was available forever,
-/// since the check below compares this string to the latest GitHub tag
-/// (issue #21). One source of truth now — build.zig parses the zon.
+const fetch = @import("reliable_fetch.zig");
+pub const pure = @import("updater_pure.zig");
 pub const APP_VERSION: []const u8 = @import("build_options").app_version;
-
-const RELEASE_API = "https://api.github.com/repos/debpalash/Opal/releases/latest";
-const HEX = "0123456789abcdef";
-
+const native = builtin.os.tag == .macos and !@import("build_options").headless;
+const api = struct {
+    extern fn opal_update_target(out: [*]u8, cap: usize) usize;
+    extern fn opal_update_prepare(archive: [*:0]const u8, target: [*:0]const u8, version: [*:0]const u8, out: [*]u8, cap: usize) usize;
+    extern fn opal_update_restart(target: [*:0]const u8, stage: [*:0]const u8, version: [*:0]const u8, script: [*:0]const u8) c_int;
+    extern fn opal_update_ack() void;
+    extern fn opal_update_discard(stage: [*:0]const u8) void;
+};
 pub const Snapshot = struct {
-    latest_tag_buf: [64]u8 = @splat(0),
-    latest_tag_len: usize = 0,
-    dl_url_buf: [1024]u8 = @splat(0),
-    dl_url_len: usize = 0,
-    sums_url_buf: [1024]u8 = @splat(0),
-    sums_url_len: usize = 0,
+    selection: pure.Selection = .{},
     has_update: bool = false,
     is_checking: bool = false,
     is_downloading: bool = false,
+    is_ready: bool = false,
+    show_prompt: bool = false,
+    downloaded: u64 = 0,
     last_error_buf: [160]u8 = @splat(0),
     last_error_len: usize = 0,
     last_check_ts: i64 = 0,
-
+    target: [2048:0]u8 = @splat(0),
+    prepared: [2048:0]u8 = @splat(0),
+    download: [1024:0]u8 = @splat(0),
     pub fn latestTag(self: *const Snapshot) []const u8 {
-        return self.latest_tag_buf[0..self.latest_tag_len];
+        return self.selection.version.text();
     }
     pub fn lastError(self: *const Snapshot) []const u8 {
         return self.last_error_buf[0..self.last_error_len];
     }
 };
+var mutex: @import("../core/sync.zig").Mutex = .{};
 var current: Snapshot = .{};
-
+var notice: pure.Notice = .{};
+var restart_requested = std.atomic.Value(bool).init(false);
+var first_tick: i64 = 0;
+var last_poll: i64 = 0;
+var healthy_frames: usize = 0;
+const release_opts: fetch.Opts = .{ .https_only = true, .impersonate = false, .timeout_secs = 20, .use_dpi_proxy = false };
 pub fn snapshot() Snapshot {
     mutex.lock();
     defer mutex.unlock();
     return current;
 }
-
-fn setError(msg: []const u8) void {
-    logs.pushLog("error", "updater", msg, true);
+pub fn dismiss() void {
     mutex.lock();
     defer mutex.unlock();
-    const n = @min(msg.len, current.last_error_buf.len);
-    @memcpy(current.last_error_buf[0..n], msg[0..n]);
-    current.last_error_len = n;
+    notice.dismiss();
+    current.show_prompt = false;
 }
-
-fn clearError() void {
+pub fn show() void {
     mutex.lock();
     defer mutex.unlock();
-    current.last_error_len = 0;
+    current.show_prompt = current.has_update;
+    state.wakeUi();
 }
-
-/// Fire background thread that queries GitHub releases API. Safe to
-/// call repeatedly — ignored while a check is in flight.
+fn fail(message: []const u8, notify: bool) void {
+    logs.pushLog("error", "updater", message, false);
+    mutex.lock();
+    defer mutex.unlock();
+    current.last_error_len = @min(message.len, current.last_error_buf.len);
+    @memcpy(current.last_error_buf[0..current.last_error_len], message[0..current.last_error_len]);
+    if (notify) current.show_prompt = true;
+}
 pub fn checkAsync() void {
+    check(true);
+}
+fn check(manual: bool) void {
     mutex.lock();
-    if (current.is_checking or current.is_downloading or workers.isQuitting()) {
+    if (current.is_checking or current.is_downloading or current.is_ready or workers.isQuitting()) {
+        if (manual and current.has_update) current.show_prompt = true;
         mutex.unlock();
         return;
     }
     current.is_checking = true;
+    current.last_check_ts = io.timestamp();
+    current.last_error_len = 0;
     mutex.unlock();
-    workers.spawn(checkWorker, .{}) catch {
+    workers.spawn(checkWorker, .{manual}) catch {
         mutex.lock();
-        defer mutex.unlock();
         current.is_checking = false;
+        mutex.unlock();
     };
 }
-
-fn checkWorker() void {
+pub fn tick() void {
+    if (builtin.is_test or state.app.is_headless) return;
+    if (comptime native) if (healthy_frames < 2 and io.getenv("OPAL_UPDATE_ACK") != null and state.app.config_loaded.load(.acquire)) {
+        if (healthy_frames == 0) state.wakeUi() else api.opal_update_ack();
+        healthy_frames += 1;
+    };
+    if (!state.app.config_loaded.load(.acquire)) return;
+    const now = io.monotonicMilliTimestamp();
+    if (first_tick == 0) first_tick = now;
+    const value = snapshot();
+    if (value.is_downloading and now - last_poll >= 250) {
+        last_poll = now;
+        var path: [1100]u8 = undefined;
+        const part = std.fmt.bufPrint(&path, "{s}.part", .{std.mem.sliceTo(&value.download, 0)}) catch return;
+        const info = io.cwdStatFile(part) catch return;
+        mutex.lock();
+        current.downloaded = info.size;
+        mutex.unlock();
+    }
+    if (state.app.auto_check_updates and now - first_tick >= 15_000 and (value.last_check_ts == 0 or io.timestamp() - value.last_check_ts >= 86400)) check(false);
+}
+fn checkWorker(manual: bool) void {
     defer {
         mutex.lock();
         current.is_checking = false;
+        current.last_check_ts = io.timestamp();
         mutex.unlock();
+        state.wakeUi();
     }
-    clearError();
-
-    // Fetch release JSON through the shared reliable-fetch seam.
-    var body_buf: [256 * 1024]u8 = undefined;
-    const n = fetchJson(&body_buf) catch |err| {
-        switch (err) {
-            error.CurlSpawn => setError("curl not available"),
-            error.CurlFailed => setError("network error fetching release"),
-            error.ReadFailed => setError("read failed"),
-        }
+    const body = alloc.alloc(u8, 256 * 1024) catch {
+        fail("Could not check for updates", manual);
         return;
     };
-    const body = body_buf[0..n];
-
-    const parsed = std.json.parseFromSlice(Release, alloc, body, .{ .ignore_unknown_fields = true }) catch {
-        setError("invalid release response");
+    defer alloc.free(body);
+    var options = release_opts;
+    options.headers = &.{ .{ .name = "Accept", .value = "application/vnd.github+json" }, .{ .name = "User-Agent", .value = "Opal-Updater" } };
+    const payload = fetch.fetch("https://api.github.com/repos/debpalash/Opal/releases/latest", body, options) orelse {
+        fail("Could not check for updates. Try again when connected.", manual);
         return;
     };
-    defer parsed.deinit();
-    const tag = parsed.value.tag_name;
-    const normalized_tag = stripLeadingV(tag);
-    if (normalized_tag.len == 0 or normalized_tag.len > 64) {
-        setError("invalid release version length");
+    const metadata = std.json.parseFromSlice(pure.Release, alloc, payload, .{ .ignore_unknown_fields = true }) catch {
+        fail("Could not read the update information. Try again later.", manual);
+        return;
+    };
+    defer metadata.deinit();
+    if (pure.version(metadata.value.tag_name) == null) {
+        fail("Could not read the update version. Try again later.", manual);
         return;
     }
-
-    // Validate tag contains only safe path characters
-    for (normalized_tag) |ch| {
-        switch (ch) {
-            'a'...'z', 'A'...'Z', '0'...'9', '.', '-', '_' => {},
-            else => {
-                setError("invalid tag name");
-                return;
-            },
-        }
-    }
-
-    var dl: []const u8 = "";
-    var sums: []const u8 = "";
-    for (parsed.value.assets) |asset| {
-        if (asset.browser_download_url.len > 1024) continue;
-        if (!std.mem.startsWith(u8, asset.browser_download_url, "https://github.com/debpalash/Opal/releases/download/")) continue;
-        if (std.mem.endsWith(u8, asset.name, ".dmg")) dl = asset.browser_download_url;
-        if (std.mem.eql(u8, asset.name, "SHA256SUMS.txt")) sums = asset.browser_download_url;
-    }
+    var target: [2048:0]u8 = @splat(0);
+    var can_install = false;
+    if (comptime native) can_install = api.opal_update_target(&target, target.len) > 0;
+    const platform: pure.Platform = if (builtin.os.tag == .macos) (if (builtin.cpu.arch == .aarch64) .mac_arm64 else .mac_intel) else if (builtin.os.tag == .windows) .windows else .linux;
+    var selected: pure.Selection = undefined;
+    const available = pure.select(alloc, payload, APP_VERSION, platform, can_install, &selected);
     mutex.lock();
     defer mutex.unlock();
-
-    const tn = @min(normalized_tag.len, current.latest_tag_buf.len);
-    @memcpy(current.latest_tag_buf[0..tn], normalized_tag[0..tn]);
-    current.latest_tag_len = tn;
-
-    const dn = @min(dl.len, current.dl_url_buf.len);
-    @memcpy(current.dl_url_buf[0..dn], dl[0..dn]);
-    current.dl_url_len = dn;
-    const sn = @min(sums.len, current.sums_url_buf.len);
-    @memcpy(current.sums_url_buf[0..sn], sums[0..sn]);
-    current.sums_url_len = sn;
-
-    current.has_update = compareVersions(APP_VERSION, normalized_tag) < 0;
-    current.last_check_ts = io_global.timestamp();
-
-    if (current.has_update) {
-        var log_buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(&log_buf, "Update available: v{s}", .{normalized_tag}) catch "Update available";
-        logs.pushLog("info", "updater", msg, true);
-    } else {
-        logs.pushLog("info", "updater", "Up to date", false);
+    current.has_update = available;
+    if (available) {
+        current.selection = selected;
+        current.target = target;
+        notice.offer(selected.version.text(), manual);
+        current.show_prompt = notice.visible;
     }
 }
-
-const Release = struct {
-    tag_name: []const u8,
-    assets: []const struct { name: []const u8, browser_download_url: []const u8 },
-};
-
-const reliable_fetch = @import("reliable_fetch.zig");
-
-/// Release metadata / checksum fetches: https on every hop, status-checked,
-/// cancelled on shutdown, no browser impersonation (GitHub API).
-const release_opts: reliable_fetch.Opts = .{
-    .https_only = true,
-    .impersonate = false,
-    .timeout_secs = 20,
-};
-
-fn fetchJson(buf: []u8) error{ CurlSpawn, CurlFailed, ReadFailed }!usize {
-    var hdrs: [16 * 1024]u8 = undefined;
-    var opts = release_opts;
-    opts.headers = &.{
-        .{ .name = "Accept", .value = "application/vnd.github+json" },
-        .{ .name = "User-Agent", .value = "Opal-Updater" },
-    };
-    const res = reliable_fetch.request(RELEASE_API, buf, &hdrs, opts);
-    if (res.ok()) return res.body.len;
-    return switch (res.failure) {
-        .spawn => error.CurlSpawn,
-        .truncated => error.ReadFailed,
-        else => error.CurlFailed,
-    };
-}
-
-fn stripLeadingV(tag: []const u8) []const u8 {
-    if (tag.len > 0 and (tag[0] == 'v' or tag[0] == 'V')) return tag[1..];
-    return tag;
-}
-
-/// Dotted-numeric version compare. Returns -1, 0, 1. Non-numeric
-/// components fall back to lexicographic compare of that component.
-fn compareVersions(a: []const u8, b: []const u8) i8 {
-    var it_a = std.mem.splitScalar(u8, a, '.');
-    var it_b = std.mem.splitScalar(u8, b, '.');
-    while (true) {
-        const pa = it_a.next();
-        const pb = it_b.next();
-        if (pa == null and pb == null) return 0;
-        const sa = pa orelse "0";
-        const sb = pb orelse "0";
-        const na = std.fmt.parseInt(u32, sa, 10) catch {
-            const r = std.mem.order(u8, sa, sb);
-            return switch (r) {
-                .lt => -1,
-                .eq => 0,
-                .gt => 1,
-            };
-        };
-        const nb = std.fmt.parseInt(u32, sb, 10) catch {
-            const r = std.mem.order(u8, sa, sb);
-            return switch (r) {
-                .lt => -1,
-                .eq => 0,
-                .gt => 1,
-            };
-        };
-        if (na < nb) return -1;
-        if (na > nb) return 1;
-    }
-}
-
-/// Download the .dmg from the last check result into /tmp, then open
-/// it via `open` (Finder mounts + shows the drag-to-Applications
-/// window). Non-blocking.
 pub fn downloadAndOpenAsync() void {
-    if (@import("builtin").os.tag != .macos) {
-        setError("Update using your package manager or the release download");
-        return;
-    }
     mutex.lock();
-    if (current.is_downloading or current.is_checking or workers.isQuitting()) {
+    if (current.is_downloading or current.is_checking or !current.has_update or workers.isQuitting()) {
         mutex.unlock();
         return;
     }
-    if (current.dl_url_len == 0 or current.sums_url_len == 0) {
+    if (current.is_ready) {
+        current.show_prompt = true;
         mutex.unlock();
-        setError("release download or checksum is missing");
+        return;
+    }
+    const release = current;
+    current.last_error_len = 0;
+    current.show_prompt = true;
+    if (release.selection.mode == .website) {
+        mutex.unlock();
+        openRelease();
         return;
     }
     current.is_downloading = true;
-    const release = current;
+    current.downloaded = 0;
     mutex.unlock();
     workers.spawn(downloadWorker, .{release}) catch {
+        fail("Could not start the update download", true);
         mutex.lock();
-        defer mutex.unlock();
         current.is_downloading = false;
+        mutex.unlock();
     };
 }
-
 fn downloadWorker(release: Snapshot) void {
     defer {
         mutex.lock();
         current.is_downloading = false;
         mutex.unlock();
+        state.wakeUi();
     }
-    clearError();
-
-    const url = release.dl_url_buf[0..release.dl_url_len];
-    const tag = release.latestTag();
-
     var nonce: [16]u8 = undefined;
-    if (!io_global.randomSecure(&nonce)) {
-        setError("secure temporary path unavailable");
+    if (!io.randomSecure(&nonce)) {
+        fail("Could not prepare the update download", true);
         return;
     }
-    var nonce_hex: [32]u8 = undefined;
-    for (nonce, 0..) |byte, i| {
-        nonce_hex[i * 2] = HEX[byte >> 4];
-        nonce_hex[i * 2 + 1] = HEX[byte & 0x0f];
-    }
-    var path_buf: [512]u8 = undefined;
-    var tmp_buf: [256]u8 = undefined;
-    const dmg_path = @import("opal-fmt").bufPrintZ(&path_buf, "{s}/Opal-{s}-{s}.dmg", .{ io_global.tmpDir(&tmp_buf), tag, nonce_hex }) catch {
-        setError("path too long");
+    const token = std.fmt.bytesToHex(nonce, .lower);
+    var tmp: [512]u8 = undefined;
+    var path: [1024:0]u8 = @splat(0);
+    const file = std.fmt.bufPrint(&path, "{s}/Opal-update-{s}-{s}", .{ io.tmpDir(&tmp), token, release.selection.asset.text() }) catch {
+        fail("Update download path is too long", true);
         return;
     };
-    var handed_off = false;
-    defer if (!handed_off) io_global.deleteFileAbsolute(dmg_path) catch {};
-
-    logs.pushLog("info", "updater", "Downloading update…", true);
-
-    // Atomic: curl writes `<dmg>.part`, renamed only after a 2xx — a failed or
-    // cancelled transfer never leaves a half .dmg for the checksum step.
-    var dl_opts = release_opts;
-    dl_opts.timeout_secs = 600;
-    if (!reliable_fetch.download(url, dmg_path, dl_opts).ok()) {
-        setError("update download failed or was cancelled");
+    mutex.lock();
+    current.download = path;
+    mutex.unlock();
+    var keep = false;
+    defer if (!keep) io.deleteFileAbsolute(file) catch {};
+    var options = release_opts;
+    options.timeout_secs = 600;
+    options.max_filesize = 512 * 1024 * 1024;
+    if (!fetch.download(release.selection.url.text(), file, options).ok()) {
+        fail("Update download failed. Your app has not changed.", true);
         return;
     }
-
-    if (!verifyReleaseChecksum(dmg_path, release)) {
-        setError("download checksum verification failed");
-        logs.pushLog("error", "updater", "Refusing update whose SHA-256 is absent or mismatched", true);
+    if (!verifyReleaseChecksum(file, release)) {
+        fail("Update verification failed. Your app has not changed.", true);
         return;
     }
-
     if (workers.isQuitting()) return;
-
-    // Hand off to Finder.
-    var open_child = io_global.Child.init(&.{ "open", dmg_path }, alloc);
-    open_child.stdout_behavior = .Ignore;
-    open_child.stderr_behavior = .Ignore;
-    const opened = open_child.spawnAndWait() catch {
-        setError("could not open the downloaded installer");
-        return;
-    };
-    switch (opened) {
-        .exited => |code| if (code != 0) {
-            setError("installer opener failed");
-            return;
-        },
-        else => {
-            setError("installer opener was interrupted");
-            return;
-        },
+    var prepared: [2048:0]u8 = @splat(0);
+    if (release.selection.mode == .bundle) {
+        if (comptime native) {
+            var version: [65:0]u8 = @splat(0);
+            @memcpy(version[0..release.latestTag().len], release.latestTag());
+            if (api.opal_update_prepare(&path, &release.target, &version, &prepared, prepared.len) == 0) {
+                fail("Could not prepare the update. Your app has not changed.", true);
+                return;
+            }
+        } else return;
+    } else {
+        @memcpy(prepared[0..file.len], file);
+        keep = true;
     }
-    handed_off = true;
-
-    logs.pushLog("info", "updater", "Update downloaded — drag Opal to Applications", true);
+    mutex.lock();
+    current.prepared = prepared;
+    current.is_ready = true;
+    current.show_prompt = true;
+    current.downloaded = release.selection.size;
+    mutex.unlock();
 }
-
-fn verifyReleaseChecksum(dmg_path: []const u8, release: Snapshot) bool {
-    if (release.sums_url_len == 0) return false;
-    var sums: [16 * 1024]u8 = undefined;
-    var sums_opts = release_opts;
-    sums_opts.timeout_secs = 30;
-    const sums_body = reliable_fetch.fetch(release.sums_url_buf[0..release.sums_url_len], &sums, sums_opts) orelse return false;
-    const n = sums_body.len;
-    const url = release.dl_url_buf[0..release.dl_url_len];
-    const asset_name = url[(std.mem.lastIndexOfScalar(u8, url, '/') orelse return false) + 1 ..];
-
-    var expected: ?[]const u8 = null;
-    var lines = std.mem.splitScalar(u8, sums[0..n], '\n');
-    while (lines.next()) |line| {
-        var fields = std.mem.tokenizeAny(u8, line, " \t\r");
-        const digest = fields.next() orelse continue;
-        const name = fields.next() orelse continue;
-        // Release sums contain the deterministic asset name, while our local
-        // file has a random suffix. Match the exact downloaded asset.
-        if (digest.len == 64 and std.mem.eql(u8, name, asset_name)) {
-            expected = digest;
-            break;
-        }
-    }
-    const want = expected orelse return false;
-    const file = io_global.openFileAbsolute(dmg_path, .{}) catch return false;
-    defer io_global.closeFile(file);
+fn verifyReleaseChecksum(path: []const u8, release: Snapshot) bool {
+    var sums: [32768]u8 = undefined;
+    const text = fetch.fetch(release.selection.sums.text(), &sums, release_opts) orelse return false;
+    const expected = @import("ytdlp_update_pure.zig").expectedChecksum(text, release.selection.asset.text()) orelse return false;
+    const file = io.openFileAbsolute(path, .{}) catch return false;
+    defer io.closeFile(file);
     var sha = std.crypto.hash.sha2.Sha256.init(.{});
-    var buf: [256 * 1024]u8 = undefined;
+    var buffer: [32768]u8 = undefined;
     while (true) {
         if (workers.isQuitting()) return false;
-        const got = io_global.read(file, &buf) catch return false;
-        if (got == 0) break;
-        sha.update(buf[0..got]);
+        const n = io.read(file, &buffer) catch return false;
+        if (n == 0) break;
+        sha.update(buffer[0..n]);
     }
     var digest: [32]u8 = undefined;
     sha.final(&digest);
-    var actual: [64]u8 = undefined;
-    for (digest, 0..) |byte, i| {
-        actual[i * 2] = HEX[byte >> 4];
-        actual[i * 2 + 1] = HEX[byte & 0x0f];
+    return @import("ytdlp_update_pure.zig").checksumMatches(expected, digest);
+}
+pub fn restartAndInstall() void {
+    const value = snapshot();
+    if (!value.is_ready or workers.isQuitting() or restartRequested()) return;
+    if (value.selection.mode == .bundle) {
+        if (comptime native) {
+            var version: [65:0]u8 = @splat(0);
+            @memcpy(version[0..value.latestTag().len], value.latestTag());
+            if (api.opal_update_restart(&value.target, &value.prepared, &version, @embedFile("updater_install_macos.sh")) == 0) {
+                fail("Could not start installation. Your app has not changed.", true);
+                return;
+            }
+            restart_requested.store(true, .release);
+            state.wakeUi();
+        }
+    } else {
+        const args: []const []const u8 = if (builtin.os.tag == .windows) &.{ "msiexec", "/i", std.mem.sliceTo(&value.prepared, 0) } else &.{ "open", std.mem.sliceTo(&value.prepared, 0) };
+        var child = io.Child.init(args, alloc);
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Ignore;
+        child.spawn() catch {
+            fail("Could not open the update installer", true);
+            return;
+        };
+        dismiss();
     }
-    return std.ascii.eqlIgnoreCase(want, &actual);
+}
+pub fn restartRequested() bool {
+    return restart_requested.load(.acquire);
+}
+pub fn openRelease() void {
+    const value = snapshot();
+    var url: [256]u8 = undefined;
+    const link = std.fmt.bufPrint(&url, "https://github.com/debpalash/Opal/releases/tag/v{s}", .{value.latestTag()}) catch return;
+    const c = @import("../core/c.zig");
+    var z: [257:0]u8 = @splat(0);
+    @memcpy(z[0..link.len], link);
+    _ = c.sdl.SDL_OpenURL(&z);
+}
+pub fn shutdown() void {
+    if (restartRequested()) return;
+    const value = snapshot();
+    if (value.is_ready and value.selection.mode == .bundle) {
+        if (comptime native) api.opal_update_discard(&value.prepared);
+    }
+    if (value.is_ready and value.selection.mode == .installer) io.deleteFileAbsolute(std.mem.sliceTo(&value.prepared, 0)) catch {};
+}
+pub fn fixtureForTest(value: Snapshot) void {
+    if (!builtin.is_test) @compileError("Update fixture is test-only");
+    mutex.lock();
+    current = value;
+    mutex.unlock();
 }

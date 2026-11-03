@@ -1,13 +1,28 @@
-<picture>
-  <source media="(max-width: 600px)" srcset="assets/readme/hero-mobile.webp" />
-  <img src="assets/readme/hero.webp" width="100%" alt="Opal — Your media, in one place. Movies, live TV, YouTube, torrents, manga, Jellyfin and Plex, with optional AI that runs locally. The native app's movie browser sits on a matte mineral backdrop." />
-</picture>
+<div align="center">
 
-**[Download Opal →](#get-it)** &nbsp; [Watch the demos](#see-it) &nbsp; [Website ↗](https://opal.palash.dev)
+<img src="assets/logo.svg" width="64" alt="Opal" />
 
-A free, open-source media player and browser. **No telemetry. No subscription.**
+# Your files. Your streams. Your next read.
 
-<sub>macOS · Linux · Windows alpha &nbsp; / &nbsp; [Features](#why) · [Developers](#building-from-source) · [Support](#support)</sub>
+**Stream torrents. Watch YouTube. Read comics. Keep your place in one native app.**
+
+Free and open source. No telemetry. No subscription. Optional AI runs locally.
+
+**[Download Opal](https://github.com/debpalash/Opal/releases/latest)** · [See what’s new](CHANGELOG.md) · [Website](https://opal.palash.dev)
+
+macOS · Linux · Windows alpha
+
+</div>
+
+![Opal’s native macOS browser: compact address bar and tabs, a themed new-tab page, privacy measurements and connection controls.](assets/releases/v0.9.2/browser.png)
+
+<sub>Current macOS UI with public demo recents.</sub>
+
+- **Watch without waiting for the whole file.** Open local media or stream a torrent while it downloads, with subtitles, audio tracks and session restore.
+- **Move from browsing to watching or reading.** On macOS, use tabs and extensions inside Opal; send a YouTube video to the player or a recognized comic page to your installed reading sources.
+- **Choose your setup.** Add source plugins, connect Jellyfin or Plex, control playback from your phone, or enable local AI when you want it.
+
+[Quick install](#get-it) · [Demos](#see-it) · [Features](#why) · [Build from source](#building-from-source)
 
 <a id="get-it"></a>
 
@@ -75,8 +90,7 @@ sudo dnf install ./opal-*.x86_64.rpm
 sudo zypper install ./opal-*.x86_64.rpm
 ```
 
-**Arch / Omarchy:** the v0.8.8 AUR binary links libtorrent 2.0. Use AppImage if your
-system ships 2.1. [AUR package](https://aur.archlinux.org/packages/opal-media-player-bin).
+**Arch / Omarchy:** [AUR package](https://aur.archlinux.org/packages/opal-media-player-bin).
 
 ```sh
 yay -S opal-media-player-bin
@@ -110,8 +124,16 @@ Install search sources in **Settings → General → Install source plugins**.
 A **TMDB v4 token** adds richer metadata. AI and voice models are opt-in.
 Reopen onboarding in **Settings → About**.
 
-**Update:** rerun the installer with `sh -s -- update`. Set `OPAL_VERSION=vX.Y.Z`
-to pin a release. Update AUR packages with `yay -Syu` or `paru -Syu`.
+**Updates from v0.9.2:** Opal checks automatically and offers a small corner prompt.
+On a writable macOS app installation, choose **Update**, keep using the app while
+it downloads, then **Restart** to install and reopen. A failed launch restores the
+previous version. Control checks in **Settings → About**. Older versions need one
+manual update first.
+
+Windows opens its installer after the download. Linux and package-managed installs
+use their package manager or the release page. You can also rerun the installer
+with `sh -s -- update`, or set `OPAL_VERSION=vX.Y.Z` to pin a release. Update AUR
+packages with `yay -Syu` or `paru -Syu`.
 
 **System-wide Linux install** requires root or `sudo`:
 
@@ -124,6 +146,23 @@ curl -fsSL https://raw.githubusercontent.com/debpalash/Opal/main/scripts/install
 <a id="see-it"></a>
 
 ## See it in action
+
+**New in v0.9.2: the browser belongs in the app.** Tabs, pinned extensions, a native
+new-tab page, YouTube handoff and comic discovery keep browsing close to playback.
+The native embedded browser and desktop update flow shown here are for macOS.
+
+<details>
+<summary><b>Update, keep using Opal, restart when ready</b></summary>
+
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="assets/releases/v0.9.2/update-ready.png" />
+  <img src="assets/releases/v0.9.2/update-flow.gif" width="100%" alt="Opal’s corner update card moves from Update to download progress to Restart, while the browser stays open." />
+</picture>
+
+Native UI preview with an illustrative next-version number. The app changes only
+after you choose Restart.
+
+</details>
 
 Browse movies and TV, switch sources, and find your next watch.
 
@@ -355,9 +394,10 @@ are not. Install trusted plugins.
 
 ## Keep Opal going
 
-[Ko-fi](https://ko-fi.com/debpalash) · [PayPal](https://paypal.me/palashCoder) ·
-[Star the repo](../../stargazers) · [Report a bug](.github/SUPPORT.md) ·
-[Discussions](../../discussions).
+If Opal is useful to you, [star the repo](../../stargazers) to help others find it.
+
+[Report a bug](.github/SUPPORT.md) · [Discussions](../../discussions) ·
+[Ko-fi](https://ko-fi.com/debpalash) · [PayPal](https://paypal.me/palashCoder).
 
 **GPL-3.0.** [License](LICENSE) · [Dependency notices](docs/NOTICE.md).
 Opal connects to sources you configure; it does not host or distribute media.

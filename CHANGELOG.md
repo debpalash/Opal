@@ -5,13 +5,14 @@ What changed in each release, in the terms a user would notice.
 Every section here becomes the **Highlights** block of the matching GitHub
 Release — `scripts/release-notes.sh` extracts it by version heading and appends
 the full commit list underneath, so the notes can never drift from the tag.
-Add a section BEFORE tagging; a missing one ships a release that says so.
+Add a section and a fresh feature visual BEFORE tagging. See [the release checklist](docs/releasing.md); release validation requires a matching visual manifest.
 
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
 ## v0.9.2 — 2026-11-04
 
+- **Update without leaving Opal.** A small corner prompt offers background downloads and a separate Restart button. Writable macOS app bundles install and reopen automatically, with checksum and bundle verification and rollback if the new app cannot launch. Automatic checks can be turned off in Settings → About; other platforms use their installer or package manager.
 - **Browse directly inside Opal on macOS.** A native browser replaces the remote-view path, with an aligned address bar, up to 32 tabs, tab pinning, and Command-W closing the tab while keeping Opal open. Browser now sits below Home; pairing and shared streams live beside the extension controls.
 - **A useful new-tab page.** Search, bookmarks, favicon cards for recents, connection controls, and session privacy measurements appear in the app's theme. Private browsing hides regular history.
 - **Browser extensions and connection controls.** Install the verified uBlock Origin Lite package or compatible WebExtensions, pin their icons, and open native popups. Canvas protection, Tor, and a verified pool of saved proxies are available in browser settings. Extensions require macOS 15.4 or later.
