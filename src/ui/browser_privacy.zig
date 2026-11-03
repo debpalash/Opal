@@ -12,7 +12,30 @@ var tab: usize = 0;
 var edit_index: ?usize = null;
 var draft: pure.Profile = .{};
 var port_buf: [8]u8 = @splat(0);
+var show_connection_details = false;
+var show_authentication = false;
+var editor_error: []const u8 = "";
+pub const ConnectionLayout = struct {
+    panel: dvui.Rect.Physical = .{},
+    routes: [3]dvui.Rect.Physical = @splat(.{}),
+    status: dvui.Rect.Physical = .{},
+    add: dvui.Rect.Physical = .{},
+    editor: dvui.Rect.Physical = .{},
+    cancel: dvui.Rect.Physical = .{},
+    host: dvui.Rect.Physical = .{},
+    port: dvui.Rect.Physical = .{},
+    authentication_visible: bool = false,
+};
+pub var connection_layout_for_test: ConnectionLayout = .{};
+fn closeEditor() void {
+    editing = false;
+    show_authentication = false;
+    editor_error = "";
+    draft = .{};
+    @memset(&port_buf, 0);
+}
 pub fn openSection(section: usize) void {
+    closeEditor();
     open = true;
     tab = @min(section, 2);
     state.wakeUi();
@@ -29,29 +52,44 @@ pub fn render(part: @import("../services/native_browser.zig").Chrome) void {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
         defer row.deinit();
         const clicked = c.iconButton(@src(), icons.puzzle, "Extensions and privacy", open);
-        if (clicked) open = !open;
+        if (clicked) {
+            open = !open;
+            closeEditor();
+        }
         return;
     }
     if (!open) return;
-    var panel = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .background = true, .color_fill = .{ .color = theme.colors.bg_surface }, .padding = dvui.Rect.all(10), .margin = .{ .y = 4, .h = 4 }, .corners = theme.dims.rad_sm });
+    if (@import("builtin").is_test) connection_layout_for_test = .{};
+    const panel_width = @max(0, @min(680, dvui.parentGet().data().contentRect().w - 26));
+    // Expansion fills the parent even with max_size_content. Request a bounded
+    // content width instead, then anchor the panel beneath the toolbar action.
+    var panel = dvui.box(@src(), .{ .dir = .vertical }, .{ .min_size_content = .{ .w = panel_width }, .max_size_content = dvui.Options.MaxSize.width(panel_width), .gravity_x = 1, .background = true, .color_fill = .{ .color = theme.colors.bg_surface }, .padding = dvui.Rect.all(12), .margin = .{ .y = 4, .h = 4 }, .corners = theme.dims.rad_sm, .border = dvui.Rect.all(1), .color_border = .{ .color = theme.colors.border_subtle } });
     defer panel.deinit();
-    var header = dvui.box(@src(), .{ .dir = if (dvui.windowRect().w < 420) .vertical else .horizontal }, .{ .expand = .horizontal });
+    if (@import("builtin").is_test) connection_layout_for_test.panel = panel.data().borderRectScale().r;
+    var header = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .h = 8 } });
     const labels = [_][]const u8{ "Extensions", "Privacy", "Connections" };
     const glyphs = [_][]const u8{ icons.puzzle, icons.@"shield-check", icons.network };
     for (labels, glyphs, 0..) |label, icon, index| {
         var item = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = index, .gravity_y = 0.5 });
-        if (c.iconButton(@src(), icon, label, tab == index)) tab = index;
+        if (c.iconButton(@src(), icon, label, tab == index)) {
+            if (tab != index) closeEditor();
+            tab = index;
+        }
         if (tab == index) note(@src(), label);
         item.deinit();
     }
     _ = dvui.spacer(@src(), .{ .expand = .horizontal });
-    if (c.iconButton(@src(), icons.x, "Close browser settings", false)) open = false;
+    if (c.iconButton(@src(), icons.x, "Close browser settings", false)) {
+        open = false;
+        closeEditor();
+    }
     header.deinit();
     if (!state.app.config_loaded.load(.acquire) and !@import("builtin").is_test) {
         note(@src(), "Loading browser settings…");
         return;
     }
-    const height = @min(@as(f32, 320), dvui.windowRect().h * 0.45);
+    const preferred: f32 = if (tab != 2 or editing or show_connection_details) 320 else @min(320, @as(f32, if (panel_width < 450) 300 else 226) + @as(f32, @floatFromInt(privacy.prefs.profile_count)) * 56);
+    const height = @min(preferred, dvui.windowRect().h * 0.45);
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .horizontal, .min_size_content = .{ .h = height }, .max_size_content = .{ .w = std.math.floatMax(f32), .h = height } });
     defer scroll.deinit();
     var contents = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
@@ -179,92 +217,156 @@ fn protections() void {
     note(@src(), "Protection changes reload the current page. This blocks canvas readback; it does not make browsing anonymous.");
 }
 fn field(src: std.builtin.SourceLocation, label: []const u8, buffer: []u8, secret: bool) void {
-    note(src, label);
+    var group = dvui.box(src, .{ .dir = .vertical }, .{ .expand = .horizontal, .margin = .{ .h = 6 } });
+    defer group.deinit();
+    _ = dvui.label(src, "{s}", .{label}, .{ .id_extra = 2, .color_text = .{ .color = theme.colors.text_secondary }, .font = dvui.themeGet().font_body.withSize(theme.font_size.small), .padding = .{ .h = 3 } });
     var entry = dvui.textEntry(src, .{ .text = .{ .buffer = buffer }, .password_char = if (secret) "*" else null }, .{ .id_extra = 1, .expand = .horizontal, .color_fill = .{ .color = theme.colors.bg_elevated }, .color_text = .{ .color = theme.colors.text_primary }, .color_border = .{ .color = theme.colors.border_strong }, .border = dvui.Rect.all(1), .corners = theme.dims.rad_sm, .padding = dvui.Rect.all(5) });
+    if (@import("builtin").is_test) {
+        if (std.mem.eql(u8, label, "Host")) connection_layout_for_test.host = entry.data().borderRectScale().r;
+        if (std.mem.eql(u8, label, "Port")) connection_layout_for_test.port = entry.data().borderRectScale().r;
+    }
     entry.deinit();
 }
 fn syncField(comptime n: usize, f: *@import("../services/wallpapers_pure.zig").Field(n)) void {
     f.len = std.mem.sliceTo(&f.bytes, 0).len;
 }
 fn beginEdit(index: ?usize) void {
+    closeEditor();
+    editing = true;
     edit_index = index;
     draft = if (index) |i| privacy.prefs.profiles[i] else .{};
     @memset(&port_buf, 0);
     _ = std.fmt.bufPrint(&port_buf, "{d}", .{draft.port}) catch {};
+    show_authentication = draft.username.len > 0 or draft.password.len > 0;
 }
 var editing = false;
+fn connectionStatus() void {
+    const mode = privacy.prefs.proxy_mode;
+    const tor_state = privacy.api.opal_security_tor_status();
+    const verified = privacy.api.opal_security_pool_count();
+    var card = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .background = true, .color_fill = .{ .color = theme.colors.bg_elevated }, .corners = theme.dims.rad_sm, .padding = dvui.Rect.all(10) });
+    defer card.deinit();
+    if (@import("builtin").is_test) connection_layout_for_test.status = card.data().borderRectScale().r;
+    var heading = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+    const title = switch (mode) {
+        .system => "System connection",
+        .tor => "Tor",
+        .pool => "Verified pool",
+        else => "Proxy connection",
+    };
+    _ = dvui.label(@src(), "{s}", .{title}, .{ .expand = .horizontal, .gravity_y = 0.5, .color_text = .{ .color = theme.colors.text_primary } });
+    if (mode == .tor) {
+        if (tor_state == 2) c.statusPill("Connected", .success) else if (tor_state < 0) c.statusPill("Blocked", .warn) else c.statusPill("Connecting", .info);
+    } else if (mode == .pool) {
+        if (verified > 0) c.statusPill("Ready", .success) else c.statusPill("Blocked", .warn);
+    } else c.statusPill(if (mode == .system) "Default" else "Selected", .info);
+    heading.deinit();
+    switch (mode) {
+        .system => note(@src(), "Uses your Mac’s network settings."),
+        .tor => {
+            var buffer: [256]u8 = undefined;
+            if (tor_state == 1) note(@src(), std.fmt.bufPrint(&buffer, "Connecting to Tor · {d}%", .{privacy.api.opal_security_tor_progress()}) catch "Connecting…") else {
+                const n = privacy.api.opal_security_tor_message(&buffer, buffer.len);
+                note(@src(), buffer[0..n]);
+            }
+            if (tor_state != 1 and c.iconActionButton(@src(), icons.@"rotate-cw", "Reconnect", .secondary, 71903)) privacy.api.opal_security_tor_retry();
+        },
+        .pool => {
+            var buffer: [96]u8 = undefined;
+            note(@src(), if (verified > 0) std.fmt.bufPrint(&buffer, "{d} verified exits · browser traffic only", .{verified}) catch "Verified exits available" else if (privacy.prefs.profile_count == 0) "Add a proxy, then verify it to start browsing." else "Verify saved proxies to start browsing.");
+            var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{});
+            if (privacy.prefs.profile_count == 0) {
+                if (c.iconActionButton(@src(), icons.plus, "Add proxy", .primary, 71904)) beginEdit(null);
+            } else if (c.iconActionButton(@src(), icons.@"scan-line", "Verify", if (verified == 0) .primary else .secondary, 71905)) privacy.api.opal_security_pool_scan();
+            if (c.iconButtonEx(@src(), icons.shuffle, "Rotate verified exit", false, verified > 1)) privacy.api.opal_security_pool_rotate();
+            actions.deinit();
+        },
+        else => note(@src(), "This proxy applies to browser traffic only."),
+    }
+}
 fn proxies() void {
     if (privacy.api.opal_browser_proxy_supported() == 0) {
         note(@src(), "Browser proxy profiles require macOS 14 or later.");
         return;
     }
-    note(@src(), "These profiles affect only Opal's browser. Local/intranet and literal IPv6 addresses are blocked while a profile is active; select System proxy to access them.");
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-    if (c.actionButton(@src(), "System proxy", if (privacy.prefs.proxy_mode == .system) .primary else .secondary, 71700)) {
-        privacy.prefs.proxy_mode = .system;
-        privacy.changed();
-    }
-    row.deinit();
-    var connection = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-    if (c.actionButton(@src(), "Tor", if (privacy.prefs.proxy_mode == .tor) .primary else .secondary, 71900)) {
-        privacy.prefs.proxy_mode = .tor;
-        privacy.changed();
-    }
-    if (c.actionButton(@src(), "Verified pool", if (privacy.prefs.proxy_mode == .pool) .primary else .secondary, 71901)) {
-        privacy.prefs.proxy_mode = .pool;
-        privacy.changed();
-    }
-    if (c.iconButton(@src(), icons.@"scan-line", "Verify saved proxies through HTTPS", false)) privacy.api.opal_security_pool_scan();
-    if (c.iconButton(@src(), icons.shuffle, "Rotate to another verified exit", false)) privacy.api.opal_security_pool_rotate();
-    connection.deinit();
-    if (privacy.prefs.proxy_mode == .tor) {
-        var status: [256]u8 = undefined;
-        const n = privacy.api.opal_security_tor_message(&status, status.len);
-        note(@src(), status[0..n]);
-        if (privacy.api.opal_security_tor_status() == 1) {
-            var progress: [64]u8 = undefined;
-            note(@src(), std.fmt.bufPrint(&progress, "Connecting: {d}%", .{privacy.api.opal_security_tor_progress()}) catch "Connecting…");
+    var chooser = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .h = 10 } });
+    const modes = [_]pure.ProxyKind{ .system, .tor, .pool };
+    const labels = [_][]const u8{ "System", "Tor", "Pool" };
+    const glyphs = [_][]const u8{ icons.globe, icons.@"shield-check", icons.network };
+    for (modes, labels, glyphs, 0..) |mode, label, icon, i| {
+        var choice = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i });
+        if (c.iconActionButton(@src(), icon, label, if (privacy.prefs.proxy_mode == mode) .primary else .secondary, i)) {
+            privacy.prefs.proxy_mode = mode;
+            closeEditor();
+            privacy.changed();
         }
-        if (c.iconButton(@src(), icons.@"rotate-cw", "Reconnect Tor", false)) privacy.api.opal_security_tor_retry();
-        note(@src(), "Routes this browser through Tor while Opal is open. Other app traffic uses its own connection.");
+        if (@import("builtin").is_test) connection_layout_for_test.routes[i] = choice.data().borderRectScale().r;
+        choice.deinit();
     }
-    note(@src(), "Pool checks use HTTPS through each saved proxy. Verified exits expire after six hours; empty pools block traffic.");
+    chooser.deinit();
+    if (editing) {
+        proxyEditor();
+        return;
+    }
+    connectionStatus();
+    var saved = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 8, .h = 4 } });
+    _ = dvui.label(@src(), "Saved proxies", .{}, .{ .expand = .horizontal, .gravity_y = 0.5, .color_text = .{ .color = theme.colors.text_primary } });
+    var add = dvui.box(@src(), .{ .dir = .horizontal }, .{});
+    if (c.iconButtonEx(@src(), icons.plus, "Add proxy", false, privacy.prefs.profile_count < pure.max_profiles)) beginEdit(null);
+    if (@import("builtin").is_test) connection_layout_for_test.add = add.data().borderRectScale().r;
+    add.deinit();
+    if (c.iconButton(@src(), icons.@"circle-help", "Connection details", show_connection_details)) show_connection_details = !show_connection_details;
+    saved.deinit();
+    if (privacy.prefs.profile_count == 0 and !editing and privacy.prefs.proxy_mode != .pool) note(@src(), "No saved proxies. Add one to connect or build a verified pool.");
+    var remove: ?usize = null;
     for (0..privacy.prefs.profile_count) |i| {
         const p = &privacy.prefs.profiles[i];
-        var r = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = @intCast(71720 + i), .expand = .horizontal });
-        if (c.actionButton(@src(), p.name.text(), if (privacy.prefs.active_profile == i and privacy.prefs.proxy_mode == p.kind) .primary else .secondary, 71740 + i)) {
+        var r = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .expand = .horizontal, .background = true, .color_fill = .{ .color = theme.colors.bg_elevated }, .corners = theme.dims.rad_sm, .padding = dvui.Rect.all(6), .margin = .{ .h = 4 } });
+        const active = privacy.prefs.active_profile == i and privacy.prefs.proxy_mode == p.kind;
+        if (c.iconButton(@src(), if (active) icons.@"circle-check" else icons.@"arrow-right", "Use this proxy", active)) {
             privacy.prefs.active_profile = i;
             privacy.prefs.proxy_mode = p.kind;
+            closeEditor();
             privacy.changed();
         }
-        note(@src(), switch (privacy.api.opal_security_pool_health(@intCast(i))) {
-            1 => "Checking…",
-            2 => "Verified",
-            -1 => "Unavailable",
-            else => "Unchecked",
-        });
-        if (c.actionButton(@src(), "Edit", .secondary, 71760 + i)) {
-            beginEdit(i);
-            editing = true;
-        }
-        if (c.actionButton(@src(), "Remove", .danger, 71780 + i)) {
-            if (privacy.prefs.active_profile == i and privacy.prefs.proxy_mode == p.kind) privacy.prefs.proxy_mode = .system;
-            if (privacy.prefs.active_profile > i) privacy.prefs.active_profile -= 1;
-            for (i..privacy.prefs.profile_count - 1) |j| privacy.prefs.profiles[j] = privacy.prefs.profiles[j + 1];
-            privacy.prefs.profile_count -= 1;
-            privacy.prefs.profiles[privacy.prefs.profile_count] = .{};
-            if (privacy.prefs.active_profile >= privacy.prefs.profile_count) privacy.prefs.active_profile = 0;
-            privacy.changed();
-            editing = false;
-            r.deinit();
-            break;
-        }
+        var name = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "{s}", .{p.name.text()}, .{ .expand = .horizontal, .color_text = .{ .color = theme.colors.text_primary }, .padding = dvui.Rect.all(0) });
+        _ = dvui.label(@src(), "{s}:{d}", .{ p.host.text(), p.port }, .{ .expand = .horizontal, .font = dvui.themeGet().font_body.withSize(theme.font_size.small), .color_text = .{ .color = theme.colors.text_tertiary }, .padding = dvui.Rect.all(0) });
+        name.deinit();
+        const health = privacy.api.opal_security_pool_health(@intCast(i));
+        if (health == 1) dvui.spinner(@src(), .{ .min_size_content = .{ .w = 14, .h = 14 }, .gravity_y = 0.5, .color_text = .{ .color = theme.colors.accent } }) else if (health == 2 or health == -1) dvui.icon(@src(), "", if (health == 2) icons.@"shield-check" else icons.@"circle-alert", .{}, .{ .min_size_content = .{ .w = 16, .h = 16 }, .gravity_y = 0.5, .color_text = .{ .color = if (health == 2) theme.colors.success else theme.colors.warning } });
+        if (c.iconButton(@src(), icons.pencil, "Edit proxy", editing and edit_index == i)) beginEdit(i);
+        if (c.iconButton(@src(), icons.@"trash-2", "Remove proxy", false)) remove = i;
         r.deinit();
     }
-    if (!editing and privacy.prefs.profile_count < pure.max_profiles and c.actionButton(@src(), "Add proxy profile", .secondary, 71800)) {
-        beginEdit(null);
-        editing = true;
+    if (remove) |i| {
+        if (privacy.prefs.active_profile == i and privacy.prefs.proxy_mode == privacy.prefs.profiles[i].kind) privacy.prefs.proxy_mode = .system;
+        if (privacy.prefs.active_profile > i) privacy.prefs.active_profile -= 1;
+        for (i..privacy.prefs.profile_count - 1) |j| privacy.prefs.profiles[j] = privacy.prefs.profiles[j + 1];
+        privacy.prefs.profile_count -= 1;
+        privacy.prefs.profiles[privacy.prefs.profile_count] = .{};
+        if (privacy.prefs.active_profile >= privacy.prefs.profile_count) privacy.prefs.active_profile = 0;
+        closeEditor();
+        privacy.changed();
     }
+    if (show_connection_details) {
+        note(@src(), "Browser traffic only. Proxy routes block local/intranet and literal IPv6 addresses; use System to access them.");
+        note(@src(), "Pool verification uses HTTPS through saved proxies. Verified exits expire after six hours. Empty pools block traffic.");
+    }
+    if (editing) proxyEditor();
+}
+fn proxyEditor() void {
+    if (!editing) return;
+    var editor = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .background = true, .color_fill = .{ .color = theme.colors.bg_elevated }, .padding = dvui.Rect.all(10), .corners = theme.dims.rad_sm, .margin = .{ .y = 8 } });
+    defer editor.deinit();
+    if (@import("builtin").is_test) connection_layout_for_test.editor = editor.data().borderRectScale().r;
+    var editor_title = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .h = 8 } });
+    _ = dvui.label(@src(), "{s}", .{if (edit_index == null) "Add proxy" else "Edit proxy"}, .{ .expand = .horizontal, .gravity_y = 0.5, .color_text = .{ .color = theme.colors.text_primary } });
+    var cancel = dvui.box(@src(), .{ .dir = .horizontal }, .{});
+    if (c.iconButton(@src(), icons.x, "Cancel proxy changes", false)) closeEditor();
+    if (@import("builtin").is_test) connection_layout_for_test.cancel = cancel.data().borderRectScale().r;
+    cancel.deinit();
+    editor_title.deinit();
     if (!editing) return;
     const kinds = [_]pure.ProxyKind{ .http, .https, .socks5 };
     const selected: usize = switch (draft.kind) {
@@ -274,38 +376,48 @@ fn proxies() void {
     };
     if (c.segment(@src(), &.{ "HTTP", "HTTPS", "SOCKS5" }, selected)) |i| draft.kind = kinds[i];
     field(@src(), "Name", &draft.name.bytes, false);
+    var address = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
     field(@src(), "Host", &draft.host.bytes, false);
+    var port = dvui.box(@src(), .{ .dir = .vertical }, .{ .min_size_content = .{ .w = 76 }, .max_size_content = dvui.Options.MaxSize.width(88), .margin = .{ .x = 8 } });
     field(@src(), "Port", &port_buf, false);
-    field(@src(), "Username (optional)", &draft.username.bytes, false);
-    field(@src(), "Password (optional)", &draft.password.bytes, true);
-    if (c.actionButton(@src(), "Save profile", .primary, 71801)) {
+    port.deinit();
+    address.deinit();
+    if (c.iconActionButton(@src(), if (show_authentication) icons.@"chevron-down" else icons.@"chevron-right", "Authentication", .secondary, 71803)) show_authentication = !show_authentication;
+    if (show_authentication) {
+        if (@import("builtin").is_test) connection_layout_for_test.authentication_visible = true;
+        var credentials = dvui.box(@src(), .{ .dir = if (editor.data().contentRect().w < 440) .vertical else .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 8 } });
+        field(@src(), "Username", &draft.username.bytes, false);
+        field(@src(), "Password", &draft.password.bytes, true);
+        credentials.deinit();
+    }
+    if (editor_error.len > 0) c.bodyText(@src(), editor_error, theme.colors.danger);
+    var buttons = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 1, .margin = .{ .y = 10 } });
+    defer buttons.deinit();
+    if (c.iconActionButton(@src(), icons.check, "Save", .primary, 71801)) {
         syncField(48, &draft.name);
         syncField(256, &draft.host);
         syncField(128, &draft.username);
         syncField(128, &draft.password);
         draft.port = std.fmt.parseInt(u16, std.mem.sliceTo(&port_buf, 0), 10) catch 0;
         if (!pure.validProfile(&draft)) {
-            state.showToast("Enter a name, a hostname without a URL scheme, and a port from 1 to 65535");
+            editor_error = "Enter a name, a host without a URL scheme, and a port from 1 to 65535.";
             return;
         }
         const index = edit_index orelse privacy.prefs.profile_count;
         if (edit_index != null and privacy.prefs.active_profile == index and privacy.prefs.proxy_mode == privacy.prefs.profiles[index].kind) privacy.prefs.proxy_mode = draft.kind;
         privacy.prefs.profiles[index] = draft;
         if (edit_index == null) privacy.prefs.profile_count += 1;
-        editing = false;
-        @memset(&draft.password.bytes, 0);
+        closeEditor();
         privacy.changed();
     }
-    if (c.actionButton(@src(), "Cancel", .secondary, 71802)) {
-        editing = false;
-        @memset(&draft.password.bytes, 0);
-    }
+    if (c.actionButton(@src(), "Cancel", .secondary, 71802)) closeEditor();
 }
 
 pub fn setPanelForTest(section: ?usize, editor: bool) void {
     if (!@import("builtin").is_test) @compileError("Browser panel fixtures are test-only");
     open = section != null;
     tab = section orelse 0;
-    editing = editor;
+    closeEditor();
+    show_connection_details = false;
     if (editor) beginEdit(if (privacy.prefs.profile_count > 0) @as(usize, 0) else null);
 }

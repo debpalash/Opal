@@ -118,10 +118,26 @@ pub fn processGlobalInputs() void {
                     continue;
                 }
                 if (key == .w) {
+                    if (comptime @import("../services/native_browser.zig").supported) {
+                        // AppKit owns Cmd+W, including while an Opal text field
+                        // is focused. Its SDL mirror must never close the app.
+                        if (mod.command()) {
+                            e.handled = true;
+                            continue;
+                        }
+                        if (state.app.router.current == .browse and state.app.browse_source == .Web and @import("browser_hub.zig").browsing()) {
+                            const browser = @import("../services/browser.zig");
+                            const tabs = browser.tabsView();
+                            browser.closeTab(tabs.items[tabs.active].id);
+                            e.handled = true;
+                            continue;
+                        }
+                    }
                     // Always active, including while a search/address field is
                     // focused. Native close shortcuts must never be swallowed
                     // by text editing.
                     closePlayerOrApp();
+                    e.handled = true;
                     continue;
                 }
                 if (key == .i) {
@@ -249,7 +265,7 @@ pub fn processGlobalInputs() void {
                             var gesture: input_pure.DoubleTap = .{};
                         };
                         const now_ms = @import("../core/io_global.zig").milliTimestamp();
-                        if (S.gesture.tap(now_ms, @intFromEnum(key), input_pure.DOUBLE_TAP_MS)) {
+                        if (S.gesture.tap(now_ms, @backingInt(key), input_pure.DOUBLE_TAP_MS)) {
                             if (state.app.fullscreen_player_idx == null) {
                                 state.app.fullscreen_player_idx = state.app.active_player_idx;
                             } else {
@@ -305,7 +321,7 @@ pub fn processGlobalInputs() void {
                         continue;
                     },
                     .one, .two, .three, .four, .five, .six, .seven, .eight, .nine => {
-                        const cell_idx = @intFromEnum(key) - @intFromEnum(dvui.enums.Key.one);
+                        const cell_idx = @backingInt(key) - @backingInt(dvui.enums.Key.one);
                         if (cell_idx < state.app.players.items.len) {
                             state.app.active_player_idx = @intCast(cell_idx);
                             dvui.refresh(null, @src(), null);

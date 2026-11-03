@@ -91,6 +91,7 @@ void opal_app_identity_init(void) {
 @end
 
 void opal_app_menu_test_new_tab(void) { [[OpalMenuTarget new] newBrowserTab:nil]; }
+void opal_app_menu_test_close(void) { [[OpalMenuTarget new] closeTabOrWindow:nil]; }
 
 static NSMenuItem *opal_item(NSString *title, SEL action, NSString *key, id target) {
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:action keyEquivalent:key ?: @""];
