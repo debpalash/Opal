@@ -57,6 +57,8 @@ fn stopServer(listener: *std.Io.net.Server, task: *std.Io.Future(void), fixture:
     _ = task.cancel(io.io());
 }
 const Fixture = struct {
+    range_test: bool = false,
+    headers_seen: std.atomic.Value(u32) = .init(0),
     stopping: std.atomic.Value(bool) = .init(false),
     active: std.atomic.Value(i32) = .init(-1),
     count: std.atomic.Value(u32) = .init(0),
@@ -77,9 +79,23 @@ const Fixture = struct {
             var reader = stream.reader(io.io(), &incoming);
             const first = reader.interface.takeDelimiterInclusive('\n') catch continue;
             const image = std.mem.indexOf(u8, first, ".svg") != null;
+            const large = std.mem.indexOf(u8, first, "/large") != null;
+            var headers: u32 = 0;
             while (true) {
                 const line = reader.interface.takeDelimiterInclusive('\n') catch break;
                 if (std.mem.eql(u8, line, "\r\n")) break;
+                const field = std.mem.trim(u8, line, "\r\n");
+                if (std.ascii.eqlIgnoreCase(field, "Cookie: session=one; other=two")) headers |= 1;
+                if (std.ascii.eqlIgnoreCase(field, "Accept: video/*, */*")) headers |= 2;
+                if (std.ascii.eqlIgnoreCase(field, "Range: bytes=4-7")) headers |= 4;
+            }
+            if (self.range_test) {
+                self.headers_seen.store(headers, .release);
+                var outgoing: [512]u8 = undefined;
+                var writer = stream.writer(io.io(), &outgoing);
+                writer.interface.print("HTTP/1.1 206 Partial Content\r\nContent-Type: application/octet-stream\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n4567", .{@as(usize, if (large) 1024 else 4)}) catch continue;
+                writer.interface.flush() catch {};
+                continue;
             }
             _ = self.count.fetchAdd(1, .acq_rel);
             if (image) _ = self.images.fetchAdd(1, .acq_rel);
@@ -107,6 +123,81 @@ fn waitExtension(slot: usize) !void {
         if (status.code == 2) return;
     }
     return error.Timeout;
+}
+test "Native browser protections first party integration loads and exchanges actual WebKit messages" {
+    const integration = @import("../services/browser_integration.zig");
+    const Native = struct {
+        extern fn opal_browser_integration_test_messages() u64;
+    };
+    var resource: [2048:0]u8 = @splat(0);
+    _ = try io.cwdRealPathFile("assets/browser-integration", &resource);
+    var temporary: [768]u8 = undefined;
+    var cache: [2048:0]u8 = @splat(0);
+    const cache_path = try std.fmt.bufPrint(&cache, "{s}/opal-first-party-{d}", .{ io.tmpDir(&temporary), io.milliTimestamp() });
+    defer io.cwdDeleteTree(cache_path) catch {};
+    integration.api.opal_browser_integration_configure(&resource, &cache);
+    defer integration.api.opal_browser_integration_configure("", "");
+    var window = try backend();
+    defer window.deinit();
+    configure("{\"canvas\":false,\"proxy_mode\":\"system\",\"block_ads\":false,\"block_trackers\":false}");
+    try attach(@ptrCast(window.window));
+    defer native.deinit();
+    var detail: [256]u8 = undefined;
+    var status: c_int = 0;
+    for (0..2000) |_| {
+        native.api.opal_browser_test_pump();
+        status = integration.api.opal_browser_integration_status(&detail, detail.len);
+        if (status != 0) break;
+    }
+    if (status != 2) std.debug.print("First party extension: {s}\n", .{std.mem.sliceTo(&detail, 0)});
+    try std.testing.expectEqual(@as(c_int, 2), status);
+    const before = Native.opal_browser_integration_test_messages();
+    var server = try (try std.Io.net.IpAddress.parse("127.0.0.1", 0)).listen(io.io(), .{ .reuse_address = true });
+    defer server.deinit(io.io());
+    var fixture: Fixture = .{};
+    var task = try io.io().concurrent(Fixture.serve, .{ &server, &fixture });
+    defer stopServer(&server, &task, &fixture);
+    try navigate(server.socket.address.getPort(), "integration", "Image allowed");
+    for (0..2000) |_| {
+        native.api.opal_browser_test_pump();
+        if (Native.opal_browser_integration_test_messages() > before) break;
+    }
+    try std.testing.expect(Native.opal_browser_integration_test_messages() > before);
+}
+test "Native browser protections media transport retains headers bounds response memory and releases leases" {
+    const integration = @import("../services/browser_integration.zig");
+    const Native = struct {
+        extern fn opal_browser_integration_test_session() u64;
+        extern fn opal_browser_integration_test_session_count() u64;
+    };
+    const before = Native.opal_browser_integration_test_session_count();
+    const token = Native.opal_browser_integration_test_session();
+    try std.testing.expectEqual(before + 1, Native.opal_browser_integration_test_session_count());
+    integration.retain(token);
+    integration.release(token);
+    var released = false;
+    defer if (!released) integration.release(token);
+    var server = try (try std.Io.net.IpAddress.parse("127.0.0.1", 0)).listen(io.io(), .{ .reuse_address = true });
+    defer server.deinit(io.io());
+    var fixture: Fixture = .{ .range_test = true };
+    var task = try io.io().concurrent(Fixture.serve, .{ &server, &fixture });
+    defer stopServer(&server, &task, &fixture);
+    var url: [256:0]u8 = @splat(0);
+    _ = try std.fmt.bufPrint(&url, "http://127.0.0.1:{d}/range", .{server.socket.address.getPort()});
+    var body: [4]u8 = undefined;
+    var code: c_int = 0;
+    const headers = "{\"Cookie\":\"session=one; other=two\",\"Accept\":\"video/*, */*\"}";
+    try std.testing.expectEqual(@as(usize, 4), integration.api.opal_browser_media_fetch(token, &url, headers, "bytes=4-7", &body, body.len, &code));
+    try std.testing.expectEqualStrings("4567", &body);
+    try std.testing.expectEqual(@as(c_int, 206), code);
+    try std.testing.expectEqual(@as(u32, 7), fixture.headers_seen.load(.acquire));
+    @memset(&url, 0);
+    _ = try std.fmt.bufPrint(&url, "http://127.0.0.1:{d}/large", .{server.socket.address.getPort()});
+    try std.testing.expectEqual(@as(usize, 0), integration.api.opal_browser_media_fetch(token, &url, headers, "bytes=4-7", &body, body.len, &code));
+    integration.release(token);
+    released = true;
+    try std.testing.expectEqual(before, Native.opal_browser_integration_test_session_count());
+    try std.testing.expectEqual(@as(usize, 0), integration.api.opal_browser_media_fetch(token, &url, headers, "bytes=4-7", &body, body.len, &code));
 }
 test "Native browser protections block canvas readback and preserve trusted editors" {
     var window = try backend();
@@ -164,7 +255,10 @@ test "Native browser protections load actual extensions and block owned ad reque
     // The popup must fit its content, rather than a fixed 440x600 panel.
     opal_extension_test_hide_popup(1);
     defer opal_extension_test_hide_popup(0);
-    privacy.api.opal_extension_action(1, 0);
+    // New-tab dashboards hide the child web view; toolbar actions still own
+    // their native popup above the SDL content view.
+    native.api.opal_browser_present(0, 0, 600, 400, 600, 400, 0, 0, 1);
+    privacy.api.opal_extension_action_at(1, 0.8, 0.03, 0.04, 0.05);
     var width: f64 = 0;
     var height: f64 = 0;
     var presented = false;
@@ -178,6 +272,7 @@ test "Native browser protections load actual extensions and block owned ad reque
     try std.testing.expect(presented);
     try std.testing.expect(width >= 238 and width <= 270);
     try std.testing.expect(height >= 112 and height <= 144);
+    native.api.opal_browser_present(0, 0, 600, 400, 600, 400, 1, 0, 1);
     privacy.api.opal_extension_unload(1);
     try navigate(server.socket.address.getPort(), "disabled", "Image allowed");
 }
@@ -201,6 +296,10 @@ test "Native browser protections official uBlock Lite blocks a real EasyList mat
     @memcpy(path[0..package.len], package);
     privacy.api.opal_extension_load(0, &path);
     try waitExtension(0);
+    var icon: [8192]u8 = undefined;
+    const icon_len = privacy.api.opal_extension_icon_copy(0, &icon, icon.len);
+    try std.testing.expect(icon_len > 8);
+    try std.testing.expectEqualStrings("\x89PNG\r\n\x1a\n", icon[0..8]);
     _ = before;
     // WebKit compiles large static lists asynchronously. Probe new owned pages
     // until filtering takes effect, then assert the blocked request never lands.

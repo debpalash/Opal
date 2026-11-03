@@ -3,6 +3,7 @@
 #import <WebKit/WebKit.h>
 #import <Network/Network.h>
 #import "browser_security.h"
+#import "browser_integration.h"
 #include <string.h>
 #include <CommonCrypto/CommonDigest.h>
 static __weak WKWebView *page;
@@ -25,6 +26,9 @@ static NSMutableDictionary<NSNumber *, NSString *> *messages;
 static void signal_ui(void);
 static NSString *import_error;
 static unsigned serials[8];
+static unsigned long long icon_revision = 1;
+static NSRect toolbar_anchor;
+static BOOL has_toolbar_anchor;
 static WKContentRuleList *proxy_guard;
 static BOOL proxy_guard_compiling;
 static NSMapTable<WKWebView *, NSURL *> *waiting_proxy_urls;
@@ -76,6 +80,7 @@ static NSString *import_path;
 static NSString *import_name;
 static void signal_ui(void) { if (wake) wake(); }
 static void status(int slot, int code, NSString *message) {
+    ++icon_revision;
     statuses[@(slot)] = @(code); messages[@(slot)] = message ?: @""; signal_ui();
 }
 static size_t copy(NSString *text, char *out, size_t cap) {
@@ -119,6 +124,12 @@ static void show_popup(WKWebView *web, NSString *title) {
     popup.contentView = web; [popup center]; if (!test_hide_popup) [popup makeKeyAndOrderFront:nil];
 }
 @implementation OpalExtensionHost
+- (void)webExtensionController:(WKWebExtensionController *)controller didUpdateAction:(WKWebExtensionAction *)action forExtensionContext:(WKWebExtensionContext *)context {
+    ++icon_revision; signal_ui();
+}
+- (void)webExtensionController:(WKWebExtensionController *)controller sendMessage:(id)message toApplicationWithIdentifier:(NSString *)applicationIdentifier forExtensionContext:(WKWebExtensionContext *)context replyHandler:(void (^)(id, NSError *))reply {
+    if (!opal_browser_integration_message(context, message, page, reply)) reply(nil, [NSError errorWithDomain:@"OpalBrowser" code:4 userInfo:nil]);
+}
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     if (webView != ready_probe) return;
     unsigned epoch = ready_generation, token = ready_serial;
@@ -157,7 +168,7 @@ static void show_popup(WKWebView *web, NSString *title) {
     [web loadRequest:[NSURLRequest requestWithURL:context.optionsPageURL]]; show_popup(web, context.webExtension.displayName); [popup setContentSize:NSMakeSize(900, 700)]; done(nil);
 }
 - (void)webExtensionController:(WKWebExtensionController *)c presentPopupForAction:(WKWebExtensionAction *)action forExtensionContext:(WKWebExtensionContext *)context completionHandler:(void (^)(NSError *))done {
-    if (!page.window || (page.hidden && !test_hide_popup)) {
+    if (!page.window) {
         done([NSError errorWithDomain:@"OpalBrowser" code:2 userInfo:@{NSLocalizedDescriptionKey:@"Open the browser page to use extension controls."}]);
         return;
     }
@@ -172,10 +183,11 @@ static void show_popup(WKWebView *web, NSString *title) {
     action_popover.behavior = NSPopoverBehaviorTransient;
     action_popover.contentViewController.view.appearance = page.appearance;
     if (!test_hide_popup) {
-        NSRect bounds = page.bounds;
-        CGFloat y = page.isFlipped ? NSMinY(bounds) : NSMaxY(bounds) - 1;
-        NSRect anchor = NSMakeRect(MAX(NSMinX(bounds), NSMaxX(bounds) - 220), y, 1, 1);
-        [action_popover showRelativeToRect:anchor ofView:page preferredEdge:NSRectEdgeMinY];
+        NSView *view = page.window.contentView;
+        NSRect bounds = view.bounds;
+        NSRect anchor = NSMakeRect(MAX(0, NSWidth(bounds) - 220), NSHeight(bounds) - 44, 24, 28);
+        if (has_toolbar_anchor) anchor = NSMakeRect(toolbar_anchor.origin.x * NSWidth(bounds), (view.isFlipped ? toolbar_anchor.origin.y : 1 - NSMaxY(toolbar_anchor)) * NSHeight(bounds), toolbar_anchor.size.width * NSWidth(bounds), toolbar_anchor.size.height * NSHeight(bounds));
+        [action_popover showRelativeToRect:anchor ofView:view preferredEdge:NSRectEdgeMinY];
     }
     done(nil);
 }
@@ -242,6 +254,7 @@ void opal_extensions_configure(const char *json, const char *script, int reload)
     NSDictionary *decoded = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
     if (![decoded isKindOfClass:NSDictionary.class]) return;
     settings = decoded; canvas_source = [NSString stringWithUTF8String:script];
+    opal_browser_integration_policy(settings);
     opal_security_configure(settings, security_source, signal_ui);
     ++settings_revision;
     prepare_guard();
@@ -264,6 +277,7 @@ void opal_extensions_prepare(WKWebViewConfiguration *config, int is_private, voi
         cfg.defaultWebsiteDataStore = config.websiteDataStore;
         controller = [[WKWebExtensionController alloc] initWithConfiguration:cfg];
         host = [OpalExtensionHost new]; controller.delegate = host; config.webExtensionController = controller;
+        opal_browser_integration_install(controller, incognito, wake);
         contexts = [NSMutableDictionary new]; statuses = [NSMutableDictionary new]; names = [NSMutableDictionary new]; messages = [NSMutableDictionary new];
     }
 }
@@ -278,7 +292,7 @@ void opal_extensions_bind(WKWebView *web) {
     BOOL opened = tab == nil;
     if (!tab) { tab = [OpalBrowserTab new]; tab.web = web; [browser_tabs addObject:tab]; }
     OpalBrowserTab *previous = current_tab;
-    if (page != web) { [action_popover close]; [presented_action closePopup]; action_popover = nil; presented_action = nil; }
+    if (page != web) { ++icon_revision; [action_popover close]; [presented_action closePopup]; action_popover = nil; presented_action = nil; }
     page = web; current_tab = tab; apply_settings(NO);
     if (@available(macOS 15.4, *)) {
         if (first) [controller didOpenWindow:host];
@@ -303,6 +317,7 @@ void opal_extensions_forget(WKWebView *web) {
     if (tab == current_tab) { current_tab = nil; page = nil; }
 }
 void opal_extensions_close(void) {
+    opal_browser_integration_close();
     ++generation; wake = NULL;
     settings_content = nil;
     [action_popover close]; [presented_action closePopup];
@@ -382,7 +397,26 @@ int opal_extension_status(int slot, char *name, size_t name_cap, char *message, 
     return [statuses[@(slot)] intValue];
 }
 void opal_extension_action(int slot, int options) {
+    has_toolbar_anchor = NO;
     if (@available(macOS 15.4, *)) { WKWebExtensionContext *context = contexts[@(slot)]; if (!context) return; if (options) [host webExtensionController:controller openOptionsPageForExtensionContext:context completionHandler:^(NSError *e) {}]; else [context performActionForTab:current_tab]; }
+}
+unsigned long long opal_extension_icon_revision(void) { return icon_revision; }
+size_t opal_extension_icon_copy(int slot, unsigned char *out, size_t cap) {
+    if (@available(macOS 15.4, *)) {
+        WKWebExtensionContext *context = contexts[@(slot)];
+        NSImage *image = [[context actionForTab:current_tab] iconForSize:NSMakeSize(24,24)] ?: [context.webExtension iconForSize:NSMakeSize(24,24)];
+        if (!image) return 0;
+        NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:32 pixelsHigh:32 bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
+        [NSGraphicsContext saveGraphicsState]; [NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithBitmapImageRep:bitmap]];
+        [image drawInRect:NSMakeRect(0,0,32,32)]; [NSGraphicsContext restoreGraphicsState];
+        NSData *png = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        if (!png.length || png.length > cap) return 0; memcpy(out,png.bytes,png.length); return png.length;
+    }
+    return 0;
+}
+void opal_extension_action_at(int slot, double x, double y, double w, double h) {
+    toolbar_anchor = NSMakeRect(x,y,w,h); has_toolbar_anchor = YES;
+    if (@available(macOS 15.4, *)) { WKWebExtensionContext *context = contexts[@(slot)]; if (context) [context performActionForTab:current_tab]; }
 }
 void opal_extension_pick(void) {
     if (@available(macOS 15.4, *)) {

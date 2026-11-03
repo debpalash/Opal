@@ -15,6 +15,30 @@ var port_buf: [8]u8 = @splat(0);
 var show_connection_details = false;
 var show_authentication = false;
 var editor_error: []const u8 = "";
+var extension_icons: [8]struct { revision: u64 = 0, bytes: [8192]u8 = undefined, len: usize = 0 } = @splat(.{});
+fn extensionAction(slot: usize, title: []const u8) void {
+    if (comptime !privacy.supported) return;
+    const cache = &extension_icons[slot];
+    const revision = privacy.api.opal_extension_icon_revision();
+    if (cache.revision != revision) {
+        cache.len = privacy.api.opal_extension_icon_copy(@intCast(slot), &cache.bytes, cache.bytes.len);
+        cache.revision = revision;
+    }
+    var button: dvui.ButtonWidget = undefined;
+    button.init(@src(), .{}, .{ .id_extra = slot, .padding = dvui.Rect.all(5), .gravity_y = 0.5, .background = true, .color_fill = .{ .color = theme.transparent }, .color_fill_hover = .{ .color = theme.colors.bg_hover }, .color_fill_press = .{ .color = theme.colors.bg_elevated }, .corners = theme.dims.rad_sm });
+    button.processEvents();
+    button.drawBackground();
+    if (cache.len > 0) _ = dvui.image(@src(), .{ .source = .{ .imageFile = .{ .bytes = cache.bytes[0..cache.len], .invalidation = .bytes } } }, .{ .min_size_content = .{ .w = 20, .h = 20 }, .max_size_content = .{ .w = 20, .h = 20 } }) else dvui.icon(@src(), title, if (slot == 0) icons.@"shield-check" else icons.puzzle, .{}, .{ .min_size_content = .{ .w = 20, .h = 20 }, .color_text = .{ .color = theme.colors.text_secondary } });
+    c.tip(@src(), button.data().*, title);
+    button.drawFocus();
+    if (button.clicked()) {
+        open = false;
+        const rect = button.data().borderRectScale().r;
+        const window = dvui.windowRectPixels();
+        privacy.api.opal_extension_action_at(@intCast(slot), (rect.x - window.x) / window.w, (rect.y - window.y) / window.h, rect.w / window.w, rect.h / window.h);
+    }
+    button.deinit();
+}
 pub const ConnectionLayout = struct {
     panel: dvui.Rect.Physical = .{},
     routes: [3]dvui.Rect.Physical = @splat(.{}),
@@ -54,6 +78,15 @@ pub fn render(part: @import("../services/native_browser.zig").Chrome) void {
         if (@import("browser_hub.zig").renderWorkspaceAction()) {
             open = false;
             closeEditor();
+        }
+        if (privacy.prefs.ubol_installed and privacy.prefs.ubol_pinned and privacy.prefs.ubol_enabled and (!state.app.incognito_mode or privacy.prefs.ubol_private)) {
+            extensionAction(0, "uBlock Origin Lite");
+        }
+        for (privacy.prefs.extensions[0..privacy.prefs.extension_count], 0..) |*extension, i| {
+            if (!extension.pinned or !extension.enabled or (state.app.incognito_mode and !extension.private)) continue;
+            var pinned = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i });
+            extensionAction(i + 1, extension.name.text());
+            pinned.deinit();
         }
         const clicked = c.iconButton(@src(), icons.puzzle, "Extensions and privacy", open);
         if (clicked) {
@@ -146,6 +179,11 @@ fn extensionControls(slot: usize, title: []const u8, enabled: *bool, private: *b
     var header = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
     dvui.icon(@src(), "", if (slot == 0) icons.@"shield-check" else icons.puzzle, .{}, .{ .min_size_content = .{ .w = 20, .h = 20 }, .gravity_y = 0.5, .color_text = .{ .color = theme.colors.accent }, .margin = .{ .w = 8 } });
     _ = dvui.label(@src(), "{s}", .{title}, .{ .expand = .horizontal, .gravity_y = 0.5, .color_text = .{ .color = theme.colors.text_primary } });
+    const pinned = if (slot == 0) &privacy.prefs.ubol_pinned else &privacy.prefs.extensions[slot - 1].pinned;
+    if (c.iconButton(@src(), if (pinned.*) icons.@"pin-off" else icons.pin, if (pinned.*) "Unpin from toolbar" else "Pin to toolbar", pinned.*)) {
+        pinned.* = !pinned.*;
+        privacy.pinChanged();
+    }
     if (c.iconButton(@src(), icons.power, if (enabled.*) "Disable extension" else "Enable extension", enabled.*)) {
         enabled.* = !enabled.*;
         privacy.changed();

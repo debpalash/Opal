@@ -10,7 +10,7 @@ menus and web media directly; there is no JPEG capture or remote input protocol
 in this path. The toolbar routes navigation, history, refresh, zoom, find and
 reader text to WebKit. Command-L/F/K return focus to Opal's controls.
 
-The Browser sidebar entry opens the browser directly. Pairing, shared pages and
+The Browser entry sits directly below Home and opens the browser directly. Pairing, shared pages and
 detected streams live in a modal opened beside the Extensions button. It closes
 with Escape or its close button, and new navigation dismisses it. The native
 WebKit view yields while the modal is open, then returns when it closes.
@@ -29,6 +29,20 @@ measurements. Private browsing hides regular recents. The dashboard loads no
 remote assets and exposes neither history nor proxy credentials to JavaScript.
 Pins move tabs to the front and protect them from accidental close actions;
 unpin to close them. Pins belong to the current live browser session.
+
+Recents use a horizontal row of favicon cards below search. Icons are cached
+from visited pages; opening a new tab does not contact favicon services. Sites
+without a cached icon show their initial. Private visits do not persist icons.
+
+YouTube players expose a user-activated **Play in Opal** button. The handoff
+keeps the page position (including zero), playback speed, volume, mute and pause
+state. When WebKit exposes the signed video/audio requests, Opal reuses their
+headers and URLs through a bounded range adapter with the browser's connection
+configuration. Otherwise extraction uses a temporary, private cookie snapshot
+and the selected proxy. Browser streams do not enter the public resolver cache
+or silently fall back to an anonymous connection. Temporary credentials are
+deleted when the stream's last lease closes. This currently targets YouTube;
+it does not extract DRM-protected media.
 
 The built-in shield blocks a small explicit set of known ad/tracker domains,
 alongside installed extensions. Its counters report observed blocked resource
@@ -102,6 +116,9 @@ full Firefox/Chromium uBlock Origin extension is not supported by this engine.
 Compatible ZIP/unpacked WebExtensions can be imported with a native permission
 review, enabled, reloaded, configured or removed. Private-window access is off
 by default and uses a separate ephemeral controller when allowed.
+Each extension can be pinned to the address toolbar. Its own icon opens its
+native action popup, anchored below that icon, including on the new-tab page.
+Pin preferences persist independently of enabled and private-access settings.
 
 Canvas protection runs at document start in every frame. It blocks pixel
 readback/export while preserving drawing, with exact-host exceptions for trusted

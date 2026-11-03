@@ -12,7 +12,7 @@ pub const Profile = struct {
     username: Field(128) = .{},
     password: Field(128) = .{},
 };
-pub const Extension = struct { path: Field(1024) = .{}, name: Field(96) = .{}, enabled: bool = true, private: bool = false };
+pub const Extension = struct { path: Field(1024) = .{}, name: Field(96) = .{}, enabled: bool = true, private: bool = false, pinned: bool = false };
 pub const Prefs = struct {
     canvas: bool = true,
     block_ads: bool = true,
@@ -23,6 +23,7 @@ pub const Prefs = struct {
     ubol_installed: bool = false,
     ubol_enabled: bool = true,
     ubol_private: bool = false,
+    ubol_pinned: bool = true,
     proxy_mode: ProxyKind = .system,
     active_profile: usize = 0,
     profile_count: usize = 0,
@@ -45,7 +46,7 @@ pub fn hostAllowed(prefs: *const Prefs, host: []const u8) bool {
     return false;
 }
 const ProfileJSON = struct { name: []const u8 = "", kind: ProxyKind = .http, host: []const u8 = "", port: u16 = 8080, username: []const u8 = "", password: []const u8 = "" };
-const ExtensionJSON = struct { path: []const u8 = "", name: []const u8 = "", enabled: bool = true, private: bool = false };
+const ExtensionJSON = struct { path: []const u8 = "", name: []const u8 = "", enabled: bool = true, private: bool = false, pinned: bool = false };
 const JSON = struct {
     canvas: bool = true,
     block_ads: bool = true,
@@ -56,6 +57,7 @@ const JSON = struct {
     ubol_installed: bool = false,
     ubol_enabled: bool = true,
     ubol_private: bool = false,
+    ubol_pinned: bool = true,
     proxy_mode: ProxyKind = .system,
     active_profile: usize = 0,
     profiles: []const ProfileJSON = &.{},
@@ -67,9 +69,9 @@ pub fn encode(prefs: *const Prefs, buffer: []u8, runtime_secrets: bool) ?[]const
     var extensions: [max_extensions]ExtensionJSON = undefined;
     var exceptions: [16][]const u8 = undefined;
     for (prefs.profiles[0..prefs.profile_count], 0..) |*p, i| profiles[i] = .{ .name = p.name.text(), .kind = p.kind, .host = p.host.text(), .port = p.port, .username = p.username.text(), .password = if (runtime_secrets) p.password.text() else "" };
-    for (prefs.extensions[0..prefs.extension_count], 0..) |*e, i| extensions[i] = .{ .path = e.path.text(), .name = e.name.text(), .enabled = e.enabled, .private = e.private };
+    for (prefs.extensions[0..prefs.extension_count], 0..) |*e, i| extensions[i] = .{ .path = e.path.text(), .name = e.name.text(), .enabled = e.enabled, .private = e.private, .pinned = e.pinned };
     for (prefs.canvas_exceptions[0..prefs.canvas_exception_count], 0..) |*e, i| exceptions[i] = e.text();
-    const value: JSON = .{ .canvas = prefs.canvas, .block_ads = prefs.block_ads, .block_trackers = prefs.block_trackers, .clean_tracking_cookies = prefs.clean_tracking_cookies, .block_webrtc = prefs.block_webrtc, .https_only = prefs.https_only, .ubol_installed = prefs.ubol_installed, .ubol_enabled = prefs.ubol_enabled, .ubol_private = prefs.ubol_private, .proxy_mode = prefs.proxy_mode, .active_profile = prefs.active_profile, .profiles = profiles[0..prefs.profile_count], .extensions = extensions[0..prefs.extension_count], .canvas_exceptions = exceptions[0..prefs.canvas_exception_count] };
+    const value: JSON = .{ .canvas = prefs.canvas, .block_ads = prefs.block_ads, .block_trackers = prefs.block_trackers, .clean_tracking_cookies = prefs.clean_tracking_cookies, .block_webrtc = prefs.block_webrtc, .https_only = prefs.https_only, .ubol_installed = prefs.ubol_installed, .ubol_enabled = prefs.ubol_enabled, .ubol_private = prefs.ubol_private, .ubol_pinned = prefs.ubol_pinned, .proxy_mode = prefs.proxy_mode, .active_profile = prefs.active_profile, .profiles = profiles[0..prefs.profile_count], .extensions = extensions[0..prefs.extension_count], .canvas_exceptions = exceptions[0..prefs.canvas_exception_count] };
     var writer = std.Io.Writer.fixed(buffer);
     std.json.Stringify.value(value, .{}, &writer) catch return null;
     return writer.buffered();
@@ -89,6 +91,7 @@ pub fn decode(allocator: std.mem.Allocator, text: []const u8, prefs: *Prefs) !vo
     next.ubol_installed = json.ubol_installed;
     next.ubol_enabled = json.ubol_enabled;
     next.ubol_private = json.ubol_private;
+    next.ubol_pinned = json.ubol_pinned;
     next.proxy_mode = json.proxy_mode;
     next.active_profile = json.active_profile;
     for (json.profiles, 0..) |p, i| {
@@ -111,6 +114,7 @@ pub fn decode(allocator: std.mem.Allocator, text: []const u8, prefs: *Prefs) !vo
         next.extensions[i].name.set(e.name);
         next.extensions[i].enabled = e.enabled;
         next.extensions[i].private = e.private;
+        next.extensions[i].pinned = e.pinned;
         next.extension_count += 1;
     }
     for (json.canvas_exceptions, 0..) |host, i| {
@@ -175,4 +179,19 @@ test "canvas exceptions match exact hosts and never grant third-party frames acc
     try std.testing.expect(hostAllowed(&prefs, "EDITOR.EXAMPLE"));
     try std.testing.expect(!hostAllowed(&prefs, "tracking.editor.example"));
     try std.testing.expect(!hostAllowed(&prefs, "editor.example.evil"));
+}
+test "extension toolbar pins persist independently of enabled and private access" {
+    var prefs: Prefs = .{};
+    prefs.ubol_pinned = false;
+    prefs.extension_count = 1;
+    prefs.extensions[0].name.set("Owned extension");
+    prefs.extensions[0].path.set("/owned/extension");
+    prefs.extensions[0].pinned = true;
+    prefs.extensions[0].enabled = false;
+    prefs.extensions[0].private = false;
+    var buffer: [32768]u8 = undefined;
+    var restored: Prefs = .{};
+    try decode(std.testing.allocator, encode(&prefs, &buffer, false).?, &restored);
+    try std.testing.expect(!restored.ubol_pinned and restored.extensions[0].pinned);
+    try std.testing.expect(!restored.extensions[0].enabled and !restored.extensions[0].private);
 }

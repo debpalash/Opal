@@ -442,19 +442,24 @@ test "Poorly Drawn Lines identities open the comic reader and reject nonnumeric 
 }
 pub fn routeContent(url: []const u8) ContentRoute {
     if (isPublicWebcomicRoute(url)) return .comic_viewer;
+    const uri = std.Uri.parse(url) catch null;
+    const web = if (uri) |u| std.ascii.eqlIgnoreCase(u.scheme, "http") or std.ascii.eqlIgnoreCase(u.scheme, "https") else false;
+    const host = if (web and uri.?.host != null) componentText(uri.?.host.?) else "";
+    const path = if (web) componentText(uri.?.path) else url;
+    const file_path = path[0 .. std.mem.indexOfAny(u8, path, "?#") orelse path.len];
     // Torrents → the torrent engine. This MUST come before the domain-substring
     // loops below: a .torrent hosted on, say, a video domain would otherwise be
     // swallowed by the `indexOf(domain)` scan and handed to mpv. Magnets are here
     // for the same reason a .torrent is — nothing else in the router recognized
     // them, so a CLI/drag-dropped magnet fell through to the catch-all `.web`.
     if (std.mem.startsWith(u8, url, "magnet:")) return .torrent;
-    if (endsWithIgnoreCase(url, ".torrent")) return .torrent;
+    if (endsWithIgnoreCase(file_path, ".torrent")) return .torrent;
 
     // Video/audio extensions → mpv. Case-insensitive: cameras and Windows
     // tools routinely write .MP4/.MOV/.AVI, and a double-clicked uppercase
     // file must play, not land in the web browser.
     for (media_exts) |ext| {
-        if (endsWithIgnoreCase(url, ext)) return .mpv;
+        if (endsWithIgnoreCase(file_path, ext)) return .mpv;
     }
 
     // Video hosting sites → mpv (via yt-dlp)
@@ -470,7 +475,7 @@ pub fn routeContent(url: []const u8) ContentRoute {
         "dlive.tv",        "afreecatv.com",  "pluto.tv",       "odysee.com",
     };
     for (mpv_domains) |domain| {
-        if (std.mem.indexOf(u8, url, domain) != null) return .mpv;
+        if (path.len > 1 and hostMatches(host, domain)) return .mpv;
     }
 
     // Comic sites → comic_viewer
@@ -480,16 +485,25 @@ pub fn routeContent(url: []const u8) ContentRoute {
         "webtoons.com",      "tapas.io",
     };
     for (comic_domains) |domain| {
-        if (std.mem.indexOf(u8, url, domain) != null) return .comic_viewer;
+        if (path.len > 1 and hostMatches(host, domain)) return .comic_viewer;
     }
 
     // Image galleries → comic_viewer (case-insensitive, same as above).
     for (image_exts) |ext| {
-        if (endsWithIgnoreCase(url, ext)) return .comic_viewer;
+        if (endsWithIgnoreCase(file_path, ext)) return .comic_viewer;
     }
 
     // Everything else → web browser
     return .web;
+}
+fn componentText(part: std.Uri.Component) []const u8 {
+    return switch (part) {
+        .raw => |text| text,
+        .percent_encoded => |text| text,
+    };
+}
+fn hostMatches(host: []const u8, domain: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(host, domain) or (host.len > domain.len and host[host.len - domain.len - 1] == '.' and std.ascii.eqlIgnoreCase(host[host.len - domain.len ..], domain));
 }
 
 // ══════════════════════════════════════════════════════════
@@ -679,6 +693,16 @@ test "routeContent classifies media, comics and web" {
     // Regression guard: extensionless stream-ish URL stays .web — known
     // playback must use resumePlayback/loadContentDirect, not routing.
     try std.testing.expectEqual(ContentRoute.web, routeContent("https://cdn.example.com/stream/98765"));
+}
+test "ordinary website domains and media names inside URLs are not playback targets" {
+    for ([_][]const u8{
+        "https://youtube.com",                               "https://www.twitch.tv/",           "https://vimeo.com/?ref=home",
+        "https://sidekick.com/docs",                         "https://notyoutube.com/watch?v=x", "https://example.com/about/youtube.com",
+        "https://example.com/?next=https://twitch.tv/video", "https://example.com/#movie.mp4",   "https://movie.mp4/",
+        "https://youtube.com.evil.example/watch?v=x",
+    }) |url| try std.testing.expectEqual(ContentRoute.web, routeContent(url));
+    try std.testing.expectEqual(ContentRoute.mpv, routeContent("https://media.example/video.MP4?token=x#start"));
+    try std.testing.expectEqual(ContentRoute.mpv, routeContent("https://www.youtube.com/watch?v=abc"));
 }
 
 test "routeContent sends torrents and magnets to the torrent engine" {

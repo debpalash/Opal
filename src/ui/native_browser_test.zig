@@ -493,6 +493,65 @@ test "Native embedded browser renders HTML and extracts actual DOM text" {
         try std.testing.expectEqual(@as(c_int, 1), opal_browser_test_snapshot_result());
     }
 }
+test "Native embedded browser recent cards stay in one scrollable row" {
+    const start = @import("browser_start.zig");
+    var links: [8]state.BrowserLink = @splat(.{});
+    for (&links, 0..) |*link, i| {
+        const label = try std.fmt.bufPrint(&link.text, "A very long recent page title {d} with extra words", .{i});
+        link.text_len = label.len;
+        const url = try std.fmt.bufPrint(&link.url, "https://site{d}.example/", .{i});
+        link.url_len = url.len;
+    }
+    theme.markUiThread();
+    for ([_]u32{ 375, 800, 1280 }) |width| {
+        var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-recent-cards-fixture", .persist_window_geometry = false, .size = .{ .w = @floatFromInt(width), .h = 240 }, .vsync = false, .title = "Opal recent cards fixture", .hidden = true });
+        defer backend.deinit();
+        var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
+        defer window.deinit();
+        for (0..8) |i| {
+            try window.begin(@as(i128, @intCast(i + 1)) * 16_666_667);
+            theme.setTheme();
+            start.recents(&links);
+            if (i >= 4) for (start.recent_bounds_for_test, 0..) |rect, index| {
+                try std.testing.expect(rect.w > 0 and rect.h > 0);
+                try std.testing.expectApproxEqAbs(start.recent_bounds_for_test[0].y, rect.y, 1);
+                try std.testing.expect(rect.h <= 110 * dvui.windowNaturalScale());
+                if (index > 0) try std.testing.expect(rect.x >= start.recent_bounds_for_test[index - 1].x + start.recent_bounds_for_test[index - 1].w);
+            };
+            _ = try window.end(.{});
+        }
+    }
+}
+test "Native embedded browser handoff applies actual mpv speed volume mute and pause" {
+    const c = @import("../core/c.zig").mpv;
+    const player = @import("../player/player.zig");
+    const ctx = c.mpv_create() orelse return error.MpvUnavailable;
+    defer c.mpv_terminate_destroy(ctx);
+    for ([_][2][*:0]const u8{ .{ "config", "no" }, .{ "load-scripts", "no" }, .{ "vo", "null" }, .{ "ao", "null" }, .{ "terminal", "no" } }) |option| try std.testing.expect(c.mpv_set_option_string(ctx, option[0], option[1]) >= 0);
+    try std.testing.expect(c.mpv_initialize(ctx) >= 0);
+    const p = try alloc.create(player.MediaPlayer);
+    defer alloc.destroy(p);
+    @memset(std.mem.asBytes(p), 0);
+    p.mpv_ctx = ctx;
+    p.browser_transport = .{ .time = 91.25, .rate = 1.5, .volume = 0.4, .muted = true, .paused = true };
+    p.applyBrowserTransport();
+    var speed: f64 = 0;
+    var volume: f64 = 0;
+    var muted: c_int = 0;
+    var paused: c_int = 0;
+    try std.testing.expect(c.mpv_get_property(ctx, "speed", c.MPV_FORMAT_DOUBLE, &speed) >= 0);
+    try std.testing.expect(c.mpv_get_property(ctx, "volume", c.MPV_FORMAT_DOUBLE, &volume) >= 0);
+    try std.testing.expect(c.mpv_get_property(ctx, "mute", c.MPV_FORMAT_FLAG, &muted) >= 0);
+    try std.testing.expect(c.mpv_get_property(ctx, "pause", c.MPV_FORMAT_FLAG, &paused) >= 0);
+    try std.testing.expectEqual(@as(f64, 1.5), speed);
+    try std.testing.expectEqual(@as(f64, 40), volume);
+    try std.testing.expectEqual(@as(c_int, 1), muted);
+    try std.testing.expectEqual(@as(c_int, 1), paused);
+    try std.testing.expect(p.browser_transport == null);
+    p.youtube_streams.native_session = 5;
+    p.commitYoutubeFallback();
+    try std.testing.expect(!p.is_loading and !p.youtube_default_retry_pending and p.load_error_len > 0);
+}
 
 test "Native embedded browser aligns address controls above tabs and hover leaves content fixed" {
     const shell = @import("shell.zig");

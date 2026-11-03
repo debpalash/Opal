@@ -34,6 +34,10 @@ var sidebar_fixture: ?bool = null;
 var sidebar_scroll: dvui.ScrollInfo = .{};
 var sidebar_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 var anime_sidebar_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+var primary_sidebar_rects: [3]dvui.Rect.Physical = @splat(.{});
+pub fn sidebarPrimaryBoundsForTest() [3]dvui.Rect.Physical {
+    return primary_sidebar_rects;
+}
 pub fn sidebarAnimeBoundsForTest() dvui.Rect.Physical {
     return anime_sidebar_rect;
 }
@@ -1020,7 +1024,7 @@ const BROWSE_SOURCES = [_]state.DrawerTab{ .TMDB, .YouTube, .Iptv, .Anime, .Podc
 const WATCH_SOURCES = [_]state.DrawerTab{ .TMDB, .YouTube, .Anime, .Drama, .Iptv };
 const LISTEN_SOURCES = [_]state.DrawerTab{ .Podcasts, .Radio, .Music };
 const READ_SOURCES = [_]state.DrawerTab{ .Comics, .Novels, .Vndb, .RSS };
-const CONNECTED_SOURCES = [_]state.DrawerTab{ .Web, .Wallpapers };
+const CONNECTED_SOURCES = [_]state.DrawerTab{.Wallpapers};
 
 /// Persistent grouped navigation. Ordinary buttons retain keyboard focus and
 /// activation semantics; the icon rail exposes the same labels through tips.
@@ -1057,6 +1061,7 @@ fn renderSidebar(layout: sidebar_layout.Layout) void {
             if (route == .home) @import("home.zig").showOverview();
             state.app.router.navigate(route);
         }
+        if (route == .home and sidebarButton("Browser", iconForTab(.Web), browseSourceActive(.Web), layout.expanded, 8609)) state.navigateToTabNow(.Web);
     }
     sidebarSection("Watch", &WATCH_SOURCES, layout.expanded, 8700);
     sidebarSection("Listen", &LISTEN_SOURCES, layout.expanded, 8800);
@@ -1135,6 +1140,12 @@ fn sidebarButton(label: []const u8, glyph: []const u8, active: bool, expanded: b
     button.processEvents();
     if (id == 8703) anime_sidebar_rect = button.data().borderRectScale().r;
     if (id == 8701) movies_sidebar_rect = button.data().borderRectScale().r;
+    if (@import("builtin").is_test) switch (id) {
+        8610 => primary_sidebar_rects[0] = button.data().borderRectScale().r,
+        8609 => primary_sidebar_rects[1] = button.data().borderRectScale().r,
+        8611 => primary_sidebar_rects[2] = button.data().borderRectScale().r,
+        else => {},
+    };
     button.drawBackground();
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .both,
@@ -1215,6 +1226,16 @@ fn browseSourceSelect(dense: bool) ?state.DrawerTab {
                 if (route == .search) search_mod.changeSearchScope(.all);
                 if (route == .home) @import("home.zig").showOverview();
                 state.app.router.navigate(route);
+            }
+            if (route == .home and dvui.menuItemLabel(@src(), "Browser", .{}, .{
+                .id_extra = 8049,
+                .expand = .horizontal,
+                .color_text = @import("color_compat.zig").wrap(if (browseSourceActive(.Web)) theme.colors.accent else theme.colors.text_primary),
+                .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+                .padding = dvui.Rect.all(theme.spacing.sm),
+            }) != null) {
+                popup.close();
+                state.navigateToTabNow(.Web);
             }
         }
         browseSourceSection("WATCH", &WATCH_SOURCES, 8100, &picked);

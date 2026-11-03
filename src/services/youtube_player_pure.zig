@@ -22,6 +22,11 @@ pub const Stream = struct {
 };
 
 pub const Streams = struct {
+    /// Browser credentials remain leased to this process and never enter the public cache.
+    native_session: u64 = 0,
+    video_headers: [4096:0]u8 = @splat(0),
+    audio_headers: [4096:0]u8 = @splat(0),
+    browser_quality: ?usize = null,
     title: [256]u8 = undefined,
     title_len: usize = 0,
     progressive: Stream = .{},

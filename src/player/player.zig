@@ -408,6 +408,7 @@ pub const MediaPlayer = struct {
     /// Process-unique identity for this logical replacement load. Async
     /// resolvers publish against it instead of dereferencing a stale player.
     load_serial: u64 = 0,
+    browser_transport: ?@import("../services/browser_handoff_pure.zig").Transport = null,
     loading_label: [128]u8 = std.mem.zeroes([128]u8),
     loading_label_len: usize = 0,
     load_error: [192]u8 = std.mem.zeroes([192]u8),
@@ -822,6 +823,7 @@ pub const MediaPlayer = struct {
         self.last_error_time = 0;
         self.is_buffering_paused = false;
         self.load_serial = 0;
+        self.browser_transport = null;
         self.selected_file_idx = -1;
         self.cell_volume = state.app.playback_volume;
         self.cell_speed = state.app.playback_speed;
@@ -1422,12 +1424,14 @@ pub const MediaPlayer = struct {
         // the already-staged original request and must not erase its identity.
         @import("../services/auto_subs.zig").cancelForMediaChange();
         self.load_serial = playback_load_sequence.fetchAdd(1, .acq_rel) + 1;
+        self.browser_transport = null;
         if (self.youtube_proxy_handle.valid()) {
             @import("youtube_range_proxy.zig").stop(self.youtube_proxy_handle);
             self.youtube_proxy_handle = @import("youtube_range_proxy.zig").invalid_handle;
             self.youtube_streams = .{};
             self.youtube_active_height = 0;
         }
+        self.youtube_streams = .{};
         // A replace is a new logical position: a previous file's stall point
         // must never become this file's EOF-reload resume. Reloads of the SAME
         // file are unaffected — the resume fields are consumed into mpv
@@ -1544,6 +1548,11 @@ pub const MediaPlayer = struct {
 
         // Direct InnerTube adaptive playback resolves the real qualities once;
         // the local range adapter then makes each choice immediately reusable.
+        if (request.browser_handoff) {
+            self.youtube_default_retry_pending = false;
+            if (previous_position) |snapshot| persistPositionSnapshot(snapshot, true);
+            return;
+        }
         if (self.youtube_default_retry_pending and
             @import("../services/youtube_player.zig").resolveAsync(path_span, self, self.load_serial))
         {
@@ -1672,7 +1681,7 @@ pub const MediaPlayer = struct {
         };
         self.youtube_default_retry_pending = false;
         self.youtube_quality_fallback_pending = false;
-        self.playYoutubeQuality(if (self.audio_only_intent) 3 else state.app.ytdl_format_idx, false);
+        self.playYoutubeQuality(if (self.audio_only_intent) 3 else streams.browser_quality orelse state.app.ytdl_format_idx, false);
     }
 
     fn playYoutubeQuality(self: *MediaPlayer, requested_idx: usize, preserve_position: bool) void {
@@ -1701,7 +1710,7 @@ pub const MediaPlayer = struct {
         };
         const media = proxy.url(self.youtube_proxy_handle, requested_idx, false, &media_buf) orelse return;
         var audio_buf: [256]u8 = undefined;
-        const audio = if (selected.height > 360 and self.youtube_streams.audio.url_len > 0)
+        const audio = if (self.youtube_streams.audio.url_len > 0 and !std.mem.eql(u8, selected.slice(), self.youtube_streams.progressive.slice()))
             proxy.url(self.youtube_proxy_handle, 3, true, &audio_buf) orelse ""
         else
             "";
@@ -1710,6 +1719,10 @@ pub const MediaPlayer = struct {
     }
 
     pub fn commitYoutubeFallback(self: *MediaPlayer) void {
+        if (self.youtube_streams.native_session != 0) {
+            self.failBrowserHandoff();
+            return;
+        }
         if (self.current_url_len == 0) return;
         @import("../services/youtube_player.zig").invalidateCached(self.current_url[0..self.current_url_len]);
         self.youtube_fast_active = false;
@@ -1719,6 +1732,10 @@ pub const MediaPlayer = struct {
     }
 
     pub fn reloadYoutubeAtQuality(self: *MediaPlayer) void {
+        if (self.youtube_streams.native_session != 0 and !self.youtube_proxy_handle.valid()) {
+            self.failBrowserHandoff();
+            return;
+        }
         if (self.current_url_len == 0) return;
         const url = self.current_url[0..self.current_url_len];
         if (!self.isYoutubeSource()) return;
@@ -1755,6 +1772,7 @@ pub const MediaPlayer = struct {
     }
 
     pub fn reloadYoutubeFast(self: *MediaPlayer) void {
+        if (self.youtube_streams.native_session != 0) return;
         if (self.current_url_len == 0 or self.youtube_fast_active) return;
         const url = self.current_url[0..self.current_url_len];
         const snap = self.playbackSnapshot();
@@ -1767,6 +1785,29 @@ pub const MediaPlayer = struct {
     }
 
     /// Reserve the one provider-negotiated recovery allowed for this load.
+    pub fn failBrowserHandoff(self: *MediaPlayer) void {
+        self.youtube_default_retry_pending = false;
+        self.youtube_quality_fallback_pending = false;
+        self.is_loading = false;
+        const message = "Browser stream could not be opened. Resume the page and try Play in Opal again.";
+        @memcpy(self.load_error[0..message.len], message);
+        self.load_error_len = message.len;
+        state.showToast(message);
+    }
+
+    pub fn applyBrowserTransport(self: *MediaPlayer) void {
+        const transport = self.browser_transport orelse return;
+        self.browser_transport = null;
+        var rate = transport.rate;
+        var volume = transport.volume * 100;
+        var muted: c_int = @intFromBool(transport.muted);
+        var paused: c_int = @intFromBool(transport.paused);
+        _ = c.mpv.mpv_set_property(self.mpv_ctx, "speed", c.mpv.MPV_FORMAT_DOUBLE, &rate);
+        _ = c.mpv.mpv_set_property(self.mpv_ctx, "volume", c.mpv.MPV_FORMAT_DOUBLE, &volume);
+        _ = c.mpv.mpv_set_property(self.mpv_ctx, "mute", c.mpv.MPV_FORMAT_FLAG, &muted);
+        _ = c.mpv.mpv_set_property(self.mpv_ctx, "pause", c.mpv.MPV_FORMAT_FLAG, &paused);
+    }
+
     /// Called only after local/direct alternatives have failed.
     pub fn beginServerRecovery(self: *MediaPlayer) bool {
         if (self.server_recovery_attempted) return false;
@@ -2999,6 +3040,7 @@ pub fn updateTorrentBackgroundTasks() void {
                     // Restored sessions retain their explicitly paused state.
                     if (provider_started) _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "pause", "no");
                 }
+                p.applyBrowserTransport();
                 if (!has_sub and state.app.auto_download_subs and p.current_torrent_id < 0) {
                     // Non-torrent playback: fire the keyless subtitle engine
                     // (rest.opensubtitles.org → Gestdown) off the media title or

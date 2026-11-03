@@ -1940,7 +1940,7 @@ pub fn renderToolbar() void {
                 // anything else becomes a web search (browser_pure logic).
                 var addr_buf: [2048]u8 = undefined;
                 const resolved = pure.resolveAddress(input_text, &addr_buf);
-                if (resolved.len > 0) loadContent(resolved);
+                if (resolved.len > 0) navigate(resolved);
             }
         }
 
@@ -2768,6 +2768,7 @@ pub const routeContent = pure.routeContent;
 /// network option set-or-clear, provider selection, and navigation so callers
 /// cannot accidentally implement only part of a playback transition.
 pub const PlaybackRequest = struct {
+    browser_handoff: bool = false,
     audio_only: bool = false,
     url: []const u8,
     fallback_url: []const u8 = "",
@@ -2813,6 +2814,7 @@ fn FixedPlaybackField(comptime capacity: usize) type {
 /// is still being prepared. Slices from provider workers and UI stack frames
 /// must never outlive the call that supplied them, hence the fixed copies.
 const DeferredPlayback = struct {
+    browser_handoff: bool = false,
     audio_only: bool = false,
     url: FixedPlaybackField(8192) = .{},
     fallback_url: FixedPlaybackField(8192) = .{},
@@ -2851,6 +2853,7 @@ const DeferredPlayback = struct {
             @import("../player/http_headers_pure.zig").buildHeaderFields(request.headers, &fields_buf);
         if (!out.header_fields.set(fields)) return null;
         out.audio_only = request.audio_only;
+        out.browser_handoff = request.browser_handoff;
         out.mode = request.mode;
         out.origin = request.origin;
         out.queue_item_id = request.queue_item_id;
@@ -2860,6 +2863,7 @@ const DeferredPlayback = struct {
 
     fn playbackRequest(self: *const DeferredPlayback) PlaybackRequest {
         return .{
+            .browser_handoff = self.browser_handoff,
             .url = self.url.slice(),
             .audio_only = self.audio_only,
             .fallback_url = self.fallback_url.slice(),
@@ -2996,6 +3000,7 @@ pub fn playDirect(request: PlaybackRequest) void {
     const order = link_health.pure.orderedCandidates(statuses, present);
 
     p.load(.{
+        .browser_handoff = request.browser_handoff,
         .audio_only = request.audio_only,
         .url = candidates[order[0]],
         .fallback_url = candidates[order[1]],
