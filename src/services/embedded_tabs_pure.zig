@@ -23,6 +23,7 @@ pub const Tab = struct {
     title: Text = .{},
     last_visit: Text = .{},
     loading: bool = false,
+    pinned: bool = false,
     pub fn recordVisit(self: *@This(), url: []const u8) bool {
         if (std.mem.eql(u8, url, self.last_visit.text())) return false;
         self.last_visit.set(url);
@@ -55,6 +56,7 @@ pub const Model = struct {
     }
     pub fn close(self: *@This(), id: u32) bool {
         const i = self.index(id) orelse return false;
+        if (self.items[i].pinned) return false;
         if (i < self.active) self.active -= 1;
         var n = i;
         while (n + 1 < self.count) : (n += 1) self.items[n] = self.items[n + 1];
@@ -62,6 +64,21 @@ pub const Model = struct {
         if (self.count == 0) {
             _ = self.create();
         } else self.active = @min(self.active, self.count - 1);
+        return true;
+    }
+    pub fn pin(self: *@This(), id: u32, pinned: bool) bool {
+        const i = self.index(id) orelse return false;
+        const selected = self.current().id;
+        self.items[i].pinned = pinned;
+        // Stable partition keeps both groups in their existing order.
+        var target: usize = 0;
+        for (0..self.count) |n| {
+            if (!self.items[n].pinned) continue;
+            var j = n;
+            while (j > target) : (j -= 1) std.mem.swap(Tab, &self.items[j], &self.items[j - 1]);
+            target += 1;
+        }
+        _ = self.select(selected);
         return true;
     }
     pub fn cycle(self: *@This(), backwards: bool) void {
@@ -126,4 +143,21 @@ test "tab activation does not duplicate visits but real navigation does" {
     }
     try std.testing.expect(model.current().recordVisit("https://b.test/next"));
     try std.testing.expect(model.current().recordVisit("https://b.test/"));
+}
+test "pinned tabs stay first retain selection and resist accidental closing" {
+    var model: Model = .{};
+    const a = model.create().?;
+    const b = model.create().?;
+    const c = model.create().?;
+    try std.testing.expect(model.pin(b, true));
+    try std.testing.expectEqual(b, model.items[0].id);
+    try std.testing.expectEqual(c, model.current().id);
+    try std.testing.expect(!model.close(b));
+    try std.testing.expect(model.pin(c, true));
+    try std.testing.expectEqual(c, model.current().id);
+    try std.testing.expect(model.pin(b, false));
+    try std.testing.expectEqual(c, model.items[0].id);
+    try std.testing.expectEqual(c, model.current().id);
+    try std.testing.expect(model.close(b));
+    try std.testing.expect(model.select(a));
 }

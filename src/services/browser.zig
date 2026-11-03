@@ -102,6 +102,44 @@ pub fn closeTab(id: u32) void {
     native.closeTab(id);
     state.wakeUi();
 }
+pub fn pinTab(id: u32, pinned: bool) void {
+    if (comptime !native.supported) return;
+    ensureTabs();
+    _ = browser_tabs.pin(id, pinned);
+    state.wakeUi();
+}
+pub fn bookmarksForStart() []const state.BrowserLink {
+    loadBookmarks();
+    return bookmarks[0..bookmark_count];
+}
+var recent_rows: [8]state.BrowserLink = @splat(.{});
+var recent_count: usize = 0;
+var recents_loaded = false;
+pub fn recentsForStart() []const state.BrowserLink {
+    if (state.app.incognito_mode) return &.{};
+    if (!recents_loaded) {
+        recents_loaded = true;
+        recent_count = 0;
+        if (db.prepare("SELECT url, title FROM browser_history WHERE length(CAST(url AS BLOB)) < 512 ORDER BY last_visit DESC, rowid DESC LIMIT 8")) |stmt| {
+            defer db.finalize(stmt);
+            while (db.step(stmt) == db.c.SQLITE_ROW and recent_count < recent_rows.len) {
+                const row = &recent_rows[recent_count];
+                row.* = .{};
+                db.copyColumn(stmt, 0, &row.url, &row.url_len);
+                db.copyColumn(stmt, 1, &row.text, &row.text_len);
+                if (@import("native_browser_pure.zig").allowedUrl(row.url[0..row.url_len])) recent_count += 1;
+            }
+        }
+    }
+    return recent_rows[0..recent_count];
+}
+pub fn isStartPage() bool {
+    const b = &state.app.browser;
+    const url = b.url_buf[0..b.url_len];
+    const blank = url.len == 0 or std.mem.eql(u8, url, "about:blank");
+    if (comptime native.supported) return blank and native.api.opal_browser_is_start_page() != 0;
+    return blank;
+}
 pub fn cycleTab(backwards: bool) void {
     if (comptime !native.supported) return;
     ensureTabs();
@@ -1182,6 +1220,7 @@ fn recordVisit(url: []const u8, title: []const u8) void {
     db.bindText(stmt, 2, title);
     _ = db.step(stmt);
     hist_loaded = false; // autocomplete cache refreshes lazily
+    recents_loaded = false;
 }
 
 /// (Re)load the top history rows for autocomplete — most-visited first, so
@@ -2113,6 +2152,10 @@ pub fn renderPageContent() void {
             const r = pane.data().contentRectScale().r;
             const wr = dvui.windowRectPixels();
             native.present(@ptrCast(dvui.currentWindow().backend.impl.window), .{ .x = r.x, .y = r.y, .w = r.w, .h = r.h }, wr.w, wr.h);
+            if (isStartPage()) {
+                native.presented = false;
+                if (native.render_chrome) |render| render(.start);
+            }
         }
         return;
     }

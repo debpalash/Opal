@@ -224,6 +224,7 @@ fn buildSupported(b: *std.Build) void {
             exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/native_browser.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
             exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/live_wallpaper.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
             exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/browser_extensions.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
+            exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/browser_security.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
             exe.root_module.linkFramework("Network", .{});
             exe.root_module.linkFramework("WebKit", .{});
             exe.root_module.linkFramework("QuartzCore", .{});

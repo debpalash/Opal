@@ -9,6 +9,7 @@ pub const api = struct {
     pub extern fn opal_browser_occlude_left(right: f64) void;
     pub extern fn opal_browser_close() void;
     pub extern fn opal_browser_has_focus() c_int;
+    pub extern fn opal_browser_is_start_page() c_int;
     pub extern fn opal_browser_navigate(url: [*:0]const u8) void;
     pub extern fn opal_browser_tab_select(id: u32) c_int;
     pub extern fn opal_browser_tab_close(id: u32) void;
@@ -27,7 +28,7 @@ pub const api = struct {
     pub extern fn opal_browser_test_pump() void;
     pub extern fn opal_browser_test_attached() c_int;
 };
-pub const Chrome = enum { toolbar, panel };
+pub const Chrome = enum { toolbar, panel, start };
 // The UI supplies themed controls without importing presentation into services.
 pub var render_chrome: ?*const fn (Chrome) void = null;
 var lock: @import("../core/sync.zig").Mutex = .{};

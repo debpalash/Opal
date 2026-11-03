@@ -1,6 +1,9 @@
 // WebKit renders and receives input directly in the SDL window. No frame stream.
 #import <AppKit/AppKit.h>
 #import <WebKit/WebKit.h>
+#import "browser_security.h"
+extern int opal_browser_security_navigation_allowed(NSURL *);
+extern void opal_browser_security_wait(WKWebView *, NSURLRequest *);
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_syswm.h>
 #include <string.h>
@@ -59,6 +62,7 @@ static size_t copy_text(NSString *s, char *out, size_t cap) {
 @interface OpalBrowserDelegate : NSObject <WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate>
 @end
 static OpalWebView *view;
+int opal_browser_is_start_page(void) { return !view || !view.URL || [view.URL.absoluteString isEqual:@"about:blank"]; }
 static NSMutableDictionary<NSNumber *, OpalWebView *> *tab_views;
 static unsigned active_tab_id = 1;
 static NSString *new_tab_url;
@@ -102,6 +106,10 @@ static void remove_keyboard_filter(void) {
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)action decisionHandler:(void (^)(WKNavigationActionPolicy))handler {
     NSString *scheme = action.request.URL.scheme.lowercaseString;
     BOOL safe = [scheme isEqual:@"http"] || [scheme isEqual:@"https"] || [scheme isEqual:@"blob"] || [action.request.URL.absoluteString isEqual:@"about:blank"] || (!action.targetFrame.mainFrame && [action.request.URL.absoluteString isEqual:@"about:srcdoc"]);
+    if (safe && [@[@"http", @"https"] containsObject:scheme] && !opal_browser_security_navigation_allowed(action.request.URL)) {
+        if (action.targetFrame.mainFrame) { opal_browser_security_wait(webView, action.request); strcpy(last_error, "Page blocked by the selected privacy route or HTTPS-only setting."); changed(1); }
+        handler(WKNavigationActionPolicyCancel); return;
+    }
     int proxy_policy = safe ? opal_extensions_navigation_allowed(webView, action.request.URL) : 1;
     if (proxy_policy <= 0) {
         if (proxy_policy < 0) { strcpy(last_error, "Local and literal IPv6 pages require System proxy mode."); changed(1); }
@@ -137,6 +145,7 @@ static void remove_keyboard_filter(void) {
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation { if (webView == view) last_error[0] = 0; changed(webView == view ? 129 : 128); }
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation { changed(1); }
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    if (webView == view && [error.domain isEqual:NSURLErrorDomain] && (error.code == NSURLErrorCannotConnectToHost || error.code == NSURLErrorNetworkConnectionLost || error.code == NSURLErrorTimedOut)) opal_security_route_failed();
     if (webView == view && error.code != NSURLErrorCancelled) { copy_text(error.localizedDescription, last_error, sizeof(last_error)); changed(1); }
 }
 - (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error { [self webView:webView didFailProvisionalNavigation:navigation withError:error]; }
