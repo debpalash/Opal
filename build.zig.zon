@@ -1,6 +1,6 @@
 .{
     .name = .opal,
-    .version = "0.9.2",
+    .version = "0.9.3",
     .dependencies = .{
         .translate_c = .{
             .url = "git+https://codeberg.org/ziglang/translate-c?ref=zig-0.17.x#02ff0c523fb92a38939b04d0145c4a9602a74d56",

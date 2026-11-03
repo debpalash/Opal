@@ -50,7 +50,9 @@ void opal_update_ack(void){
  if(![path.lastPathComponent isEqual:@"ready"]||![directory.lastPathComponent hasPrefix:@".opal-update."])return;
  struct stat info;if(lstat(directory.fileSystemRepresentation,&info)!=0||info.st_uid!=getuid()||!S_ISDIR(info.st_mode))return;
  int fd=open(raw,O_CREAT|O_EXCL|O_WRONLY|O_NOFOLLOW,0600);if(fd>=0){write(fd,"ready\n",6);close(fd);}
- unsetenv("OPAL_UPDATE_ACK");
+ // Threaded I/O snapshots the environment table before workers start. Never
+ // mutate it here: removing an entry invalidates that snapshot during child
+ // process creation. The UI's healthy_frames latch makes acknowledgement once-only.
 }
 void opal_update_discard(const char *stage){
  NSString *directory=[NSString stringWithUTF8String:stage];if([directory.lastPathComponent hasPrefix:@".opal-update."])[NSFileManager.defaultManager removeItemAtPath:directory error:nil];

@@ -38,7 +38,8 @@ fn draw() !void {
     try @import("shell.zig").render();
     if (phase != .browser) {
         var value: updater.Snapshot = .{ .has_update = true, .show_prompt = true };
-        value.selection.version.set("0.9.3"); // Illustrative next release, never checked or downloaded.
+        const current_version = comptime std.SemanticVersion.parse(updater.APP_VERSION) catch unreachable;
+        value.selection.version.set(std.fmt.comptimePrint("{d}.{d}.{d}", .{ current_version.major, current_version.minor, current_version.patch + 1 })); // Illustrative next release.
         value.selection.mode = .bundle;
         value.selection.size = 100_000_000;
         value.downloaded = 67_000_000;

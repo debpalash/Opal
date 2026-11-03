@@ -18,7 +18,8 @@ Do not reuse an unrelated hero image to satisfy the check.
    `scripts/release-notes.sh vX.Y.Z`. Notes embed images from that immutable tag.
    The release workflow blocks publication if the visual manifest is missing or invalid.
 5. Run the unit and feature gates, build and launch the installed app, then merge,
-   tag and watch every required packaging job through publication. Verify download
+   run `OPAL_TEST_UPDATE_APP=dist/Opal.app python3 tests/test_update_install.py RealApp`
+   on macOS, then tag and watch every required packaging job through publication. Verify download
    names and checksums. Never announce a published release before its assets exist.
 6. Refresh the README’s first screenshot when the main workflow changes. Put the
    benefit and download link before setup detail. Preserve credits for demo media.

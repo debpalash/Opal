@@ -10,9 +10,9 @@ Add a section and a fresh feature visual BEFORE tagging. See [the release checkl
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
-## v0.9.2 — 2026-11-04
+## v0.9.3 — 2026-11-04
 
-- **Update without leaving Opal.** A small corner prompt offers background downloads and a separate Restart button. Writable macOS app bundles install and reopen automatically, with checksum and bundle verification and rollback if the new app cannot launch. Automatic checks can be turned off in Settings → About; other platforms use their installer or package manager.
+- **Update without leaving Opal.** A small corner prompt offers background downloads and a separate Restart button. Writable macOS app bundles install and reopen automatically, with checksum and bundle verification and rollback if the new app cannot launch. Updated apps reopen reliably while background services start. Automatic checks can be turned off in Settings → About; other platforms use their installer or package manager.
 - **Browse directly inside Opal on macOS.** A native browser replaces the remote-view path, with an aligned address bar, up to 32 tabs, tab pinning, and Command-W closing the tab while keeping Opal open. Browser now sits below Home; pairing and shared streams live beside the extension controls.
 - **A useful new-tab page.** Search, bookmarks, favicon cards for recents, connection controls, and session privacy measurements appear in the app's theme. Private browsing hides regular history.
 - **Browser extensions and connection controls.** Install the verified uBlock Origin Lite package or compatible WebExtensions, pin their icons, and open native popups. Canvas protection, Tor, and a verified pool of saved proxies are available in browser settings. Extensions require macOS 15.4 or later.
@@ -20,6 +20,10 @@ match the tag exactly.
 - **Read comics discovered on the web.** Recognized comic pages offer Read in Opal. Series, year and issue signals search configured sources, open confident matches with chapter navigation, and keep ambiguous editions selectable. More western comic sources and a compact reader toolbar improve browsing.
 - **Better playback and desktop wallpapers.** Restore YouTube quality controls, clear stale lyrics when switching media, and apply macOS live wallpapers on the desktop layer. Video wallpaper discovery and gallery interactions are improved.
 - **Smoother navigation and typing.** Sidebar hover overlays content, ordinary website addresses stay in the browser, webpage typing no longer duplicates characters, and browser tab/layout work is reduced to avoid UI stalls.
+
+## v0.9.2 — 2026-11-04 (unpublished)
+
+Release candidate replaced by v0.9.3 after a real-bundle restart test exposed a startup race.
 
 ## v0.9.1 — 2026-11-02
 
