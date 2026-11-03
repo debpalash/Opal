@@ -17,6 +17,12 @@ static int find_result = -1;
 static NSString *reader_text;
 static char last_error[256];
 static BOOL private_mode;
+static SDL_Window *native_window;
+static unsigned long long metadata_reads, presentation_writes;
+static unsigned long long tabs_revision;
+unsigned long long opal_browser_tabs_revision(void) { return tabs_revision; }
+unsigned long long opal_browser_test_metadata_reads(void) { return metadata_reads; }
+unsigned long long opal_browser_test_presentation_writes(void) { return presentation_writes; }
 static unsigned lifetime;
 static void changed(unsigned flags) { changes |= flags; if (wake_ui) wake_ui(); }
 static size_t copy_text(NSString *s, char *out, size_t cap) {
@@ -30,6 +36,9 @@ static size_t copy_text(NSString *s, char *out, size_t cap) {
     return n;
 }
 @interface OpalWebView : WKWebView
+@property(nonatomic) BOOL presentationThemeSet;
+@property(nonatomic) BOOL presentationDark;
+@property(nonatomic) unsigned presentationRGB;
 @end
 @implementation OpalWebView
 - (BOOL)performKeyEquivalent:(NSEvent *)event {
@@ -57,8 +66,35 @@ static NSView *clip_host;
 static double cover_right;
 static OpalBrowserDelegate *delegate;
 static NSMutableSet<WKDownload *> *downloads;
+static SDL_EventFilter previous_event_filter;
+static void *previous_event_userdata;
+static BOOL keyboard_filter_installed;
+int opal_browser_has_focus(void);
+static int browser_keyboard_filter(void *unused, SDL_Event *event) {
+    // Cocoa's SDL field editor interprets keys before AppKit sends the same
+    // NSEvent to WebKit. Native fields must have a single text-input owner.
+    BOOL keyboard = event->type == SDL_KEYDOWN || event->type == SDL_KEYUP || event->type == SDL_TEXTINPUT || event->type == SDL_TEXTEDITING;
+    if (keyboard && NSThread.isMainThread && native_window && (!event->key.windowID || event->key.windowID == SDL_GetWindowID(native_window)) && view && !view.hidden && opal_browser_has_focus()) {
+        if (SDL_IsTextInputActive()) { SDL_StopTextInput(); if (wake_ui) wake_ui(); }
+        return 0;
+    }
+    return previous_event_filter ? previous_event_filter(previous_event_userdata, event) : 1;
+}
+static void install_keyboard_filter(void) {
+    if (keyboard_filter_installed) return;
+    SDL_GetEventFilter(&previous_event_filter, &previous_event_userdata);
+    SDL_SetEventFilter(browser_keyboard_filter, NULL);
+    keyboard_filter_installed = YES;
+}
+static void remove_keyboard_filter(void) {
+    if (!keyboard_filter_installed) return;
+    SDL_EventFilter current = NULL; void *userdata = NULL;
+    SDL_GetEventFilter(&current, &userdata);
+    if (current == browser_keyboard_filter) SDL_SetEventFilter(previous_event_filter, previous_event_userdata);
+    keyboard_filter_installed = NO;
+}
 @implementation OpalBrowserDelegate
-- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context { opal_extensions_navigation(object); changed(object == view ? 129 : 128); }
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context { ++tabs_revision; opal_extensions_navigation(object); changed(object == view ? 129 : 128); }
 - (WKWebView *)webView:(WKWebView *)webView createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration forNavigationAction:(WKNavigationAction *)action windowFeatures:(WKWindowFeatures *)features {
     if (!action.targetFrame) { new_tab_url = action.request.URL.absoluteString; changed(64); }
     return nil;
@@ -118,6 +154,7 @@ static OpalWebView *create_tab(WKWebViewConfiguration *config, unsigned identity
     tab.allowsBackForwardNavigationGestures = YES; tab.hidden = YES;
     for (NSString *key in @[@"URL", @"title", @"loading"]) [tab addObserver:delegate forKeyPath:key options:0 context:NULL];
     tab_views[@(identity)] = tab;
+    ++tabs_revision;
     if (clip_host) [clip_host addSubview:tab];
     [tab loadHTMLString:@"<html><head><title>New tab</title><meta name='color-scheme' content='dark light'></head><body></body></html>" baseURL:nil];
     return tab;
@@ -127,7 +164,7 @@ int opal_browser_tab_select(unsigned identity) {
     if (active_tab_id == identity) return 1;
     OpalWebView *next = tab_views[@(identity)];
     if (!next) {
-        if (tab_views.count >= 16) return 0;
+        if (tab_views.count >= 32) return 0;
         next = create_tab([view.configuration copy], identity);
     }
     view.hidden = YES;
@@ -143,13 +180,14 @@ void opal_browser_tab_close(unsigned identity) {
         if (tab_views.count == 1) return;
         for (NSNumber *key in tab_views) if (key.unsignedIntValue != identity) { opal_browser_tab_select(key.unsignedIntValue); break; }
     }
-    opal_extensions_forget(tab); dispose_tab(tab); [tab_views removeObjectForKey:@(identity)]; changed(128);
+    opal_extensions_forget(tab); dispose_tab(tab); [tab_views removeObjectForKey:@(identity)]; ++tabs_revision; changed(128);
 }
 void opal_browser_tab_navigate(unsigned identity, const char *url) {
     NSURL *target = [NSURL URLWithString:[NSString stringWithUTF8String:url]];
     if (target) [tab_views[@(identity)] loadRequest:[NSURLRequest requestWithURL:target]];
 }
 int opal_browser_tab_info(unsigned identity, char *url, size_t url_cap, char *title, size_t title_cap, int *loading) {
+    ++metadata_reads;
     OpalWebView *tab = tab_views[@(identity)]; if (!tab) return 0;
     copy_text(tab.URL.absoluteString ?: @"about:blank", url, url_cap); copy_text(tab.title ?: @"New tab", title, title_cap); *loading = tab.loading; return 1;
 }
@@ -159,6 +197,7 @@ int opal_browser_tab_requested(char *url, size_t cap) {
 }
 void opal_browser_close(void) {
     ++lifetime;
+    remove_keyboard_filter();
     wake_ui = NULL;
     opal_extensions_close();
     for (WKDownload *download in [downloads copy]) { download.delegate = nil; [download cancel:nil]; }
@@ -166,7 +205,9 @@ void opal_browser_close(void) {
     for (OpalWebView *tab in tab_views.allValues) dispose_tab(tab);
     [clip_host removeFromSuperview]; clip_host = nil; cover_right = 0;
     tab_views = nil; active_tab_id = 1; new_tab_url = nil;
+    ++tabs_revision;
     view = nil; delegate = nil; reader_text = nil; changes = 0; last_error[0] = 0; find_result = -1;
+    native_window = NULL;
 }
 int opal_browser_attach(void *sdl_window, int incognito, void (*wake)(void)) {
     SDL_SysWMinfo info; SDL_VERSION(&info.version);
@@ -175,6 +216,8 @@ int opal_browser_attach(void *sdl_window, int incognito, void (*wake)(void)) {
     if (!window) return 0;
     if (view && private_mode != (BOOL)incognito) opal_browser_close();
     wake_ui = wake;
+    native_window = sdl_window;
+    install_keyboard_filter();
     if (!view) {
         private_mode = incognito;
         WKWebViewConfiguration *config = [WKWebViewConfiguration new];
@@ -203,15 +246,21 @@ void opal_browser_present(double x, double y, double width, double height, doubl
     if (pixel_w > 0 && pixel_h > 0) {
         double sx = bounds.size.width / pixel_w, sy = bounds.size.height / pixel_h;
         double covered = MIN(width, MAX(0, cover_right - x)) * sx;
-        clip_host.frame = NSMakeRect(bounds.origin.x + x * sx + covered, bounds.origin.y + (host.isFlipped ? y : pixel_h - y - height) * sy, width * sx - covered, height * sy);
+        NSRect clip_frame = NSMakeRect(bounds.origin.x + x * sx + covered, bounds.origin.y + (host.isFlipped ? y : pixel_h - y - height) * sy, width * sx - covered, height * sy);
+        if (!NSEqualRects(clip_host.frame, clip_frame)) { ++presentation_writes; clip_host.frame = clip_frame; }
         // Crop beneath hover navigation without changing the page's viewport.
-        view.frame = NSMakeRect(-covered, 0, width * sx, height * sy);
+        NSRect page_frame = NSMakeRect(-covered, 0, width * sx, height * sy);
+        if (!NSEqualRects(view.frame, page_frame)) { ++presentation_writes; view.frame = page_frame; }
     }
-    view.appearance = [NSAppearance appearanceNamed:dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
-    if (@available(macOS 12.0, *)) view.underPageBackgroundColor = [NSColor colorWithRed:((rgb >> 16) & 255) / 255. green:((rgb >> 8) & 255) / 255. blue:(rgb & 255) / 255. alpha:1];
+    if (!view.presentationThemeSet || view.presentationDark != (BOOL)dark || view.presentationRGB != rgb) {
+        ++presentation_writes;
+        view.appearance = [NSAppearance appearanceNamed:dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
+        if (@available(macOS 12.0, *)) view.underPageBackgroundColor = [NSColor colorWithRed:((rgb >> 16) & 255) / 255. green:((rgb >> 8) & 255) / 255. blue:(rgb & 255) / 255. alpha:1];
+        view.presentationThemeSet = YES; view.presentationDark = dark; view.presentationRGB = rgb;
+    }
     if (!visible && !view.hidden && [view.window.firstResponder isKindOfClass:NSView.class] && [(NSView *)view.window.firstResponder isDescendantOf:view]) [view.window makeFirstResponder:host];
-    view.hidden = !visible;
-    clip_host.hidden = !visible;
+    if (view.hidden != !visible) view.hidden = !visible;
+    if (clip_host.hidden != !visible) clip_host.hidden = !visible;
 }
 double opal_browser_test_page_width(void) { return view.frame.size.width; }
 double opal_browser_test_clip_width(void) { return clip_host.frame.size.width; }
@@ -219,7 +268,8 @@ void opal_browser_navigate(const char *url) { NSURL *u = [NSURL URLWithString:[N
 void opal_browser_command(int command) {
     if (command == 0) [view goBack]; else if (command == 1) [view goForward]; else if (command == 2) [view reload];
 }
-void opal_browser_zoom(double zoom) { view.pageZoom = zoom; }
+void opal_browser_zoom(double zoom) { if (view && view.pageZoom != zoom) view.pageZoom = zoom; }
+double opal_browser_zoom_factor(void) { return view ? view.pageZoom : 1; }
 void opal_browser_find(const char *text, int backwards) {
     WKFindConfiguration *config = [WKFindConfiguration new]; config.backwards = backwards; config.wraps = YES;
     unsigned generation = lifetime; WKWebView *target = view;
@@ -239,7 +289,19 @@ unsigned opal_browser_poll(char *url, size_t url_cap, char *title, size_t title_
 size_t opal_browser_reader(char *out, size_t cap) { return copy_text(reader_text, out, cap); }
 // Isolated native tests exercise the same WKWebView, not a mock browser.
 void opal_browser_test_html(const char *html) { [view loadHTMLString:[NSString stringWithUTF8String:html] baseURL:[NSURL URLWithString:@"https://opal.invalid/"]]; }
-void opal_browser_test_pump(void) { [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]]; }
+void opal_browser_test_pump(void) { SDL_PumpEvents(); [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]]; }
+void opal_browser_test_focus(void) { SDL_ShowWindow(native_window); SDL_RaiseWindow(native_window); [NSApp activateIgnoringOtherApps:YES]; [view.window makeKeyAndOrderFront:nil]; [view.window makeFirstResponder:view]; }
+void opal_browser_test_key(const char *text, unsigned short code, int command, int repeat) {
+    NSString *characters = [NSString stringWithUTF8String:text];
+    for (int up = 0; up < 2; ++up) {
+        NSEvent *event = [NSEvent keyEventWithType:up ? NSEventTypeKeyUp : NSEventTypeKeyDown location:NSZeroPoint modifierFlags:command ? NSEventModifierFlagCommand : 0 timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:view.window.windowNumber context:nil characters:characters charactersIgnoringModifiers:characters isARepeat:repeat keyCode:code];
+        // Bare test executables may not receive application activation. Route
+        // their command equivalent through the same WebKit responder method.
+        if (command && !view.window.isKeyWindow) { if (!up) [view performKeyEquivalent:event]; continue; }
+        [NSApp postEvent:event atStart:NO];
+        SDL_PumpEvents();
+    }
+}
 int opal_browser_test_attached(void) { return view && view.window && view.superview == clip_host && clip_host.superview == view.window.contentView && view.frame.size.width > 0 && view.frame.size.height > 0; }
 
 int opal_browser_has_focus(void) { return view && [view.window.firstResponder isKindOfClass:NSView.class] && [(NSView *)view.window.firstResponder isDescendantOf:view]; }

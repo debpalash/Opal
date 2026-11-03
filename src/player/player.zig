@@ -16,6 +16,36 @@ pub const PlaybackSnapshot = playback_snapshot.Snapshot;
 
 const MAX_LOAD_URL = 8192;
 
+test "Native media offline SDL fixture: position capture uses observed timing without querying an opening core" {
+    const allocator = @import("../core/alloc.zig").allocator;
+    const handle = c.mpv.mpv_create() orelse return error.MpvUnavailable;
+    defer c.mpv.mpv_terminate_destroy(handle);
+    _ = c.mpv.mpv_set_option_string(handle, "config", "no");
+    _ = c.mpv.mpv_set_option_string(handle, "load-scripts", "no");
+    _ = c.mpv.mpv_set_option_string(handle, "idle", "yes");
+    try std.testing.expect(c.mpv.mpv_initialize(handle) >= 0);
+    const p = try allocator.create(MediaPlayer);
+    defer allocator.destroy(p);
+    @memset(std.mem.asBytes(p), 0);
+    p.mpv_ctx = handle;
+    p.current_torrent_id = -1;
+    const url = "https://fixture.test/opening.mp4";
+    @memcpy(p.current_url[0..url.len], url);
+    p.current_url_len = url.len;
+    p.last_seen_pos = 42;
+    p.cached_duration = 120;
+    // The real idle core has no timing properties. The UI's last observed
+    // snapshot must still be usable without crossing into the core.
+    var unavailable: f64 = 0;
+    try std.testing.expect(c.mpv.mpv_get_property(handle, "duration", c.mpv.MPV_FORMAT_DOUBLE, &unavailable) < 0);
+    const captured = p.captureCurrentPosition() orelse return error.MissingObservedPosition;
+    try std.testing.expectEqual(@as(f64, 42), captured.position);
+    try std.testing.expectEqual(@as(f64, 120), captured.duration);
+    try std.testing.expectEqual(@as(f64, 35), p.playbackSnapshot().percent());
+    p.cached_duration = 0;
+    try std.testing.expect(p.captureCurrentPosition() == null);
+}
+
 /// Production adapter for the typed playback-command seam.  This is the only
 /// implementation allowed to issue mpv's media-load command; the pure module
 /// drives the same two-method interface against an in-memory fake in tests.
@@ -1867,10 +1897,9 @@ pub const MediaPlayer = struct {
 
     fn captureCurrentPosition(self: *MediaPlayer) ?PositionSnapshot {
         if (self.current_url_len == 0 or self.current_url_len > self.current_url.len) return null;
-        var pos: f64 = 0;
-        var dur: f64 = 0;
-        _ = c.mpv.mpv_get_property(self.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &pos);
-        _ = c.mpv.mpv_get_property(self.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur);
+        const playback = self.playbackSnapshot();
+        const pos = playback.time_pos;
+        const dur = playback.duration;
         if (!(pos > 1 and dur > 5)) return null;
 
         const identity = if (self.history_identity_len > 0)
@@ -3602,8 +3631,10 @@ pub fn updateTorrentBackgroundTasks() void {
                     }
                 }
             } else {
-                var percent_pos: f64 = 0;
-                _ = c.mpv.mpv_get_property(p.mpv_ctx, "percent-pos", c.mpv.MPV_FORMAT_DOUBLE, &percent_pos);
+                // This runs on the UI thread even while browsing. Synchronous
+                // mpv property requests can wait indefinitely during a load.
+                const playback = p.playbackSnapshot();
+                const percent_pos = playback.percent();
 
                 // Update libtorrent's deadline window so it prioritizes pieces ahead of playback.
                 // The HTTP proxy handles back-pressure (blocking reads until pieces arrive),
@@ -3626,10 +3657,8 @@ pub fn updateTorrentBackgroundTasks() void {
                         // this row can never be resumed into the right player
                         // later (Jump back in / History fall back to guessing
                         // from the bare name, which routes to the web browser).
-                        var pos_s: f64 = 0;
-                        var dur_s: f64 = 0;
-                        _ = c.mpv.mpv_get_property(p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &pos_s);
-                        _ = c.mpv.mpv_get_property(p.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur_s);
+                        const pos_s = playback.time_pos;
+                        const dur_s = playback.duration;
                         // Torrent completion for the EOF-park guard below: one
                         // C call per 5s save tick, never per frame.
                         var complete: f32 = 1;
@@ -3653,8 +3682,7 @@ pub fn updateTorrentBackgroundTasks() void {
             // Non-torrent content: resume + periodic position save
             // Try resume on first playback (after a frame renders)
             if (!p.resume_seeked) {
-                var dur: f64 = 0;
-                _ = c.mpv.mpv_get_property(p.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur);
+                const dur = p.cached_duration;
                 if (dur > 5) {
                     p.tryResumePosition();
                 }

@@ -8,6 +8,10 @@ static __weak WKWebView *page;
 static void (*wake)(void);
 static NSDictionary *settings;
 static NSString *canvas_source;
+static unsigned long long settings_applications;
+static unsigned long long settings_revision, applied_settings_revision;
+static __weak WKUserContentController *settings_content;
+unsigned long long opal_extensions_test_settings_applications(void) { return settings_applications; }
 static unsigned generation;
 static BOOL incognito;
 static WKWebExtensionController *controller;
@@ -208,6 +212,10 @@ static void apply_proxy(WKWebsiteDataStore *store) {
 static void apply_settings(BOOL network) {
     if (!page || !settings) return;
     WKUserContentController *content = page.configuration.userContentController;
+    if (network) apply_proxy(page.configuration.websiteDataStore);
+    if (settings_content == content && applied_settings_revision == settings_revision) return;
+    settings_content = content; applied_settings_revision = settings_revision;
+    ++settings_applications;
     apply_guard(content);
     [content removeAllUserScripts];
     if ([settings[@"canvas"] boolValue] && canvas_source) {
@@ -217,13 +225,13 @@ static void apply_settings(BOOL network) {
         NSString *script = [canvas_source stringByReplacingOccurrencesOfString:@"__OPAL_EXCEPTIONS__" withString:json];
         [content addUserScript:[[WKUserScript alloc] initWithSource:script injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
     }
-    if (network) apply_proxy(page.configuration.websiteDataStore);
 }
 void opal_extensions_configure(const char *json, const char *script, int reload) {
     NSData *data = [[NSString stringWithUTF8String:json] dataUsingEncoding:NSUTF8StringEncoding];
     NSDictionary *decoded = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
     if (![decoded isKindOfClass:NSDictionary.class]) return;
     settings = decoded; canvas_source = [NSString stringWithUTF8String:script];
+    ++settings_revision;
     prepare_guard();
     if (page && proxy_selected() && !proxy_guard) {
         wait_for_proxy(page, page.URL);
@@ -280,6 +288,7 @@ void opal_extensions_forget(WKWebView *web) {
 }
 void opal_extensions_close(void) {
     ++generation; wake = NULL;
+    settings_content = nil;
     [action_popover close]; [presented_action closePopup];
     action_popover = nil; presented_action = nil;
     if (@available(macOS 15.4, *)) for (WKWebExtensionContext *context in contexts.allValues) [controller unloadExtensionContext:context error:NULL];
@@ -381,7 +390,7 @@ void opal_extension_pick(void) {
 size_t opal_extension_take_import(char *path, size_t cap, char *name, size_t name_cap) { size_t n = copy(import_path, path, cap); copy(import_name, name, name_cap); import_path = nil; import_name = nil; return n; }
 // Test-only DOM probes use the production page and never enable a remote bridge.
 static NSString *probe_result;
-void opal_extensions_test_eval(const char *js) { probe_result = nil; [page evaluateJavaScript:[NSString stringWithUTF8String:js] completionHandler:^(id value, NSError *error) { probe_result = error ? @"ERROR" : [value description]; }]; }
+void opal_extensions_test_eval(const char *js) { probe_result = nil; [page evaluateJavaScript:[NSString stringWithUTF8String:js] completionHandler:^(id value, NSError *error) { probe_result = error ? [@"ERROR: " stringByAppendingString:error.localizedDescription] : [value description]; }]; }
 int opal_extensions_test_result(char *out, size_t cap) { if (!probe_result) return 0; copy(probe_result, out, cap); return 1; }
 
 size_t opal_extension_take_error(char *out, size_t cap) { size_t n = copy(import_error, out, cap); import_error = nil; return n; }

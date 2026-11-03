@@ -16,6 +16,26 @@ pub fn capture(width: u32, height: u32, name: []const u8, setup: ?Draw, draw: Dr
     defer if (!cleaned) {
         if (cleanup) |done| done();
     };
+    // Interaction/stress runs can exercise the same widgets without recording
+    // render targets, reading GPU pixels, or creating image artifacts.
+    if (io.getenv("OPAL_NATIVE_NO_CAPTURE") != null) {
+        for (0..8) |frame| {
+            try window.begin(@as(i128, @intCast(frame + 1)) * 16_666_667);
+            errdefer _ = window.end(.{}) catch null;
+            errdefer if (!cleaned) {
+                if (cleanup) |done| done();
+                cleaned = true;
+            };
+            @import("theme.zig").setTheme();
+            try draw();
+            if (frame == 7) {
+                if (cleanup) |done| done();
+                cleaned = true;
+            }
+            _ = try window.end(.{});
+        }
+        return;
+    }
     var previous_picture: ?dvui.Picture = null;
     for (0..8) |frame| {
         try window.begin(@as(i128, @intCast(frame + 1)) * 16_666_667);

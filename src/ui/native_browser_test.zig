@@ -15,6 +15,24 @@ extern fn opal_browser_test_snapshot_result() c_int;
 extern fn opal_browser_test_page_width() f64;
 extern fn opal_browser_test_clip_width() f64;
 extern fn opal_extensions_test_tab_count() c_int;
+extern fn opal_browser_test_metadata_reads() u64;
+extern fn opal_browser_test_presentation_writes() u64;
+extern fn opal_extensions_test_settings_applications() u64;
+extern fn opal_browser_test_focus() void;
+extern fn opal_browser_test_key(text: [*:0]const u8, code: c_ushort, command: c_int, repeat: c_int) void;
+extern fn opal_app_menu_test_new_tab() void;
+var profile_prepared = false;
+fn prepareProfile() !void {
+    if (profile_prepared) return;
+    {
+        const home = @import("../core/paths.zig").homeDir();
+        var path: [4096]u8 = undefined;
+        for ([_][]const u8{ "Library/Caches", "Library/WebKit", "config", "cache", "data" }) |suffix| {
+            try std.Io.Dir.cwd().createDirPath(io.io(), try std.fmt.bufPrint(&path, "{s}/{s}", .{ home, suffix }));
+        }
+    }
+    profile_prepared = true;
+}
 const TabServer = struct {
     stopping: std.atomic.Value(bool) = .init(false),
     fn serve(listener: *std.Io.net.Server, self: *@This()) void {
@@ -56,9 +74,11 @@ fn pageTitle(wanted: []const u8) !void {
     for (0..1000) |_| {
         native.api.opal_browser_test_pump();
         _ = native.api.opal_browser_poll(&url, url.len, &title, title.len, &err, err.len, &loading, &found);
-        if (loading == 0 and std.mem.eql(u8, std.mem.sliceTo(&title, 0), wanted)) return;
+        // Owned documents publish their title as the readiness marker. WebKit
+        // may keep its network-loading bit set in an occluded test window.
+        if (std.mem.eql(u8, std.mem.sliceTo(&title, 0), wanted)) return;
     }
-    std.debug.print("Tab fixture expected {s}, received {s}\n", .{ wanted, std.mem.sliceTo(&title, 0) });
+    std.debug.print("Tab fixture expected {s}, received {s}; error={s}\n", .{ wanted, std.mem.sliceTo(&title, 0), std.mem.sliceTo(&err, 0) });
     return error.Timeout;
 }
 fn pageScript(script: [*:0]const u8, out: []u8) ![]const u8 {
@@ -71,11 +91,85 @@ fn pageScript(script: [*:0]const u8, out: []u8) ![]const u8 {
     return error.Timeout;
 }
 fn frame(window: *dvui.Window, index: usize, show: bool) !void {
+    try prepareProfile();
     try window.begin(@as(i128, @intCast(index + 1)) * 16_666_667);
     @import("native_browser.zig").beginFrame();
     if (show) @import("../services/browser.zig").renderContent();
     @import("native_browser.zig").endFrame();
     _ = try window.end(.{});
+}
+test "Native embedded browser keyboard types each character once and returns focus to Opal" {
+    const browser = @import("../services/browser.zig");
+    const c = @import("../core/c.zig").sdl;
+    browser.resetTabsForTest();
+    defer browser.resetTabsForTest();
+    var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-keyboard-regression", .persist_window_geometry = false, .size = .{ .w = 800, .h = 500 }, .vsync = false, .title = "Opal keyboard regression", .hidden = true });
+    defer backend.deinit();
+    var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
+    defer window.deinit();
+    theme.markUiThread();
+    var original_filter: c.SDL_EventFilter = null;
+    var original_userdata: ?*anyopaque = null;
+    _ = c.SDL_GetEventFilter(&original_filter, &original_userdata);
+    for (0..8) |i| try frame(&window, i, true);
+    native.api.opal_browser_test_html("<title>Typing ready</title><input id='entry' style='width:300px;height:80px'>");
+    try pageTitle("Typing ready");
+    opal_browser_test_focus();
+    opal_browser_test_key("l", 37, 1, 0);
+    native.api.opal_browser_test_pump();
+    try frame(&window, 8, true);
+    try std.testing.expect(c.SDL_IsTextInputActive() != 0);
+    opal_browser_test_focus();
+    var out: [256]u8 = undefined;
+    _ = try pageScript("document.querySelector('#entry').focus();'focused'", &out);
+    try frame(&window, 9, true);
+    c.SDL_FlushEvents(c.SDL_KEYDOWN, c.SDL_TEXTINPUT);
+    opal_browser_test_key("a", 0, 0, 0);
+    try std.testing.expectEqualStrings("a", try pageScript("document.querySelector('#entry').value", &out));
+    try std.testing.expect(c.SDL_IsTextInputActive() == 0);
+    try std.testing.expect(c.SDL_HasEvent(c.SDL_KEYDOWN) == 0);
+    opal_browser_test_key("a", 0, 0, 1);
+    try std.testing.expectEqualStrings("aa", try pageScript("document.querySelector('#entry').value", &out));
+    opal_browser_test_key("l", 37, 1, 0);
+    native.api.opal_browser_test_pump();
+    try frame(&window, 10, true);
+    try std.testing.expect(c.SDL_IsTextInputActive() != 0);
+    browser.resetTabsForTest();
+    var restored_filter: c.SDL_EventFilter = null;
+    var restored_userdata: ?*anyopaque = null;
+    _ = c.SDL_GetEventFilter(&restored_filter, &restored_userdata);
+    try std.testing.expect(original_filter == restored_filter);
+    try std.testing.expect(original_userdata == restored_userdata);
+}
+test "Native embedded browser keyboard menu actions wake without mirrored SDL keys" {
+    try @import("../macos/app_menu.zig").verifyWakeForTest();
+}
+test "Native embedded browser keyboard command tab shortcuts are owned by the macOS menu" {
+    const browser = @import("../services/browser.zig");
+    browser.resetTabsForTest();
+    defer browser.resetTabsForTest();
+    const old_router = state.app.router;
+    const old_source = state.app.browse_source;
+    defer {
+        state.app.router = old_router;
+        state.app.browse_source = old_source;
+    }
+    var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-menu-keyboard-regression", .persist_window_geometry = false, .size = .{ .w = 800, .h = 500 }, .vsync = false, .title = "Opal native menu routing", .hidden = true });
+    defer backend.deinit();
+    var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
+    defer window.deinit();
+    for (0..8) |i| try frame(&window, i, true);
+    opal_app_menu_test_new_tab();
+    @import("../macos/app_menu.zig").frameTick();
+    try std.testing.expectEqual(@as(usize, 2), browser.tabsView().count);
+    for ([_]dvui.enums.Key{ .t, .w }, 0..) |code, i| {
+        try window.begin(@as(i128, @intCast(i + 9)) * 16_666_667);
+        errdefer _ = window.end(.{}) catch null;
+        _ = try window.addEventKey(.{ .code = code, .action = .down, .mod = .lcommand });
+        @import("browser_tabs.zig").handleShortcuts();
+        try std.testing.expectEqual(@as(usize, 2), browser.tabsView().count);
+        _ = try window.end(.{});
+    }
 }
 test "Native embedded browser renders HTML and extracts actual DOM text" {
     var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-browser-fixture", .persist_window_geometry = false, .size = .{ .w = 800, .h = 600 }, .vsync = false, .title = "Opal isolated WebKit fixture", .hidden = true });
@@ -317,6 +411,134 @@ test "Native embedded browser aligns address controls above tabs and hover leave
     }
 }
 extern fn opal_wallpaper_status() c_int;
+test "Native embedded browser performance avoids unchanged layout metadata and protection resets" {
+    const browser = @import("../services/browser.zig");
+    browser.resetTabsForTest();
+    defer browser.resetTabsForTest();
+    var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-browser-performance", .persist_window_geometry = false, .size = .{ .w = 1100, .h = 720 }, .vsync = false, .title = "Opal browser performance", .hidden = true });
+    defer backend.deinit();
+    var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
+    defer window.deinit();
+    theme.markUiThread();
+    @import("../services/browser_privacy.zig").api.opal_extensions_configure("{\"canvas\":true,\"proxy_mode\":\"system\",\"canvas_exceptions\":[]}", @embedFile("../services/browser_canvas_guard.js"), 0);
+    for (0..8) |i| try frame(&window, i, true);
+    browser.refreshTabs();
+    const reads = opal_browser_test_metadata_reads();
+    for (0..100) |_| browser.refreshTabs();
+    try std.testing.expectEqual(reads, opal_browser_test_metadata_reads());
+    native.endFrame(true, 0, true);
+    const writes = opal_browser_test_presentation_writes();
+    for (0..100) |_| native.endFrame(true, 0, true);
+    try std.testing.expectEqual(writes, opal_browser_test_presentation_writes());
+    browser.newTab("");
+    try frame(&window, 8, true);
+    const applications = opal_extensions_test_settings_applications();
+    for (0..40) |_| browser.cycleTab(false);
+    try std.testing.expectEqual(applications, opal_extensions_test_settings_applications());
+    native.api.opal_browser_test_html("<title>Stable page</title>");
+    try pageTitle("Stable page");
+    native.api.opal_browser_test_html("<title>Fresh metadata</title>");
+    try pageTitle("Fresh metadata");
+    browser.refreshTabs();
+    try std.testing.expectEqualStrings("Fresh metadata", browser.tabsView().items[browser.tabsView().active].title.text());
+}
+test "Native embedded browser performance twenty heavy documents survive seeded interactions" {
+    const browser = @import("../services/browser.zig");
+    browser.resetTabsForTest();
+    defer browser.resetTabsForTest();
+    var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-browser-twenty-tabs", .persist_window_geometry = false, .size = .{ .w = 1280, .h = 800 }, .vsync = false, .title = "Opal twenty-tab benchmark", .hidden = true });
+    defer backend.deinit();
+    var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
+    defer window.deinit();
+    theme.markUiThread();
+    const old_private = state.app.incognito_mode;
+    state.app.incognito_mode = true;
+    defer state.app.incognito_mode = old_private;
+    for (0..20) |i| {
+        browser.newTab("");
+        try frame(&window, i, true);
+        native.api.opal_browser_test_html("<title>Preparing benchmark</title><input id='entry'><main></main><canvas width='960' height='540'></canvas><script>let m=document.querySelector('main');for(let i=0;i<1500;i++){let p=document.createElement('p');p.textContent='Benchmark card '+i;m.appendChild(p)}let c=document.querySelector('canvas').getContext('2d');for(let i=0;i<2000;i++){c.fillStyle=`hsl(${i%360} 60% 40%)`;c.fillRect(i%960,i%540,60,40)}document.title='Heavy benchmark';</script>");
+        try pageTitle("Heavy benchmark");
+        var script: [128:0]u8 = @splat(0);
+        _ = try std.fmt.bufPrint(&script, "document.querySelector('#entry').value='{d}'", .{i});
+        var out: [128]u8 = undefined;
+        _ = try pageScript(&script, &out);
+    }
+    try std.testing.expectEqual(@as(usize, 20), browser.tabsView().count);
+    try std.testing.expectEqual(@as(c_int, 20), opal_extensions_test_tab_count());
+    var random = std.Random.DefaultPrng.init(0x0a1_20261103);
+    var timings: [120]i64 = undefined;
+    for (&timings, 0..) |*elapsed, i| {
+        const before = window.backend.nanoTime();
+        const slot = random.random().uintLessThan(usize, 20);
+        const id = browser.tabsView().items[slot].id;
+        browser.selectTab(id);
+        switch (random.random().uintLessThan(u8, 5)) {
+            0 => native.zoom(1.25),
+            1 => native.zoom(1),
+            2 => native.find("Benchmark", false),
+            3 => native.read(),
+            else => {},
+        }
+        try frame(&window, 20 + i, true);
+        browser.refreshTabs();
+        elapsed.* = @intCast(window.backend.nanoTime() - before);
+        var out: [128]u8 = undefined;
+        var expected: [16]u8 = undefined;
+        try std.testing.expectEqualStrings(try std.fmt.bufPrint(&expected, "{d}", .{slot}), try pageScript("document.querySelector('#entry').value", &out));
+    }
+    std.mem.sort(i64, &timings, {}, std.sort.asc(i64));
+    std.debug.print("Twenty-tab benchmark: 120 seeded switch/zoom/find/reader interactions, frame p95={d}ms max={d}ms\n", .{ @divTrunc(timings[113], std.time.ns_per_ms), @divTrunc(timings[119], std.time.ns_per_ms) });
+    try std.testing.expect(timings[119] < 500 * std.time.ns_per_ms);
+}
+test "Native embedded browser performance tab switching never writes visits or loses zoom" {
+    const browser = @import("../services/browser.zig");
+    browser.resetTabsForTest();
+    defer browser.resetTabsForTest();
+    var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-browser-switch-regression", .persist_window_geometry = false, .size = .{ .w = 1100, .h = 720 }, .vsync = false, .title = "Opal tab switch regression", .hidden = true });
+    defer backend.deinit();
+    var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
+    defer window.deinit();
+    theme.markUiThread();
+    var server = try (try std.Io.net.IpAddress.parse("127.0.0.1", 0)).listen(io.io(), .{ .reuse_address = true });
+    defer server.deinit(io.io());
+    var fixture: TabServer = .{};
+    var response = try io.io().concurrent(TabServer.serve, .{ &server, &fixture });
+    defer {
+        fixture.stopping.store(true, .release);
+        if (server.socket.address.connect(io.io(), .{ .mode = .stream })) |connection| connection.close(io.io()) else |_| {}
+        _ = response.cancel(io.io());
+    }
+    for (0..2) |i| {
+        var url: [128]u8 = undefined;
+        browser.newTab(try std.fmt.bufPrint(&url, "http://127.0.0.1:{d}/{s}", .{ server.socket.address.getPort(), if (i == 0) "a" else "second" }));
+        try frame(&window, i, true);
+        try pageTitle(if (i == 0) "First A" else "Second tab");
+        try frame(&window, i + 2, true);
+        native.zoom(if (i == 0) 1.5 else 0.75);
+    }
+    // pageTitle polls the native mailbox while waiting; let the real toolbar
+    // consume each page's current state before measuring repeat activations.
+    for (0..2) |i| {
+        browser.cycleTab(false);
+        try frame(&window, i + 4, true);
+    }
+    for (0..2) |i| {
+        browser.selectTab(browser.tabsView().items[i].id);
+        try frame(&window, i + 6, true);
+        native.zoom(if (i == 0) 1.5 else 0.75);
+    }
+    const visits = browser.visitCountForTest();
+    for (0..12) |i| {
+        browser.cycleTab(false);
+        try frame(&window, i + 4, true);
+    }
+    try std.testing.expectEqual(visits, browser.visitCountForTest());
+    try std.testing.expectApproxEqAbs(@as(f32, 0.75), browser.zoomForTest(), 0.001);
+    browser.cycleTab(false);
+    try frame(&window, 16, true);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.5), browser.zoomForTest(), 0.001);
+}
 test "Native embedded browser tabs retain documents independent history and extension identity" {
     var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-live-tabs-fixture", .persist_window_geometry = false, .size = .{ .w = 800, .h = 600 }, .vsync = false, .title = "Opal isolated live tabs", .hidden = true });
     defer backend.deinit();

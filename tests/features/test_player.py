@@ -1907,3 +1907,16 @@ def test_compact_native_playback_strip():
     }
     bad = [key for key, good in checks.items() if not good]
     return ("fail", ", ".join(bad)) if bad else ("pass", "40pt strip omits duplicate macOS title while retaining busy status, subtitle options and confirmed transfer actions")
+
+
+@test("Background torrent read-ahead never waits for synchronous mpv properties", "Player")
+def test_torrent_read_ahead_uses_cached_timing():
+    with open(os.path.join(PROJECT_DIR, 'src/player/player.zig')) as f:
+        source = f.read()
+    start = source.index("// Update libtorrent's deadline window")
+    calculation = source[:start].rsplit('} else {', 1)[-1]
+    assert 'mpv_get_property' not in calculation, 'UI-thread read-ahead blocks on the mpv core'
+    assert 'playbackSnapshot()' in calculation and 'playback.percent()' in calculation
+    saved = source.split('fn captureCurrentPosition(', 1)[1].split('/// Check for and apply saved resume', 1)[0]
+    assert 'mpv_get_property' not in saved, 'periodic history saves must read the observed snapshot'
+    return 'pass', 'UI read-ahead and position snapshots consume cached playback events'
