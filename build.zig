@@ -2523,6 +2523,15 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_torznab_pure).step);
 
+    const test_jackett = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/jackett_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_jackett).step);
+
     // Search-result meta line: size/seed/leech formatting and field omission.
     const test_search_meta_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{

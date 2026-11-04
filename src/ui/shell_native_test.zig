@@ -39,6 +39,10 @@ fn field(buffer: []u8, len: *usize, value: []const u8) void {
 fn setup() !void {
     @import("connections.zig").resetEditorForTest();
     if (std.mem.eql(u8, current.name, "wallpaper-accounts")) @import("connections.zig").editWallpapers();
+    if (std.mem.eql(u8, current.name, "jackett-connection")) {
+        @import("connections.zig").editJackett();
+        @import("jackett_connection.zig").setFixtureForTest();
+    }
     @import("shell.zig").setSidebarFixtureForTest(current.sidebar);
     theme.active_preset = preset;
     state.app.page_shell_enabled = true;
@@ -542,6 +546,7 @@ test "Native shell offline route pixel capture" {
         .{ .name = "player-empty", .route = .player },
         .{ .name = "connect", .route = .connect },
         .{ .name = "wallpaper-accounts", .route = .connect },
+        .{ .name = "jackett-connection", .route = .connect },
         .{ .name = "wallpaper-gallery", .route = .browse, .tab = .Wallpapers },
         .{ .name = "wallpaper-gallery-zoom", .route = .browse, .tab = .Wallpapers },
         .{ .name = "wallpaper-gallery-apply", .route = .browse, .tab = .Wallpapers },

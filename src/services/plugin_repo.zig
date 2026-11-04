@@ -608,6 +608,7 @@ pub fn migrateStaleSources() usize {
     for (plugins[0..plugin_count]) |*pl| {
         if (pl.endpoints_len == 0) continue;
         const id = pl.idSlice();
+        if (!pure.manifestCanReplaceInstalledSource(id)) continue;
         if (!source_config.has(id)) continue; // not installed — nothing to migrate
         const manifest_v = pl.version[0..pl.version_len];
         const installed_v = source_config.get(id, pure.VERSION_KEY) orelse "";
@@ -695,6 +696,7 @@ fn install(idx: usize) ApplyResult {
 
 pub fn uninstall(idx: usize) void {
     if (idx >= plugin_count) return;
+    if (std.mem.eql(u8, plugins[idx].idSlice(), "jackett")) @import("jackett_server.zig").stop();
     var fp_buf: [700]u8 = undefined;
     const fp = sourceFilePath(&fp_buf, plugins[idx].idSlice());
     io.cwdDeleteFile(fp) catch {};

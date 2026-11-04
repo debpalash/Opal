@@ -30,6 +30,17 @@ pub const MAX_ENTRIES = 512;
 pub const MAX_ID_LEN = 32;
 pub const MAX_FIELD_LEN = 24;
 pub const MAX_VAL_LEN = 512;
+
+/// Jackett endpoints are credentials for a user-owned service, rather than
+/// replaceable public scraper defaults. A manifest refresh must preserve them.
+pub fn manifestCanReplaceInstalledSource(id: []const u8) bool {
+    return !std.mem.eql(u8, id, "jackett");
+}
+
+test "manifest migration cannot reset managed Jackett credentials and selection" {
+    try std.testing.expect(!manifestCanReplaceInstalledSource("jackett"));
+    try std.testing.expect(manifestCanReplaceInstalledSource("yts"));
+}
 pub const FieldSnapshot = struct {
     field: [MAX_FIELD_LEN]u8 = @splat(0),
     field_len: usize = 0,

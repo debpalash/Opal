@@ -12,7 +12,7 @@ const plex = @import("../services/plex.zig");
 const abs = @import("../services/audiobookshelf.zig");
 const opds = @import("../services/opds.zig");
 const music = @import("../services/music_subsonic.zig");
-const Provider = enum { jellyfin, plex, audiobooks, reading, music, wallpapers };
+const Provider = enum { jellyfin, plex, audiobooks, reading, music, wallpapers, jackett };
 const providers = [_]struct { id: Provider, name: []const u8, icon: []const u8, brand: ?brands.Brand = null, detail: []const u8, tab: state.DrawerTab }{
     .{ .id = .jellyfin, .name = "Jellyfin / Emby", .brand = .jellyfin, .icon = icons.tvg.lucide.tv, .detail = "Movies, TV & music", .tab = .Jellyfin },
     .{ .id = .plex, .name = "Plex", .brand = .plex, .icon = icons.tvg.lucide.play, .detail = "Movies, TV & music", .tab = .Plex },
@@ -20,6 +20,7 @@ const providers = [_]struct { id: Provider, name: []const u8, icon: []const u8, 
     .{ .id = .reading, .name = "Reading server", .icon = icons.tvg.lucide.@"book-open", .detail = "Komga · Kavita · Calibre · OPDS", .tab = .Opds },
     .{ .id = .music, .name = "Subsonic", .icon = icons.tvg.lucide.music, .detail = "Navidrome · Airsonic · music", .tab = .Music },
     .{ .id = .wallpapers, .name = "Wallpaper sources", .icon = icons.tvg.lucide.image, .detail = "Wallhaven · gallery-dl · accounts", .tab = .Wallpapers },
+    .{ .id = .jackett, .name = "Torrent indexers", .icon = icons.tvg.lucide.magnet, .detail = "Jackett · configured trackers", .tab = .Search },
 };
 var editing: ?Provider = null;
 pub fn resetEditorForTest() void {
@@ -30,9 +31,14 @@ pub fn editWallpapers() void {
     editing = .wallpapers;
     state.app.router.navigate(.connect);
 }
+pub fn editJackett() void {
+    editing = .jackett;
+    state.app.router.navigate(.connect);
+}
 
 pub fn render() void {
     if (@import("profiles_ui.zig").blocksKid()) return;
+    if (@import("../services/jackett_server.zig").takeConnectionRequest()) editing = .jackett;
     @import("../services/search.zig").invalidateConnectedFeed();
     if (editing) |provider| {
         var bar = @import("browse_filters.zig").begin(@src());
@@ -50,6 +56,7 @@ pub fn render() void {
             .reading => opds.renderLoginForm(),
             .music => @import("settings.zig").renderMusicConnection(),
             .wallpapers => @import("../services/wallpapers.zig").renderConnections(),
+            .jackett => @import("jackett_connection.zig").render(),
         }
         return;
     }
@@ -75,7 +82,7 @@ pub fn render() void {
             .jellyfin => .{ .r = 164, .g = 136, .b = 240, .a = 255 },
             .plex => .{ .r = 224, .g = 174, .b = 63, .a = 255 },
             .audiobooks => .{ .r = 210, .g = 150, .b = 111, .a = 255 },
-            .reading, .wallpapers => theme.colors.accent,
+            .reading, .wallpapers, .jackett => theme.colors.accent,
             .music => .{ .r = 208, .g = 134, .b = 178, .a = 255 },
         };
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -95,13 +102,14 @@ pub fn render() void {
         if (provider.id == .jellyfin) dvui.icon(@src(), "Emby", brands.icon(.emby), .{}, .{ .min_size_content = theme.iconSize(.sm), .color_text = @import("color_compat.zig").wrap(tint), .gravity_y = 0.5, .margin = .{ .x = 8 } });
         var fill = dvui.box(@src(), .{}, .{ .expand = .horizontal });
         fill.deinit();
-        surfaces.badge(@src(), if (connected) (if (provider.id == .music) "Configured" else "Connected") else "Set up", if (connected) theme.colors.success else theme.colors.text_secondary);
+        surfaces.badge(@src(), if (connected) (if (provider.id == .music or provider.id == .jackett) "Configured" else "Connected") else "Set up", if (connected) theme.colors.success else theme.colors.text_secondary);
         logo_row.deinit();
         dvui.labelNoFmt(@src(), provider.name, .{}, .{ .font = dvui.themeGet().font_heading, .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary), .padding = dvui.Rect.all(0), .margin = .{ .h = 6 } });
         components.bodyText(@src(), provider.detail, theme.colors.text_secondary);
         var server_buf: [256]u8 = undefined;
         const server = switch (provider.id) {
             .wallpapers => "wallhaven.cc",
+            .jackett => @import("../core/source_config.zig").copyValue("jackett", "base", &server_buf) orelse "",
             .jellyfin => blk: {
                 const snap = jf.connectionSnapshot();
                 @memcpy(server_buf[0..snap.server_len], snap.server[0..snap.server_len]);
@@ -176,5 +184,6 @@ fn isConnected(provider: Provider) bool {
         .reading => opds.connectionSnapshot().connected,
         .music => music.universalConfigured(music.SRC_SUBSONIC),
         .wallpapers => @import("../services/gallerydl.zig").available(),
+        .jackett => @import("jackett_connection.zig").configured(),
     };
 }

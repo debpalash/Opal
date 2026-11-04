@@ -242,6 +242,10 @@ Adjust quality, audio, subtitles, and translation while watching.
 Sources start disabled; install the ones you want. [Source coverage](docs/browse-sources.md) ·
 [Roadmap](ROADMAP.md).
 
+For Jackett, open **Connect → Torrent indexers → Set up / start Jackett**.
+Opal downloads the official binary, runs it locally and opens tracker management
+inside its browser. [Managed Jackett setup](docs/jackett.md).
+
 <details>
 <summary><b>Playback tips and temporary torrents</b></summary>
 

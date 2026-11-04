@@ -1413,6 +1413,9 @@ fn renderSourcePlugins() void {
                 source_rect_count += 1;
             }
             identity.deinit();
+            if (std.mem.eql(u8, p.idSlice(), "jackett")) {
+                if (components.iconButton(@src(), icons.tvg.lucide.settings, "Set up Jackett", false)) @import("jackett_server.zig").openConnection();
+            }
             if (!(operation.stage == .fetching or operation.stage == .writing)) {
                 const clicked = if (installed)
                     components.iconButton(@src(), icons.tvg.lucide.@"trash-2", "Uninstall source", false)
