@@ -14,7 +14,8 @@ from http.cookiejar import CookieJar
 from multiprocessing.dummy import Pool
 from threading import Lock
 from typing import Any, Dict, List, Tuple, Union
-from urllib.parse import unquote, urlencode
+from urllib.parse import unquote, urlencode, urlsplit
+import re
 
 import helpers
 from novaprinter import prettyPrinter
@@ -99,7 +100,7 @@ def load_configuration() -> None:
     if 'api_key' not in loaded and 'apikey' in loaded:
         loaded['api_key'] = loaded['apikey']
 
-    for key, default in (('api_key', ''), ('url', ''), ('tracker_first', False), ('thread_count', 20)):
+    for key, default in (('api_key', ''), ('url', ''), ('tracker_first', False), ('thread_count', 8), ('indexers', '*')):
         if key not in loaded:
             loaded[key] = default
     if not loaded['url'] or not loaded['api_key']:
@@ -115,7 +116,10 @@ class jackett:
     name = 'Jackett'
     url = (CONFIG_DATA['url'] or '').rstrip('/')
     api_key = CONFIG_DATA['api_key']
-    thread_count = CONFIG_DATA['thread_count']
+    try:
+        thread_count = max(1, min(8, int(CONFIG_DATA['thread_count'])))
+    except (TypeError, ValueError):
+        thread_count = 8
     supported_categories = {
         'all': None,
         'anime': ['5070'],
@@ -131,6 +135,7 @@ class jackett:
         # fix for some indexers with magnet link inside .torrent file
         if download_url.startswith('magnet:?'):
             print(download_url + " " + download_url)
+            return
         proxy_manager.enable_proxy(True)
         response = self.get_response(download_url)
         proxy_manager.enable_proxy(False)
@@ -141,6 +146,8 @@ class jackett:
 
     def search(self, what: str, cat: str = 'all') -> None:
         what = unquote(what)
+        if cat.lower() not in self.supported_categories:
+            return
         category = self.supported_categories[cat.lower()]
 
         # check for malformed configuration
@@ -149,20 +156,23 @@ class jackett:
             return
 
         # check api_key
-        if self.api_key == "YOUR_API_KEY_HERE":
+        if self.api_key == "YOUR_API_KEY_HERE" or not valid_base(self.url):
             self.handle_error("api key error", what)
             return
 
         # search in Jackett API
+        indexers = self.get_jackett_indexers(what)
+        if not indexers:
+            return
         if self.thread_count > 1:
             args: List[Tuple[str, Union[List[str], None], str]] = []
-            indexers = self.get_jackett_indexers(what)
             for indexer in indexers:
                 args.append((what, category, indexer))
             with Pool(min(len(indexers), self.thread_count)) as pool:
                 pool.starmap(self.search_jackett_indexer, args)
         else:
-            self.search_jackett_indexer(what, category, 'all')
+            for indexer in indexers:
+                self.search_jackett_indexer(what, category, indexer)
 
     def get_jackett_indexers(self, what: str) -> List[str]:
         params = urlencode([
@@ -176,11 +186,28 @@ class jackett:
             self.handle_error("connection error getting indexer list", what)
             return []
         # process results
-        response_xml = xml.etree.ElementTree.fromstring(response)
+        try:
+            response_xml = xml.etree.ElementTree.fromstring(response)
+        except xml.etree.ElementTree.ParseError:
+            self.handle_error("invalid indexer response", what)
+            return []
+        if response_xml.tag != 'indexers':
+            self.handle_error("invalid indexer response", what)
+            return []
+        selection = CONFIG_DATA.get('indexers', '*')
+        selected = set(str(selection).split(','))
         indexers: List[str] = []
         for indexer in response_xml.findall('indexer'):
-            indexers.append(indexer.attrib['id'])
-        return indexers
+            ident = indexer.get('id', '')
+            # Private/semi-private trackers need a persistent seeding backend.
+            # Never let the aggregate feed silently pull them into RAM streaming.
+            if (indexer.findtext('type', '').lower() != 'public'
+                    or indexer.get('configured', 'true').lower() != 'true'
+                    or not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', ident)):
+                continue
+            if (selection == '*' or ident in selected) and ident not in indexers:
+                indexers.append(ident)
+        return indexers[:64]
 
     def search_jackett_indexer(self, what: str, category: Union[List[str], None], indexer_id: str) -> None:
         def toStr(s: Union[str, None]) -> str:
@@ -192,6 +219,7 @@ class jackett:
         # prepare jackett url
         params_tmp = [
             ('apikey', self.api_key),
+            ('t', 'search'),
             ('q', what)
         ]
         if category is not None:
@@ -203,7 +231,11 @@ class jackett:
             self.handle_error("connection error for indexer: " + indexer_id, what)
             return
         # process search results
-        response_xml = xml.etree.ElementTree.fromstring(response)
+        try:
+            response_xml = xml.etree.ElementTree.fromstring(response)
+        except xml.etree.ElementTree.ParseError:
+            self.handle_error("invalid search response", what)
+            return
         channel = response_xml.find('channel')
         if channel is None:
             return
@@ -236,13 +268,13 @@ class jackett:
             res['size'] = -1 if res['size'] is None else (toStr(res['size'].text) + ' B')
 
             res['seeds'] = result.find(self.generate_xpath('seeders'))
-            res['seeds'] = -1 if res['seeds'] is None else int(res['seeds'].attrib['value'])
+            res['seeds'] = count_value(res['seeds'])
 
             res['leech'] = result.find(self.generate_xpath('peers'))
-            res['leech'] = -1 if res['leech'] is None else int(res['leech'].attrib['value'])
+            res['leech'] = count_value(res['leech'])
 
             if res['seeds'] != -1 and res['leech'] != -1:
-                res['leech'] -= res['seeds']
+                res['leech'] = max(0, res['leech'] - res['seeds'])
 
             res['desc_link'] = result.find('comments')
             if res['desc_link'] is not None:
@@ -270,12 +302,17 @@ class jackett:
         try:
             # we can't use helpers.retrieve_url because of redirects
             # we need the cookie processor to handle redirects
-            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(CookieJar()))
-            response = opener.open(query).read().decode('utf-8')
+            opener = urllib.request.build_opener(NoRedirect(), urllib.request.HTTPCookieProcessor(CookieJar()))
+            with opener.open(query, timeout=12) as result:
+                body = result.read(MAX_RESPONSE + 1)
+            if len(body) <= MAX_RESPONSE:
+                response = body.decode('utf-8')
         except urllib.request.HTTPError as e:
             # if the page returns a magnet redirect, used in download_torrent
             if e.code == 302:
-                response = e.url
+                target = e.headers.get('Location', '')
+                if target.startswith('magnet:?'):
+                    response = target
         except Exception:  # pylint: disable=broad-exception-caught
             pass
         return response
@@ -298,3 +335,29 @@ class jackett:
             if isinstance(dictionary[key], str):
                 dictionary[key] = dictionary[key].replace('|', '%7C')
         return dictionary
+
+
+MAX_RESPONSE = 2 * 1024 * 1024
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # API credentials must not follow a server redirect to another origin.
+        return None
+
+
+def valid_base(base):
+    try:
+        uri = urlsplit(base)
+        return (uri.scheme in ('http', 'https') and bool(uri.hostname)
+                and not uri.username and not uri.password and not uri.query
+                and not uri.fragment and not any(c.isspace() for c in base))
+    except ValueError:
+        return False
+
+
+def count_value(element):
+    try:
+        return max(-1, int(element.get('value', '-1'))) if element is not None else -1
+    except (ValueError, TypeError):
+        return -1

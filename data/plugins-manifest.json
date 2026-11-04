@@ -249,7 +249,7 @@
     },
     {
       "id": "jackett",
-      "name": "Jackett (self-hosted)",
+      "name": "Jackett (managed or existing server)",
       "type": "torrent",
       "version": "1.1.0",
       "endpoints": {

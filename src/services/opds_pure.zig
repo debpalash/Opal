@@ -444,7 +444,7 @@ pub fn sameOrigin(a: []const u8, b: []const u8) bool {
 
 /// Decode the minimal XML entity set OPDS titles use into `out`; returns the
 /// byte length written (clamped to `out`).
-fn decodeXmlEntities(in: []const u8, out: []u8) usize {
+pub fn decodeXmlEntities(in: []const u8, out: []u8) usize {
     var o: usize = 0;
     var i: usize = 0;
     while (i < in.len and o < out.len) {

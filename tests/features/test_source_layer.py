@@ -13,6 +13,11 @@ E3     No source had a mirror/fallback domain; one blocked host = a silent dead
 See tests/features/harness.py for the shared @test decorator + helpers."""
 from .harness import *  # noqa: F401,F403
 
+@test("Jackett managed lifecycle and selected trackers over real HTTP", "Sources")
+def test_jackett_managed_integration():
+    result = subprocess.run([sys.executable, os.path.join(PROJECT_DIR, 'tests/test_jackett_integration.py')], capture_output=True, text=True, timeout=60)
+    return ('pass', 'owned loopback API, tracker selection, bounded responses, verified install and process cleanup') if result.returncode == 0 else ('fail', result.stderr[-1800:])
+
 import json as _json
 import os
 import subprocess

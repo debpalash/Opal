@@ -1268,6 +1268,7 @@ fn appFrame() !dvui.App.Result {
     // Queue producers include playlist/AI/remote worker threads. Drain their
     // bounded commands here so live queue and player state stay UI-thread-owned.
     @import("services/queue.zig").drainUi();
+    if (state.app.config_loaded.load(.acquire)) @import("services/jackett_server.zig").tick();
     @import("services/resolver.zig").drainRemoteAction();
     @import("services/search.zig").updateGalleryRoute();
     @import("services/search.zig").drainMemorySearch();
