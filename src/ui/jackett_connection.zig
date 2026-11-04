@@ -35,22 +35,26 @@ var busy = std.atomic.Value(bool).init(false);
 var message: [128]u8 = @splat(0);
 var managed_attached = false;
 var advanced = false;
+pub var field_label_ids_for_test: [2]dvui.Id = undefined;
+pub var field_bounds_for_test: [2]dvui.Rect.Physical = undefined;
+pub var panel_bounds_for_test: dvui.Rect.Physical = .{};
 
-pub fn setFixtureForTest() void {
+pub fn setFixtureForTest(existing_server: bool) void {
     if (!@import("builtin").is_test) @compileError("test only");
     initialized = true;
     put(&base, "http://127.0.0.1:9117");
     put(&key, "owned-test-key");
     put(&selection, "nyaasi");
-    advanced = false;
+    advanced = existing_server;
     all_public = false;
     revision = 100;
-    catalog_revision = revision;
+    catalog_revision = if (existing_server) revision else null;
     result = .{};
     result.count = pure.parseCatalog(alloc, "<indexers><indexer id=\"nyaasi\" configured=\"true\"><title>Nyaa · anime</title><type>public</type></indexer><indexer id=\"torrentleech\" configured=\"true\"><title>TorrentLeech</title><type>private</type></indexer></indexers>", &result.items) catch unreachable;
+    result.success = existing_server;
     chosen = @splat(false);
     chosen[0] = true;
-    put(&message, "Connected. Choose trackers, then save.");
+    put(&message, "");
 }
 
 fn text(buffer: []const u8) []const u8 {
@@ -129,8 +133,13 @@ fn worker(job: Job) void {
 }
 
 fn field(label: []const u8, buffer: []u8, password: bool, id: usize) void {
+    var group = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = id, .expand = .horizontal, .margin = .{ .y = 6, .h = 4 } });
+    defer group.deinit();
+    if (@import("builtin").is_test) field_bounds_for_test[id] = group.data().borderRectScale().r;
     const before = std.hash.Wyhash.hash(0, text(buffer));
-    components.bodyText(@src(), label, theme.colors.text_secondary);
+    const label_src = @src();
+    if (@import("builtin").is_test) field_label_ids_for_test[id] = dvui.Id.extendId(dvui.parentGet().data().id, label_src, 0);
+    components.bodyText(label_src, label, theme.colors.text_secondary);
     var entry = dvui.textEntry(@src(), .{ .text = .{ .buffer = buffer }, .password_char = if (password) "•" else null }, .{
         .id_extra = id,
         .expand = .horizontal,
@@ -149,7 +158,7 @@ fn field(label: []const u8, buffer: []u8, password: bool, id: usize) void {
     entry.deinit();
 }
 
-fn save() void {
+fn save(catalog: *const Result) void {
     var url: [2400]u8 = undefined;
     if (pure.catalogUrl(text(&base), text(&key), &url) == null) {
         put(&message, "Enter a valid server URL and API key.");
@@ -164,9 +173,7 @@ fn save() void {
             return;
         }
         var writer = std.Io.Writer.fixed(csv[0 .. csv.len - 1]);
-        mutex.lock();
-        defer mutex.unlock();
-        for (result.items[0..result.count], 0..) |*item, i| {
+        for (catalog.items[0..catalog.count], 0..) |*item, i| {
             if (!chosen[i] or !item.public) continue;
             if (writer.end > 0) writer.writeByte(',') catch {
                 put(&message, "Too many selected trackers. Choose fewer, or use all public trackers.");
@@ -191,22 +198,38 @@ fn save() void {
     } else put(&message, "Could not save connection.");
 }
 
+fn refresh() void {
+    if (busy.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
+    put(&message, "Connecting…");
+    @import("../core/workers.zig").spawn(worker, .{Job{ .base = base, .key = key, .revision = revision }}) catch {
+        busy.store(false, .release);
+        put(&message, "Could not start connection test.");
+    };
+}
+
+fn manageTrackers() void {
+    if (!pure.validBase(text(&base))) return;
+    state.navigateToTab(.Web);
+    @import("../services/browser.zig").navigate(text(&base));
+}
+
+fn card(src: std.builtin.SourceLocation) *dvui.BoxWidget {
+    return dvui.box(src, .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = cc.wrap(theme.colors.bg_surface),
+        .color_border = cc.wrap(theme.colors.border_subtle),
+        .border = dvui.Rect.all(1),
+        .corners = theme.dims.rad_md,
+        .padding = dvui.Rect.all(16),
+        .margin = .{ .y = 10 },
+    });
+}
+
 pub fn render() void {
     init();
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
-    defer scroll.deinit();
-    var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = dvui.Rect.all(12) });
-    defer content.deinit();
-    surfaces.heading(@src(), "Jackett", "Torrent sources");
-    components.bodyText(@src(), "Opal downloads and runs Jackett for you. Add sources and manage tracker accounts here.", theme.colors.text_secondary);
     const owned = server.snapshot();
-    if (!owned.active) {
-        managed_attached = false;
-        if (components.actionButton(@src(), "Set up / start Jackett", .primary, 10)) server.start();
-    } else {
-        if (components.iconButton(@src(), icons.tvg.lucide.square, "Stop Jackett", false)) server.stop();
-    }
-    if (text(&owned.status).len > 0) components.bodyText(@src(), text(&owned.status), theme.colors.text_secondary);
+    if (!owned.active) managed_attached = false;
     if (owned.ready and !managed_attached) {
         managed_attached = true;
         put(&base, text(&owned.base));
@@ -216,57 +239,107 @@ pub fn render() void {
         var selected_buf: [512]u8 = undefined;
         put(&selection, sources.copyValue("jackett", "indexers", &selected_buf) orelse "*");
         all_public = std.mem.eql(u8, text(&selection), "*");
-        if (busy.cmpxchgStrong(false, true, .acq_rel, .acquire) == null) {
-            @import("../core/workers.zig").spawn(worker, .{Job{ .base = base, .key = key, .revision = revision }}) catch {
-                busy.store(false, .release);
-            };
-        }
+        refresh();
     }
-    components.compactToggle(@src(), "Existing server", &advanced);
-    if (advanced) {
-        field("Server URL", &base, false, 0);
-        field("API key", &key, true, 1);
-    }
-    var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 8, .h = 8 } });
-    if (busy.load(.acquire)) components.bodyText(@src(), "Connecting…", theme.colors.text_secondary) else {
-        if (components.actionButton(@src(), "Test / refresh", .secondary, 0)) {
-            if (busy.cmpxchgStrong(false, true, .acq_rel, .acquire) == null) {
-                put(&message, "Connecting…");
-                @import("../core/workers.zig").spawn(worker, .{Job{ .base = base, .key = key, .revision = revision }}) catch {
-                    busy.store(false, .release);
-                    put(&message, "Could not start connection test.");
-                };
-            }
-        }
-    }
-    if (components.iconButton(@src(), icons.tvg.lucide.settings, "Manage trackers in Opal", false) and pure.validBase(text(&base))) {
-        state.navigateToTab(.Web);
-        @import("../services/browser.zig").navigate(text(&base));
-    }
-    if (components.actionButton(@src(), "Save", .primary, 0)) save();
-    actions.deinit();
+    // Consume worker publication before drawing actions, never while holding a
+    // lock across a button that can save or start another worker.
     mutex.lock();
-    defer mutex.unlock();
-    if (result.ready) {
-        if (result.revision == revision) {
-            put(&message, text(&result.message));
-            catalog_revision = if (result.success) revision else null;
-            for (result.items[0..result.count], 0..) |*item, i| chosen[i] = item.public and pure.selected(text(&selection), item.idSlice());
-        }
-        result.ready = false;
+    const view = result;
+    result.ready = false;
+    mutex.unlock();
+    if (view.ready and view.revision == revision) {
+        put(&message, text(&view.message));
+        catalog_revision = if (view.success) revision else null;
+        for (view.items[0..view.count], 0..) |*item, i| chosen[i] = item.public and pure.selected(text(&selection), item.idSlice());
     }
-    if (text(&message).len > 0) components.bodyText(@src(), text(&message), theme.colors.text_secondary);
-    components.toggleRow(@src(), "All configured public trackers", "New public trackers added in Jackett are included automatically.", &all_public);
-    if (catalog_revision == revision) {
-        for (result.items[0..result.count], 0..) |*item, i| {
-            var row = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .expand = .horizontal });
-            if (item.public) {
-                if (!all_public) components.toggleRow(@src(), item.nameSlice(), item.idSlice(), &chosen[i]) else components.bodyText(@src(), item.nameSlice(), theme.colors.text_primary);
-            } else {
-                components.bodyText(@src(), item.nameSlice(), theme.colors.text_tertiary);
+    const has_catalog = catalog_revision == revision;
+    var public_count: usize = 0;
+    if (has_catalog) for (view.items[0..view.count]) |item| {
+        if (item.public) public_count += 1;
+    };
+
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
+    defer scroll.deinit();
+    const panel_width = @max(0, @min(840, scroll.data().contentRect().w - 32));
+    var content = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .none,
+        .gravity_x = 0.5,
+        .min_size_content = .{ .w = panel_width },
+        .max_size_content = .{ .w = panel_width, .h = std.math.floatMax(f32) },
+        .padding = dvui.Rect.all(16),
+    });
+    defer content.deinit();
+    if (@import("builtin").is_test) panel_bounds_for_test = content.data().borderRectScale().r;
+    {
+        var heading = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .h = 4 } });
+        surfaces.iconTile(@src(), icons.tvg.lucide.magnet, theme.colors.accent, 24);
+        dvui.labelNoFmt(@src(), "Jackett", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = cc.wrap(theme.colors.text_primary), .gravity_y = 0.5, .margin = .{ .x = 10 }, .expand = .horizontal });
+        const connected = owned.ready or (has_catalog and view.success);
+        surfaces.badge(@src(), if (owned.ready) "Running" else if (owned.active) "Starting" else if (connected) "Connected" else "Stopped", if (connected) theme.colors.success else theme.colors.text_secondary);
+        heading.deinit();
+    }
+    components.bodyText(@src(), "Your torrent sources, managed in Opal.", theme.colors.text_secondary);
+    {
+        var service = card(@src());
+        dvui.labelNoFmt(@src(), "Managed by Opal", .{}, .{ .color_text = cc.wrap(theme.colors.text_primary) });
+        components.bodyText(@src(), if (text(&owned.status).len > 0) text(&owned.status) else "Install once. Start, stop and manage your trackers here.", theme.colors.text_secondary);
+        {
+            var actions = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .expand = .horizontal });
+            if (!owned.active) {
+                if (components.actionButton(@src(), "Start Jackett", .primary, 10)) server.start();
+            } else if (components.iconButton(@src(), icons.tvg.lucide.square, "Stop Jackett", false)) server.stop();
+            if (owned.ready) {
+                if (components.actionButton(@src(), "Manage trackers", .primary, 11)) manageTrackers();
             }
-            row.deinit();
+            if (components.iconButton(@src(), if (advanced) icons.tvg.lucide.@"chevron-up" else icons.tvg.lucide.server, "Existing server settings", advanced)) advanced = !advanced;
+            actions.deinit();
         }
+        if (advanced) {
+            var connection = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .margin = .{ .y = 12 } });
+            dvui.labelNoFmt(@src(), "Existing server", .{}, .{ .color_text = cc.wrap(theme.colors.text_primary) });
+            field("Server URL", &base, false, 0);
+            field("API key", &key, true, 1);
+            var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 6 } });
+            if (!busy.load(.acquire) and components.actionButton(@src(), "Connect", .secondary, 0)) refresh();
+            if (components.actionButton(@src(), "Save connection", .primary, 1)) save(&view);
+            if (components.iconButton(@src(), icons.tvg.lucide.settings, "Manage this server's trackers in Opal", false)) manageTrackers();
+            actions.deinit();
+            connection.deinit();
+        }
+        service.deinit();
     }
-    components.bodyText(@src(), "Account-required trackers are listed for reference. Searching them is disabled until a persistent seeding client is connected.", theme.colors.text_tertiary);
+    {
+        var trackers = card(@src());
+        {
+            var heading = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+            dvui.labelNoFmt(@src(), "Trackers", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = cc.wrap(theme.colors.text_primary), .expand = .horizontal, .gravity_y = 0.5 });
+            if (has_catalog) {
+                var count: [48]u8 = undefined;
+                surfaces.badge(@src(), std.fmt.bufPrint(&count, "{d} public", .{public_count}) catch "Public", theme.colors.text_secondary);
+            }
+            if (busy.load(.acquire)) {
+                components.bodyText(@src(), "Refreshing…", theme.colors.text_secondary);
+            } else if (owned.ready or advanced or has_catalog) {
+                if (components.iconButton(@src(), icons.tvg.lucide.@"refresh-cw", "Refresh trackers", false)) refresh();
+            }
+            if (has_catalog and components.iconButton(@src(), icons.tvg.lucide.save, "Save tracker selection", false)) save(&view);
+            heading.deinit();
+        }
+        if (text(&message).len > 0) components.bodyText(@src(), text(&message), theme.colors.text_secondary);
+        if (has_catalog and view.count > 0) {
+            components.toggleRow(@src(), "Include all public trackers", null, &all_public);
+            for (view.items[0..view.count], 0..) |*item, i| {
+                var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .expand = .horizontal, .padding = .{ .y = 3, .h = 3 } });
+                if (item.public and !all_public) {
+                    components.toggleRow(@src(), item.nameSlice(), null, &chosen[i]);
+                } else {
+                    dvui.icon(@src(), "", if (item.public) icons.tvg.lucide.check else icons.tvg.lucide.lock, .{}, .{ .min_size_content = theme.iconSize(.sm), .color_text = cc.wrap(if (item.public) theme.colors.accent else theme.colors.text_tertiary), .gravity_y = 0.5, .margin = .{ .x = 8, .w = 8 } });
+                    dvui.labelNoFmt(@src(), item.nameSlice(), .{}, .{ .expand = .horizontal, .color_text = cc.wrap(if (item.public) theme.colors.text_primary else theme.colors.text_secondary), .gravity_y = 0.5 });
+                    if (!item.public) surfaces.badge(@src(), "Seeding required", theme.colors.text_tertiary);
+                }
+                row.deinit();
+            }
+        } else if (!busy.load(.acquire)) components.bodyText(@src(), if (owned.ready) "Add trackers in Manage trackers, then refresh this list." else "Start Jackett to add and choose your torrent sources.", theme.colors.text_tertiary);
+        trackers.deinit();
+    }
 }

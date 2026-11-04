@@ -39,9 +39,9 @@ fn field(buffer: []u8, len: *usize, value: []const u8) void {
 fn setup() !void {
     @import("connections.zig").resetEditorForTest();
     if (std.mem.eql(u8, current.name, "wallpaper-accounts")) @import("connections.zig").editWallpapers();
-    if (std.mem.eql(u8, current.name, "jackett-connection")) {
+    if (std.mem.startsWith(u8, current.name, "jackett-")) {
         @import("connections.zig").editJackett();
-        @import("jackett_connection.zig").setFixtureForTest();
+        @import("jackett_connection.zig").setFixtureForTest(std.mem.eql(u8, current.name, "jackett-connection"));
     }
     @import("shell.zig").setSidebarFixtureForTest(current.sidebar);
     theme.active_preset = preset;
@@ -340,6 +340,23 @@ fn draw() !void {
         try @import("shell.zig").render();
         scaled.deinit();
     } else try @import("shell.zig").render();
+    if (std.mem.eql(u8, current.name, "jackett-connection")) {
+        const editor = @import("jackett_connection.zig");
+        const ids = editor.field_label_ids_for_test;
+        try std.testing.expect(ids[0] != ids[1]);
+        for (ids) |id| try std.testing.expect(dvui.currentWindow().min_sizes.containsUsed(id) orelse false);
+        if (frames >= 5) {
+            const fields = editor.field_bounds_for_test;
+            try std.testing.expect(fields[0].h > 40 and fields[1].h > 40);
+            try std.testing.expect(fields[0].y + fields[0].h <= fields[1].y);
+            const panel = editor.panel_bounds_for_test;
+            try std.testing.expect(panel.w <= 900 * dvui.windowNaturalScale());
+            for (fields) |rect| {
+                try std.testing.expect(rect.x >= panel.x);
+                try std.testing.expect(rect.x + rect.w <= panel.x + panel.w + 1);
+            }
+        }
+    }
     if (current.wallpaper_performance and frames >= 4) {
         const stats = @import("../services/wallpapers.zig").nativeStatsForTest();
         try std.testing.expectEqual(@as(usize, 2000), stats.total);
@@ -547,6 +564,7 @@ test "Native shell offline route pixel capture" {
         .{ .name = "connect", .route = .connect },
         .{ .name = "wallpaper-accounts", .route = .connect },
         .{ .name = "jackett-connection", .route = .connect },
+        .{ .name = "jackett-setup", .route = .connect },
         .{ .name = "wallpaper-gallery", .route = .browse, .tab = .Wallpapers },
         .{ .name = "wallpaper-gallery-zoom", .route = .browse, .tab = .Wallpapers },
         .{ .name = "wallpaper-gallery-apply", .route = .browse, .tab = .Wallpapers },

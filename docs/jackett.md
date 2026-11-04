@@ -1,11 +1,11 @@
 # Jackett in Opal
 
-Open **Connect → Torrent indexers → Set up / start Jackett**. Opal downloads
+Open **Connect → Torrent indexers → Start Jackett**. Opal downloads
 Jackett's official self-contained binary (~50 MB), verifies the pinned release's
 SHA-256, starts it on a loopback-only port and saves the API connection. No
 separate Jackett installation, service or external browser is needed.
 
-Use **Manage trackers in Opal** (the settings icon) to open Jackett's dashboard
+Use **Manage trackers** to open Jackett's dashboard
 inside Opal's Browser. Add, configure, test and remove trackers there, then
 return to Connect and refresh. Public trackers participate in Opal's torrent
 searches. Select all configured public trackers, or choose individual sources.
@@ -16,8 +16,8 @@ Opal keeps Jackett's binaries and tracker configuration in
 only Opal's managed process tree and preserves tracker accounts. A saved managed
 connection starts again on the next Opal launch. Jackett's independent updater
 is disabled; Opal pins the binary version and checksum. Binary upgrades currently
-ship with Opal connector updates. Existing servers can also be connected through
-the optional **Existing server** controls.
+ship with Opal connector updates. The server icon opens the optional
+**Existing server** controls; URL and API key stay hidden until opened.
 
 Account-required trackers remain visible in the connection catalog, but this
 connector excludes them from streaming searches. Private trackers require a
