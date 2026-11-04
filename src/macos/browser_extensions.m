@@ -5,6 +5,7 @@
 #import "browser_security.h"
 #import "browser_integration.h"
 #include <string.h>
+#include <arpa/inet.h>
 #include <CommonCrypto/CommonDigest.h>
 static __weak WKWebView *page;
 static void (*wake)(void);
@@ -459,9 +460,22 @@ int opal_extensions_navigation_allowed(WKWebView *web, NSURL *url) {
     return 1;
 }
 int opal_browser_proxy_guard_ready(void) { return proxy_guard != nil; }
+static BOOL loopback_url(NSURL *url) {
+    // Literal loopback only: never resolve a public hostname or exempt LANs.
+    NSString *host = url.host.lowercaseString;
+    if (!host.length || url.user || url.password) return NO;
+    while ([host hasSuffix:@"."]) host = [host substringToIndex:host.length - 1];
+    if ([host isEqual:@"localhost"] || [host isEqual:@"::1"] || [host isEqual:@"[::1]"]) return YES;
+    struct in_addr address;
+    return inet_pton(AF_INET, host.UTF8String, &address) == 1 && (ntohl(address.s_addr) >> 24) == 127;
+}
 int opal_browser_security_navigation_allowed(NSURL *url) {
-    if ([settings[@"https_only"] boolValue] && [url.scheme.lowercaseString isEqual:@"http"]) return 0;
+    if ([settings[@"https_only"] boolValue] && [url.scheme.lowercaseString isEqual:@"http"] && !loopback_url(url)) return 0;
     return opal_security_route_ready(settings[@"proxy_mode"]);
+}
+int opal_browser_test_security_navigation_allowed(const char *text) {
+    NSURL *url = [NSURL URLWithString:[NSString stringWithUTF8String:text]];
+    return url && opal_browser_security_navigation_allowed(url);
 }
 void opal_browser_security_wait(WKWebView *web, NSURLRequest *request) {
     if (opal_security_route_ready(settings[@"proxy_mode"]) || ![request.HTTPMethod isEqual:@"GET"] || request.HTTPBody.length) return;

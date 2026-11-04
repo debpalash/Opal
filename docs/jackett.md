@@ -11,6 +11,10 @@ return to Connect and refresh. Public trackers participate in Opal's torrent
 searches. Select all configured public trackers, or choose individual sources.
 The Jackett card in Plugins also opens these controls.
 
+The browser's HTTPS-only setting allows loopback HTTP, so Jackett's local
+dashboard works without disabling that setting. Proxy routes keep their separate
+local-address restrictions; use System proxy mode for local services.
+
 Opal keeps Jackett's binaries and tracker configuration in
 `<Opal config>/jackett-managed/`. Stopping Jackett or quitting Opal terminates
 only Opal's managed process tree and preserves tracker accounts. A saved managed

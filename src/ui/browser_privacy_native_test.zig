@@ -6,6 +6,7 @@ const native = @import("../services/native_browser.zig");
 const privacy = @import("../services/browser_privacy.zig");
 extern fn opal_extension_test_hide_popup(hide: c_int) void;
 extern fn opal_extension_test_popup_size(width: *f64, height: *f64) c_int;
+extern fn opal_browser_test_security_navigation_allowed(url: [*:0]const u8) c_int;
 fn wake() callconv(.c) void {}
 fn attach(window: ?*anyopaque) !void {
     try std.testing.expectEqual(@as(c_int, 1), native.api.opal_browser_attach(window, 1, wake));
@@ -125,6 +126,30 @@ fn waitExtension(slot: usize) !void {
         if (status.code == 2) return;
     }
     return error.Timeout;
+}
+test "Native browser protections HTTPS only permits loopback Jackett and keeps remote HTTP blocked" {
+    if (!native.supported) return error.SkipZigTest;
+    var window = try backend();
+    defer window.deinit();
+    try attach(@ptrCast(window.window));
+    defer native.deinit();
+    configure("{\"https_only\":true,\"proxy_mode\":\"system\"}");
+    defer configure("{}");
+    for ([_][*:0]const u8{ "http://127.0.0.1:58309/", "http://localhost:9117/UI/Dashboard", "http://[::1]:9117/", "http://127.0.0.2:9117/", "http://LOCALHOST.:9117/" }) |url| {
+        try std.testing.expectEqual(@as(c_int, 1), opal_browser_test_security_navigation_allowed(url));
+    }
+    for ([_][*:0]const u8{ "http://example.com/", "http://192.168.1.20/", "http://127.0.0.1.evil.test/", "http://localhost.evil.test/", "http://localhost@evil.test/" }) |url| {
+        try std.testing.expectEqual(@as(c_int, 0), opal_browser_test_security_navigation_allowed(url));
+    }
+    try std.testing.expectEqual(@as(c_int, 1), opal_browser_test_security_navigation_allowed("https://example.com/"));
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try address.listen(io.io(), .{ .reuse_address = true });
+    defer server.deinit(io.io());
+    var fixture: Fixture = .{};
+    var response = try io.io().concurrent(Fixture.serve, .{ &server, &fixture });
+    defer stopServer(&server, &response, &fixture);
+    try navigate(server.socket.address.getPort(), "jackett-https-only", "Image allowed");
+    try std.testing.expect(fixture.images.load(.acquire) > 0);
 }
 test "Native browser protections first party integration loads and exchanges actual WebKit messages" {
     _ = @import("../services/comics.zig");
