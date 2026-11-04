@@ -214,7 +214,7 @@ fn protections() void {
     c.toggleRow(@src(), "Block known tracking domains", null, &privacy.prefs.block_trackers);
     c.toggleRow(@src(), "Remove known tracking cookies", "Removes analytics cookies such as _ga and _fbp. Other cookies stay available for sign-in.", &privacy.prefs.clean_tracking_cookies);
     c.toggleRow(@src(), "Block WebRTC", "Disables peer connections after reload. Always enabled on the Tor route.", &privacy.prefs.block_webrtc);
-    c.toggleRow(@src(), "HTTPS only", "Blocks insecure HTTP pages and requests.", &privacy.prefs.https_only);
+    c.toggleRow(@src(), "HTTPS only", "Blocks remote HTTP pages. Localhost services are allowed.", &privacy.prefs.https_only);
     if (old_ads != privacy.prefs.block_ads or old_trackers != privacy.prefs.block_trackers or old_cookies != privacy.prefs.clean_tracking_cookies or old_rtc != privacy.prefs.block_webrtc or old_https != privacy.prefs.https_only) privacy.changed();
     const before = privacy.prefs.canvas;
     c.toggleRow(@src(), "Protect canvas readback", "Prevents sites reading canvas pixels for fingerprinting. Drawing still works; allow trusted editors below when exports are needed.", &privacy.prefs.canvas);
