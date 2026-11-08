@@ -25,7 +25,13 @@ def test_browser_media_integration():
     result = subprocess.run([node, 'tests/test_browser_integration.js'], cwd=ROOT, capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, (result.stderr or result.stdout)[-1400:]
     assert 'browser-integration' in (ROOT / 'scripts/build-app.sh').read_text()
-    return 'pass', 'real extension scripts: captured headers, trusted clicks, timestamp, SPA reset and frame validation'
+    # REGRESSION: macOS 15 WebKit records an advisory webRequest/non-persistent
+    # error for the MV3 manifest; treating every recorded error as fatal left the
+    # whole integration (favicons, comic + YouTube handoff) unloaded there.
+    native = (ROOT / 'src/macos/browser_integration.m').read_text()
+    assert 'extension.errors.count' not in native
+    assert 'WKWebExtensionErrorInvalidBackgroundPersistence' in native
+    return 'pass', 'real extension scripts: captured headers, trusted clicks, timestamp, SPA reset, frame validation and webRequest-less WebKit'
 
 @test("Browser session measurements report real deltas without exposing browsing URLs", "Browser")
 def test_session_measurements():

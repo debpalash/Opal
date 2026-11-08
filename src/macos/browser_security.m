@@ -44,6 +44,12 @@ static NSMapTable<WKHTTPCookieStore *, OpalPrivacyMeasurements *> *cookie_stores
         if (i && !rules_ready) continue;
         counters[self.private][i] += [n unsignedLongLongValue];
     }
+    // macOS 15's WebKit does not notify cookie-store observers for cookies a
+    // page sets through document.cookie, so tracking cookies set by script
+    // survived. Each page measurement also sweeps that page's cookie store.
+    WKHTTPCookieStore *store = message.webView.configuration.websiteDataStore.httpCookieStore;
+    OpalPrivacyMeasurements *observer = store && cookie_stores ? [cookie_stores objectForKey:store] : nil;
+    if (observer) [observer cookiesDidChangeInCookieStore:store];
     if (wake_ui) wake_ui();
 }
 - (void)cookiesDidChangeInCookieStore:(WKHTTPCookieStore *)store {
