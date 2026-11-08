@@ -39,7 +39,7 @@ Streaming is split across subscriptions, servers, and a dozen apps. Opal puts it
 | Torrent streaming | ✅ | ❌ | ❌ | ❌ |
 | YouTube, live TV, manga in the same app | ✅ | ❌ | ❌ | ❌ |
 | Local AI & agent automation | ✅ | ❌ | ❌ | ❌ |
-| Plays your Plex & Jellyfin libraries | ✅ | — | ✅ | ✅ |
+| Plays both Plex & Jellyfin libraries | ✅ | ❌ | Plex only | Jellyfin only |
 
 <sub>Opal is a player and source hub. It ships no catalog and no Netflix titles; it connects to Plex and Jellyfin servers rather than replacing them.</sub>
 
