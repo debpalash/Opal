@@ -13,6 +13,15 @@ ROOT = Path(__file__).resolve().parents[1]
 CANCEL = c.CFUNCTYPE(c.c_bool, c.c_void_p)
 
 
+class LoopbackServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer without HTTPServer.server_bind's reverse DNS lookup
+    (socket.getfqdn), which takes tens of seconds on GitHub's macOS runners."""
+    def server_bind(self):
+        import socketserver
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = '127.0.0.1', self.server_address[1]
+
+
 class Request(c.Structure):
     _fields_ = [('url', c.c_char_p), ('method', c.c_char_p), ('headers_json', c.c_char_p),
                 ('payload', c.c_void_p), ('payload_len', c.c_size_t),
@@ -70,7 +79,7 @@ class FoundationHttpTests(unittest.TestCase):
         cls.call = cls.library.opal_apple_http_request
         cls.call.argtypes = [c.POINTER(Request)]
         cls.call.restype = c.c_int
-        cls.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        cls.server = LoopbackServer(('127.0.0.1', 0), Handler)
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
 
     @classmethod

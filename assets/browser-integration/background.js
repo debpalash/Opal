@@ -10,6 +10,9 @@ function sent(d){
  pending.set(d.requestId,{url:d.url,headers:useful(d.requestHeaders),tabId:d.tabId});
  if(pending.size>128)pending.delete(pending.keys().next().value);
 }
+// macOS 15 WebKit refuses webRequest in non-persistent (MV3) backgrounds; keep
+// favicons, comic handoff and plain YouTube handoff working without capture.
+function listen(){
 try{api.webRequest.onSendHeaders.addListener(sent,{urls:['https://*.googlevideo.com/*']},['requestHeaders','extraHeaders'])}
 catch{api.webRequest.onSendHeaders.addListener(sent,{urls:['https://*.googlevideo.com/*']},['requestHeaders'])}
 api.webRequest.onHeadersReceived.addListener(async d=>{
@@ -21,6 +24,8 @@ api.webRequest.onHeadersReceived.addListener(async d=>{
   const state=streams.get(d.tabId)||{};state[mime.startsWith('audio/')?'audio':'video']={...item,page:tab.url,mime};streams.set(d.tabId,state);
  }catch{}
 },{urls:['https://*.googlevideo.com/*']},['responseHeaders']);
+}
+try{if(api.webRequest)listen()}catch{}
 api.tabs.onRemoved.addListener(id=>streams.delete(id));
 api.tabs.onUpdated.addListener((id,change)=>{if(change.url)streams.delete(id)});
 api.runtime.onMessage.addListener(async (message,sender)=>{

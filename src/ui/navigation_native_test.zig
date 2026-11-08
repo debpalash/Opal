@@ -7,6 +7,10 @@ const input = @import("input.zig");
 const theme = @import("theme.zig");
 const io = @import("../core/io_global.zig");
 const components = @import("components.zig");
+const builtin = @import("builtin");
+/// Back/Forward are bound to the platform "ctrl/cmd" keybind: Cmd on macOS,
+/// Ctrl elsewhere. Sending Cmd on Linux/Windows is not the shortcut there.
+const history_mod: dvui.enums.Mod = if (builtin.os.tag == .macos) .lcommand else .lcontrol;
 const Case = enum { open_control, open_command, close_shortcut, escape, downloads, movies, arrows, no_results, reopen, back, forward };
 var current: Case = .open_control;
 var frame: usize = 0;
@@ -56,11 +60,11 @@ fn draw() !void {
             .reopen => _ = try dvui.currentWindow().addEventText(.{ .text = "downloads" }),
             .back => {
                 dvui.focusWidget(background_id, null, null);
-                try key(.left_bracket, .lcommand);
+                try key(.left_bracket, history_mod);
             },
             .forward => {
                 dvui.focusWidget(background_id, null, null);
-                try key(.right_bracket, .lcommand);
+                try key(.right_bracket, history_mod);
             },
         }
     }

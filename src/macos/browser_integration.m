@@ -199,11 +199,20 @@ BOOL opal_browser_integration_message(WKWebExtensionContext *context,id raw,WKWe
   if(wake_ui)wake_ui();reply(@{@"ok":@YES},nil);
  }];return YES;
 }
+// macOS 15 WebKit records "Non-persistent background content cannot listen to
+// `webRequest` events." for this MV3 manifest (MV3 cannot be persistent). It is
+// advisory: the extension still loads, only media-header capture is lost and
+// background.js degrades. Any other recorded error still blocks the install.
+static NSError *blocking_error(WKWebExtension *extension){
+ for(NSError *e in extension.errors)if(!([e.domain isEqualToString:WKWebExtensionErrorDomain]&&e.code==WKWebExtensionErrorInvalidBackgroundPersistence))return e;
+ return nil;
+}
 void opal_browser_integration_install(WKWebExtensionController *controller,BOOL private,void (*wake)(void)){
  wake_ui=wake;private_context=private;integration_error=nil;background_ready=NO;if(!extension_path)return;unsigned serial=++generation;
  [WKWebExtension extensionWithResourceBaseURL:[NSURL fileURLWithPath:extension_path] completionHandler:^(WKWebExtension *extension,NSError *error){
   if(serial!=generation)return;
-  if(!extension || extension.errors.count){integration_error=error.localizedDescription?:extension.errors.firstObject.localizedDescription?:@"Browser integration failed to load";if(wake_ui)wake_ui();return;}
+  NSError *blocking=extension?blocking_error(extension):nil;
+  if(!extension || blocking){integration_error=error.localizedDescription?:blocking.localizedDescription?:@"Browser integration failed to load";if(wake_ui)wake_ui();return;}
   WKWebExtensionContext *context=[[WKWebExtensionContext alloc]initForExtension:extension];context.uniqueIdentifier=@"opal-browser-integration";context.baseURL=[NSURL URLWithString:@"webkit-extension://opal-browser-integration/"];context.hasAccessToPrivateData=private;
   for(NSString *permission in extension.requestedPermissions)[context setPermissionStatus:WKWebExtensionContextPermissionStatusGrantedExplicitly forPermission:permission];
   for(WKWebExtensionMatchPattern *pattern in extension.requestedPermissionMatchPatterns)[context setPermissionStatus:WKWebExtensionContextPermissionStatusGrantedExplicitly forMatchPattern:pattern];

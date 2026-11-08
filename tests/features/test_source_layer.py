@@ -13,9 +13,22 @@ E3     No source had a mirror/fallback domain; one blocked host = a silent dead
 See tests/features/harness.py for the shared @test decorator + helpers."""
 from .harness import *  # noqa: F401,F403
 
+
+def _run_script(path, timeout):
+    """Run a standalone test script; on timeout report what it printed.
+
+    CI's first `xcrun clang -framework Foundation` (cold SDK/module cache) and
+    cold interpreters on a loaded macos-15 runner overran the old 30/60 s caps
+    while finishing in ~3 s locally, so the caps are generous and diagnostic."""
+    try:
+        return subprocess.run([sys.executable, os.path.join(PROJECT_DIR, path)], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        tail = lambda b: (b.decode(errors='replace') if isinstance(b, bytes) else (b or ''))[-1200:]
+        return subprocess.CompletedProcess(e.cmd, -1, tail(e.stdout), f'timed out after {timeout}s\n' + tail(e.stderr))
+
 @test("Jackett managed lifecycle and selected trackers over real HTTP", "Sources")
 def test_jackett_managed_integration():
-    result = subprocess.run([sys.executable, os.path.join(PROJECT_DIR, 'tests/test_jackett_integration.py')], capture_output=True, text=True, timeout=60)
+    result = _run_script('tests/test_jackett_integration.py', 180)
     return ('pass', 'owned loopback API, tracker selection, bounded responses, verified install and process cleanup') if result.returncode == 0 else ('fail', result.stderr[-1800:])
 
 import json as _json
@@ -36,7 +49,7 @@ def test_ios_device_pipeline():
 def test_ios_http_transport():
     if sys.platform != 'darwin':
         return 'skip', 'Foundation transport requires the Apple SDK'
-    result = subprocess.run([sys.executable, os.path.join(PROJECT_DIR, 'tests/test_ios_http.py')], capture_output=True, text=True, timeout=30)
+    result = _run_script('tests/test_ios_http.py', 180)
     return ('pass', 'real Foundation transport: headers/body, origin-safe redirects, limits, deadlines and cancellation') if result.returncode == 0 else ('fail', result.stderr[-1600:])
 
 
