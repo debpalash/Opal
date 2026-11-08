@@ -54,6 +54,7 @@ def main():
     parser.add_argument('--device', help='Simulator name or UDID')
     parser.add_argument('--timeout', type=int, default=360)
     parser.add_argument('--out', default=str(ROOT / 'zig-out/ios-uitest'))
+    parser.add_argument('--only', default='', help='Comma-separated step names (onboarding always runs)')
     args = parser.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -67,7 +68,8 @@ def main():
     subprocess.run(['xcrun', 'simctl', 'uninstall', udid, ios.BUNDLE], capture_output=True)
     ios.run(['xcrun', 'simctl', 'install', udid, app])
     command = ['xcrun', 'simctl', 'launch', '--console-pty', '--terminate-running-process', udid, ios.BUNDLE, '--ui-test']
-    process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    env = {**os.environ, 'SIMCTL_CHILD_OPAL_UITEST_ONLY': args.only}
+    process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
     results, transcript, done = [], [], False
     deadline = time.monotonic() + args.timeout
     def lines():

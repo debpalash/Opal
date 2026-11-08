@@ -118,6 +118,10 @@ def test_ios_torrent_pipeline():
     # REGRESSION: a 10 GB release's first 8 MB stalled at 25% while 557 MB arrived elsewhere.
     if "cp.repinDue(" not in gate:
         problems.append("stream gate pins the start range only once")
+    # REGRESSION: failed smart-play attempts kept downloading and resumed on relaunch.
+    tmdb = _src("src/services/tmdb.zig")
+    if "tmdb_pure.attemptOwnsTorrent(" not in tmdb or "releaseAbandoned();" not in tmdb:
+        problems.append("abandoned smart-play torrents never released")
     return ("fail", "; ".join(problems)) if problems else ("pass", "iOS torrent pipeline guards in place")
 
 

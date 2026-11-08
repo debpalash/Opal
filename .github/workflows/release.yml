@@ -8,6 +8,8 @@ name: Release
 #   • linux-x86_64   — tarball + .deb + .rpm + Pacman + AppImage + .run
 #   • windows-x86_64 — portable .zip + .msi (MSYS2/MINGW64 build +   [ALPHA]
 #                      vendored MS onnxruntime; see the job for why)
+#   • ios            — unsigned sideload IPA, attached after publish   [preview]
+#                      (ios-ipa.yml; never blocks the desktop release)
 #   • aur            — opal-media-player source + prebuilt -bin      [gated]
 #                      (binary tarball repackage); gated on
 #                      AUR_PUBLISH_ENABLED='true' + AUR_SSH_PRIVATE_KEY secret.
@@ -821,6 +823,12 @@ jobs:
             artifacts/SHA256SUMS.txt
           body_path: RELEASE_NOTES.md
           draft: false
+
+  ios:
+    needs: publish
+    uses: ./.github/workflows/ios-ipa.yml
+    with:
+      tag: ${{ inputs.version || github.ref_name }}
 
   # ── AUR publish ─────────────────────────────────────────────────────────
   # Auto-updates the uniquely named `opal-media-player` source package and its

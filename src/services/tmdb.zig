@@ -2650,6 +2650,10 @@ var attempted_lens: [3]usize = .{ 0, 0, 0 };
 var attempt_count: usize = 0;
 var attempt_started_ms: i64 = 0;
 var attempt_ready: bool = false;
+/// Session next-id when each attempt was loaded (-1: origin unknown).
+var attempt_first_tid: [3]i32 = .{ -1, -1, -1 };
+/// Failed attempts' own transfers awaiting release (see releaseAbandoned).
+var abandoned_tids: [3]i32 = .{ -1, -1, -1 };
 
 pub fn armStoredEpisode(id: i32, season: i32, episode: i32, source: []const u8) void {
     episode_mutex.lock();
@@ -2682,6 +2686,7 @@ pub fn armStoredEpisode(id: i32, season: i32, episode: i32, source: []const u8) 
         attempt_count = 1;
         @memcpy(attempted_urls[0][0..source.len], source);
         attempted_lens[0] = source.len;
+        attempt_first_tid[0] = -1;
         attempt_started_ms = io.monotonicMilliTimestamp();
         attempt_ready = false;
     }
@@ -2719,6 +2724,7 @@ pub fn retryEpisodeSource(url: []const u8) bool {
     if (decision == .ignore) return false;
     attempt_started_ms = 0;
     attempt_ready = false;
+    markAbandoned(index);
     if (decision == .manual) {
         search.setUniversalQuery(episode_query[0..episode_query_len]);
         state.navigateToTab(.Search);
@@ -2732,7 +2738,50 @@ pub fn retryEpisodeSource(url: []const u8) bool {
     return true;
 }
 
+/// Remember the failed attempt's torrent if the attempt itself created it.
+/// Caller holds episode_mutex.
+fn markAbandoned(index: usize) void {
+    for (state.app.players.items) |p| {
+        if (!p.is_torrent or p.source_url_len == 0) continue;
+        if (!std.mem.eql(u8, p.source_url[0..p.source_url_len], attempted_urls[index][0..attempted_lens[index]])) continue;
+        if (!tmdb_pure.attemptOwnsTorrent(p.current_torrent_id, attempt_first_tid[index])) return;
+        for (&abandoned_tids) |*slot| {
+            if (slot.* == p.current_torrent_id) return;
+        }
+        for (&abandoned_tids) |*slot| {
+            if (slot.* < 0) {
+                slot.* = p.current_torrent_id;
+                return;
+            }
+        }
+        return;
+    }
+}
+
+/// Owner thread: stop downloading failed attempts once no player streams them.
+fn releaseAbandoned() void {
+    for (&abandoned_tids) |*slot| {
+        const tid = slot.*;
+        if (tid < 0) continue;
+        var attached = false;
+        for (state.app.players.items) |p| {
+            if (p.current_torrent_id == tid) attached = true;
+        }
+        if (!tmdb_pure.releaseAbandonedTorrent(tid, attached)) continue;
+        slot.* = -1;
+        @import("../player/stream_gate.zig").reset(tid);
+        @import("torrent_intents.zig").forgetTorrent(tid);
+        @import("../core/c.zig").mpv.torrent_remove(state.torrentSession(), tid);
+        logs.pushLog("info", "tmdb", "Stopped a smart-play source that failed to start", false);
+    }
+}
+
 pub fn checkEpisodeStartup() void {
+    {
+        episode_mutex.lock();
+        defer episode_mutex.unlock();
+        releaseAbandoned();
+    }
     var url: [2048]u8 = undefined;
     var len: usize = 0;
     episode_mutex.lock();
@@ -2915,6 +2964,7 @@ fn smartPlayEpisode(query: []const u8, generation: u64) void {
         const url = chosen_url[0..chosen_url_len];
         @memcpy(attempted_urls[attempt_count][0..url.len], url);
         attempted_lens[attempt_count] = url.len;
+        attempt_first_tid[attempt_count] = @import("../core/c.zig").mpv.torrent_count(state.torrentSession());
         attempt_count += 1;
         attempt_started_ms = io.monotonicMilliTimestamp();
         attempt_ready = false;

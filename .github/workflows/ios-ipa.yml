@@ -1,0 +1,75 @@
+name: iOS IPA
+
+# Unsigned, profile-free IPA of the iOS device build (scripts/ios-device.py --ipa).
+#   • release.yml calls this after publishing a tag → the IPA is attached to the
+#     release and added to SHA256SUMS.txt. A failed iOS build never blocks the
+#     desktop release.
+#   • workflow_dispatch re-attaches the IPA to an existing release tag.
+#   • pull requests touching the iOS build only build it (no upload).
+# Sideloading tools (AltStore, Sideloadly, …) sign the IPA with the user's own
+# Apple ID; no signing material exists in CI.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to attach the IPA to (for example v0.9.4)"
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - "mobile/ios/**"
+      - "build-ios.zig"
+      - "scripts/ios-device.py"
+      - "scripts/ios-deps.py"
+      - ".github/workflows/ios-ipa.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      OPAL_RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Select the newest Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          xcodebuild -version
+      - name: Install build tools
+        run: brew install xcodegen cmake boost ffmpeg
+      - name: Build unsigned IPA
+        run: |
+          VERSION=$(python3 -c 'import re; print(re.search(r"\.version\s*=\s*\"([^\"]+)\"", open("build.zig.zon").read())[1])')
+          if [ -n "$OPAL_RELEASE_TAG" ]; then python3 scripts/check-release-version.py "$OPAL_RELEASE_TAG"; fi
+          python3 -u scripts/ios-device.py --ipa "dist/Opal-${VERSION}-ios.ipa"
+          cd dist && shasum -a 256 Opal-*-ios.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: dist/Opal-*-ios.ipa
+          if-no-files-found: error
+      - name: Attach to the release and its checksum manifest
+        if: env.OPAL_RELEASE_TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$OPAL_RELEASE_TAG" dist/Opal-*-ios.ipa --clobber
+          gh release download "$OPAL_RELEASE_TAG" -p SHA256SUMS.txt -D published
+          grep -v -- '-ios\.ipa' published/SHA256SUMS.txt > SHA256SUMS.txt || true
+          (cd dist && shasum -a 256 Opal-*-ios.ipa) >> SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          gh release upload "$OPAL_RELEASE_TAG" SHA256SUMS.txt --clobber
