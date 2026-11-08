@@ -2,27 +2,35 @@
 
 <img src="assets/logo.svg" width="64" alt="Opal" />
 
-# Your files. Your streams. Your next read.
+# Opal — Your entertainment. Your sources. Your rules.
 
-**Stream torrents. Watch YouTube. Read comics. Keep your place in one native app.**
+**The open-source everything media player & browser.**
 
-Free and open source. No telemetry. No subscription. Optional AI runs locally.
+Movies & TV · Torrents · YouTube · Live TV · Music · Podcasts · Radio<br>
+Manga & Comics · Books & Novels · Audiobooks · Web · Local AI
 
-iOS preview: sideload the unsigned IPA from the [latest release](https://github.com/debpalash/Opal/releases/latest), or [build it on a physical iPhone/iPad](docs/ios.md). Desktop feature parity is still in progress.
+A personal alternative to the Netflix-style streaming experience, a companion to
+Plex and Jellyfin, and a home for the things you watch, listen to, read, and browse.
+Bring your files, connect your servers, and install the sources you want.
 
-**[Download Opal](https://github.com/debpalash/Opal/releases/latest)** · [See what’s new](CHANGELOG.md) · [Website](https://opal.palash.dev)
+Free and open source. No telemetry. No Opal subscription. Optional AI runs locally.
+
+**[Download Opal](https://github.com/debpalash/Opal/releases/latest)** · [Explore features](#why) · [See it in action](#see-it) · [Website](https://opal.palash.dev)
 
 macOS · Linux · Windows alpha · iOS preview
 
 </div>
 
-![Opal’s native macOS browser: compact address bar and tabs, a themed new-tab page, privacy measurements and connection controls.](assets/releases/v0.9.3/browser.png)
+![Sintel playing in Opal’s native macOS app, with the media navigation and playback controls visible.](assets/readme/sintel-player.webp)
 
-<sub>Current macOS UI with public demo recents.</sub>
+<sub>Native macOS UI preview with a paused film frame. Sintel © Blender Foundation, [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/). [Artwork credits](assets/readme/CREDITS.md).</sub>
 
-- **Watch without waiting for the whole file.** Open local media or stream a torrent while it downloads, with subtitles, audio tracks and session restore.
-- **Move from browsing to watching or reading.** On macOS, use tabs and extensions inside Opal; send a YouTube video to the player or a recognized comic page to your installed reading sources.
-- **Choose your setup.** Add source plugins, connect Jellyfin or Plex, control playback from your phone, or enable local AI when you want it.
+- **Make it your movie night.** Play local files, stream torrents while they download, browse movies and TV, or connect your Plex and Jellyfin libraries.
+- **Go beyond video.** Listen to music, podcasts, radio, and audiobooks. Read manga, comics, books, and novels. Browse the web inside Opal on macOS.
+- **Build your own setup.** Add source plugins, cast to another screen, watch together, control playback from your phone, or let a local AI or coding agent help.
+
+Opal is a player and source hub; it does not include a paid streaming catalog or
+access to Netflix titles. Connected services and sources may require their own accounts.
 
 [Quick install](#get-it) · [Demos](#see-it) · [Features](#why) · [Build from source](#building-from-source)
 
@@ -149,119 +157,105 @@ curl -fsSL https://raw.githubusercontent.com/debpalash/Opal/main/scripts/install
 
 ## See it in action
 
-**New in v0.9.3: the browser belongs in the app.** Tabs, pinned extensions, a native
-new-tab page, YouTube handoff and comic discovery keep browsing close to playback.
-The native embedded browser and desktop update flow shown here are for macOS.
+**One native app, from finding something to pressing play.** These new macOS
+UI previews use openly licensed Blender films, paused frames, and isolated demo data.
+
+![Big Buck Bunny playing in Opal’s native player.](assets/readme/bunny-player.webp)
+
+<sub>Big Buck Bunny © 2008 Blender Foundation / [www.bigbuckbunny.org](https://peach.blender.org/), [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).</sub>
+
+![Opal’s connection screen for bringing your own media services into the app.](assets/readme/connections.webp)
+
+<sub>Connect your own services. Availability and setup depend on the source. The embedded browser is currently a macOS feature.</sub>
 
 <details>
-<summary><b>Update, keep using Opal, restart when ready</b></summary>
+<summary><b>Watch torrent streaming in action</b></summary>
 
-<picture>
-  <source media="(prefers-reduced-motion: reduce)" srcset="assets/releases/v0.9.3/update-ready.png" />
-  <img src="assets/releases/v0.9.3/update-flow.gif" width="100%" alt="Opal’s corner update card moves from Update to download progress to Restart, while the browser stays open." />
-</picture>
+Open a magnet and watch while it downloads; available peers are required.
+This earlier recording shows Sintel and predates the current navigation.
 
-Native UI preview with an illustrative next-version number. The app changes only
-after you choose Restart.
-
-</details>
-
-Browse movies and TV, switch sources, and find your next watch.
-
-<div>
-<a href="assets/media/browse.mp4"><picture>
-  <source media="(prefers-reduced-motion: reduce)" srcset="assets/readme/browse.webp" />
-  <img src="assets/readme/browse.gif" width="100%" alt="Opal recording: browse the movie poster wall, then switch to YouTube, in a matte mineral frame." />
-</picture></a>
-</div>
-
-[Watch the full recording →](assets/media/browse.mp4)
-
-<details>
-<summary><b>Stream a torrent while it downloads</b></summary>
-
-Play a magnet directly. Downloads follow playback; available peers are required.
-
-<div>
-<a href="assets/media/stream-a-torrent.mp4"><picture>
-  <source media="(prefers-reduced-motion: reduce)" srcset="assets/readme/torrent.webp" />
-  <img src="assets/readme/torrent.gif" width="100%" alt="Opal recording: start a Sintel torrent and watch it while it downloads." />
-</picture></a>
-</div>
+[![Sintel streaming from a torrent in Opal.](assets/readme/torrent.webp)](assets/media/stream-a-torrent.mp4)
 
 [Watch the recording →](assets/media/stream-a-torrent.mp4)
 
-<sub>Sintel, © Blender Foundation, CC BY 3.0.</sub>
+<sub>Sintel © Blender Foundation / [www.sintel.org](https://durian.blender.org/), [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).</sub>
 
 </details>
 
 <details>
-<summary><b>Ask your local AI what to watch</b></summary>
+<summary><b>Browse inside Opal on macOS</b></summary>
 
-Get playable recommendations from an optional on-device model. No API key needed.
+Tabs, pinned extensions, a native new-tab page, YouTube handoff, and comic
+discovery bring the web closer to your player and reading library.
 
-<div>
-<a href="assets/media/ask-the-ai.mp4"><picture>
-  <source media="(prefers-reduced-motion: reduce)" srcset="assets/readme/ai.webp" />
-  <img src="assets/readme/ai.gif" width="100%" alt="Opal recording: a prompt starts a local AI conversation with playable recommendations." />
-</picture></a>
-</div>
+![Opal’s native macOS browser with tabs, extensions, a themed new-tab page, and connection controls.](assets/releases/v0.9.3/browser.png)
 
-[Watch the recording →](assets/media/ask-the-ai.mp4)
-
-![Opal asking its local AI copilot what to watch, and getting back a rail of playable recommendations.](assets/screenshots/chat.jpg)
+<sub>Native UI preview with public demo recents.</sub>
 
 </details>
-
-<details>
-<summary><b>Explore search and playback</b></summary>
-
-Search enabled sources for files, streams, reading results, and title details.
-
-![Opal search with Sintel results and play or queue actions.](assets/readme/search.webp)
-
-Adjust quality, audio, subtitles, and translation while watching.
-
-![Big Buck Bunny playing in Opal with audio, subtitle, and translation controls.](assets/readme/player.webp)
-
-<sub>Big Buck Bunny, © Blender Foundation, CC BY 3.0.</sub>
-
-</details>
-
-<sub>Recordings predate the toolbar shown in the screenshots. Reduced-motion settings show still previews.</sub>
 
 <a id="why"></a>
 
-## Your sources. One player.
+## Your entertainment stack, in one app
 
-- **Watch:** movies, TV, anime, YouTube, and ~40,000 live TV / IPTV channels.
-- **Connect:** browse your Jellyfin and Plex servers.
-- **Read:** manga through managed Suwayomi and Mihon / Tachiyomi extensions.
-- **Play together:** casting, watch parties, subtitles, translation, and SponsorBlock.
-- **Keep your place:** local history, session restore, and incognito.
-- **Add what you need:** source plugins, RSS, themes, and optional AI, voice, and OCR.
+| If you want… | Use Opal for… |
+| --- | --- |
+| A Netflix-style home for your own sources | Movie and TV discovery, title details, watchlists, and playback from your files, servers, and installed sources. |
+| A Plex or Jellyfin desktop client | Connect to your existing server and browse and play its library inside Opal. |
+| A Stremio or Kodi alternative | An extensible media hub with source plugins, torrents, live TV, and local playback. |
+| A VLC-style player with more around it | Local files and streams, subtitles, audio tracks, playlists, and session restore alongside discovery and reading. |
+| Video, audio, and reading together | YouTube, music, podcasts, radio, audiobooks, manga, comics, books, and novels. |
+
+These comparisons describe how you can use Opal; feature coverage varies by
+platform and source. Opal connects to Plex and Jellyfin servers rather than
+replacing their server software.
+
+| Feature | What you can do |
+| --- | --- |
+| **Movies, TV & anime** | Discover titles, open details, and play from enabled sources. |
+| **Local media** | Open your files, organize a local library, and resume where you left off. |
+| **Torrents & downloads** | Stream magnets while they download, manage transfers and queues, or use an optional memory buffer for temporary torrents. |
+| **YouTube** | Search and play videos, hand off from the browser, and use SponsorBlock. |
+| **Live TV & IPTV** | Browse and play channels from enabled live TV sources. |
+| **Music, podcasts & radio** | Connect a Subsonic/OpenSubsonic music library, follow podcast episodes, and tune into radio. |
+| **Manga & comics** | Read with managed Suwayomi and Mihon/Tachiyomi extensions. |
+| **Books & novels** | Browse OPDS libraries and installed reading sources; discover visual novels through VNDB. |
+| **Audiobooks** | Connect your Audiobookshelf server. |
+| **Web browser** | Browse with tabs and extensions, send videos to playback, and discover reading sources on macOS. |
+| **Connected libraries** | Bring Plex, Jellyfin, and other supported services into one interface. |
+| **Playback tools** | Choose subtitles and audio tracks, translate subtitles, cast, and join watch parties. |
+| **Personal library** | Keep history, collections, watchlists, and restored sessions; use incognito when you want it. |
+| **Sources & customization** | Install source plugins, follow RSS, choose themes, and browse wallpapers. |
+| **Local AI, voice & OCR** | Enable optional on-device tools for recommendations, voice interaction, and text recognition. |
+| **Remote & browser controls** | Use the phone companion or the Opal Connect browser extension. |
+| **Agent automation** | Search, play, queue, manage a Wanted list, and schedule optional tasks through MCP. |
 
 Sources start disabled; install the ones you want. [Source coverage](docs/browse-sources.md) ·
-[Roadmap](ROADMAP.md).
+[Roadmap](ROADMAP.md) · [What’s new](CHANGELOG.md).
 
-For Jackett, open **Connect → Torrent indexers → Start Jackett**.
-Opal downloads the official binary, runs it locally and opens tracker management
-inside its browser. [Managed Jackett setup](docs/jackett.md).
+**Platform availability:** macOS and Linux desktop builds, Windows x64 alpha,
+and an iOS preview. Desktop feature parity on iOS is still in progress.
+[Sideload the latest IPA](https://github.com/debpalash/Opal/releases/latest) or
+[build for a physical iPhone/iPad](docs/ios.md).
 
 <details>
-<summary><b>Playback tips and temporary torrents</b></summary>
+<summary><b>Source setup and playback tips</b></summary>
+
+Install search sources in **Settings → General → Install source plugins**.
+For Jackett, open **Connect → Torrent indexers → Start Jackett**.
+Opal downloads the official binary, runs it locally, and opens tracker management
+inside its browser. [Managed Jackett setup](docs/jackett.md).
 
 **Search** works from any page; compact windows also offer it under **More**.
-Hover toolbar icons for labels, or scroll the toolbar in narrow windows.
 Click a result or **Play** to watch; **+** queues a torrent and **Details** opens title info.
-**×** on Now Playing stops playback. Find controls in **More → Playback options**.
-
-Source installation errors include recovery steps in redacted **Logs**.
+Find additional controls in **More → Playback options**.
 
 For temporary torrents, enable **Settings → Network → Stream torrents in memory**.
 Choose 128, 256 (default), or 512 MiB per new torrent. Seeking may redownload pieces;
 closing releases the buffer. Existing transfers keep their storage mode.
 Decoder memory is extra, and the OS may swap RAM to disk.
+
+Source installation errors include recovery steps in redacted **Logs**.
 
 </details>
 
@@ -269,8 +263,6 @@ Decoder memory is extra, and the OS may swap RAM to disk.
 
 **Opal Connect** for Chrome, Edge, and Firefox sends videos to Opal, adds reading
 sources, and controls playback from a side panel.
-
-[![Opal Connect browser side panel with page actions, playback controls, and search.](assets/readme/connect.webp)](extension/README.md)
 
 [Install the extension →](extension/README.md) · [Download builds](../../releases/latest)
 
