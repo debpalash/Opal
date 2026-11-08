@@ -43,6 +43,15 @@ RSS = '''<rss xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel><ite
 <torznab:attr name="peers" value="2"/></item></channel></rss>'''
 
 
+
+class LoopbackServer(http.server.ThreadingHTTPServer):
+    """ThreadingHTTPServer without HTTPServer.server_bind's reverse DNS lookup
+    (socket.getfqdn), which takes tens of seconds on GitHub's macOS runners."""
+    def server_bind(self):
+        import socketserver
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = '127.0.0.1', self.server_address[1]
+
 class SearchTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -64,7 +73,7 @@ class SearchTests(unittest.TestCase):
                 self.end_headers()
                 try: self.wfile.write(body.encode())
                 except (BrokenPipeError, ConnectionResetError): pass
-        cls.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        cls.server = LoopbackServer(('127.0.0.1', 0), Handler)
         cls.base = f'http://127.0.0.1:{cls.server.server_port}/jackett'
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -211,7 +220,12 @@ class H(http.server.BaseHTTPRequestHandler):
  def log_message(self,*a):pass
  def do_GET(self):
   self.send_response(200 if c['APIKey'] in self.path else 403);self.end_headers();self.wfile.write(b'<indexers />')
-http.server.HTTPServer(('127.0.0.1',c['Port']),H).serve_forever()
+# HTTPServer.server_bind reverse-resolves the host (getfqdn) before listening;
+# that took >30 s on GitHub's macOS runners, so the fixture never came up.
+class S(http.server.HTTPServer):
+ def server_bind(self):
+  import socketserver;socketserver.TCPServer.server_bind(self);self.server_name='127.0.0.1';self.server_port=self.server_address[1]
+S(('127.0.0.1',c['Port']),H).serve_forever()
 ''')
             binary.chmod(0o700)
             log = open(root / 'manager.stderr', 'w+')
