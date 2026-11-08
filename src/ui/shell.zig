@@ -66,6 +66,11 @@ pub fn sidebarBoundsForTest() struct { sidebar: dvui.Rect.Physical, content: dvu
 const transparent = theme.transparent;
 
 var player_top_chrome_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+/// Hosts that draw their own player top bar (iOS) register it here so the
+/// full-pane click catchers under it leave its taps alone.
+pub fn setPlayerTopChrome(r: dvui.Rect.Physical) void {
+    player_top_chrome_rect = r;
+}
 
 fn browserToolbarActive() bool {
     return state.app.router.current == .browse and state.app.browse_source == .Web and @import("browser_hub.zig").browsing();
@@ -83,6 +88,43 @@ pub fn mouseInPlayerTopChrome(p: dvui.Point.Physical) bool {
 // a Browse/Library/System sub-tab via state.navigateToTab without importing shell).
 
 /// Frame entry — called from appFrame when page_shell_enabled.
+/// Unsafe edges supplied by a mobile host (notch, home indicator, on-screen
+/// keyboard) in natural units. Desktop leaves these zero.
+pub var host_insets: @import("mobile_layout_pure.zig").Insets = .{};
+/// iOS: height (pt) of the strip beside the Dynamic Island / notch. When set,
+/// the brand, sidebar toggle and More menu move into it (flanking the cutout)
+/// and the top row keeps the full width for the query. 0 = no cutout band.
+pub var cutout_band: f32 = 0;
+const rail_pure = @import("rail_autohide_pure.zig");
+var rail_auto: rail_pure.State = .{};
+var rail_last_route: ?Route = null;
+fn trackRailAutohide() void {
+    const was = rail_auto.visible;
+    if (rail_last_route != state.app.router.current) {
+        rail_last_route = state.app.router.current;
+        rail_pure.update(&rail_auto, .route_changed);
+    }
+    const scale = dvui.windowNaturalScale() * @max(0.1, state.app.ui_scale);
+    for (dvui.events()) |e| {
+        if (e.evt != .mouse or !e.evt.mouse.button.touch()) continue;
+        const me = e.evt.mouse;
+        switch (me.action) {
+            .press => rail_pure.update(&rail_auto, .{ .press = me.p.x / scale - host_insets.left }),
+            .motion => |d| rail_pure.update(&rail_auto, .{ .motion = d.y / scale }),
+            else => {},
+        }
+    }
+    if (was != rail_auto.visible) dvui.refresh(null, @src(), null);
+}
+fn hostWindowRect() dvui.Rect.Natural {
+    var r = dvui.windowRect();
+    r.x += host_insets.left;
+    r.y += host_insets.top;
+    r.w = @max(1, r.w - host_insets.left - host_insets.right);
+    r.h = @max(1, r.h - host_insets.top - host_insets.bottom);
+    return r;
+}
+
 pub fn render() !void {
     if (@import("builtin").is_test) sidebar_toggle_rect = .{};
     // Player popovers and panels are route-bound. Leaving Now Playing must not
@@ -95,11 +137,11 @@ pub fn render() !void {
         state.app.stats_overlay_open = false;
     }
 
-    const live_width = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
+    const live_width = @import("../core/scale_pure.zig").layoutUnits(hostWindowRect().w, state.app.ui_scale);
     const titlebar = @import("titlebar.zig");
     const titlebar_in_flow = titlebar.active() and state.app.router.current != .player;
     const live_height = @import("../core/scale_pure.zig").layoutUnits(
-        @max(1, dvui.windowRect().h - @as(f32, if (titlebar_in_flow) titlebar.HEIGHT else 0)),
+        @max(1, hostWindowRect().h - @as(f32, if (titlebar_in_flow) titlebar.HEIGHT else 0)),
         state.app.ui_scale,
     );
     var root = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -122,7 +164,7 @@ pub fn render() !void {
     // This shell renders inside dvui.scale(ui_scale), so convert OS window
     // dimensions before comparing either point or layout-unit thresholds.
     const scale_pure = @import("../core/scale_pure.zig");
-    const window_rect = dvui.windowRect();
+    const window_rect = hostWindowRect();
     const w = scale_pure.layoutUnits(window_rect.w, state.app.ui_scale);
     const compact = scale_pure.needsCompactNav(w, state.app.ui_scale);
     const narrow = scale_pure.isNarrow(w, state.app.ui_scale) or w < 1200;
@@ -226,6 +268,7 @@ pub fn render() !void {
         return;
     }
 
+    if (cutout_band > 0) renderCutoutBand(compact);
     if (!immersive) {
         // Fade the nav out over the same window as the control-bar fade
         // (footer.zig) instead of popping in one frame — a chrome layer
@@ -249,21 +292,28 @@ pub fn render() !void {
         // gets a consistent gutter so content never sits flush to the window edge.
         const r = state.app.router.current;
         const base_layout = sidebar_layout.layout(live_width, sidebar_collapsed, sidebar_fixture orelse sidebar_user_expanded);
-        const peek = !base_layout.expanded and live_width >= 400 and
+        // Touch has no hover: the last tap point would pin the peek open.
+        const peek = !(comptime @import("../core/platform_pure.zig").mobile) and !base_layout.expanded and live_width >= 400 and
             sidebar_rect.w > 0 and sidebar_rect.contains(dvui.currentWindow().mouse_pt);
         if (peek != sidebar_hover_expanded) {
             sidebar_hover_expanded = peek;
             dvui.refresh(null, @src(), null);
         }
         // Hover is an overlay. Only a pinned sidebar reserves content width.
-        const nav_layout = base_layout;
+        var nav_layout = base_layout;
+        // Touch: the collapsed rail hides while reading and returns on
+        // scroll-up / left-edge touch / navigation (rail_autohide_pure.zig).
+        if (comptime @import("../core/platform_pure.zig").mobile) {
+            trackRailAutohide();
+            if (!base_layout.expanded and !rail_auto.visible) nav_layout = .{ .sidebar = 0, .content = live_width, .expanded = false };
+        }
         var body = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .both,
             .min_size_content = .{ .w = live_width, .h = 0 },
             .max_size_content = .{ .w = live_width, .h = std.math.floatMax(f32) },
         });
         defer body.deinit();
-        renderSidebar(nav_layout);
+        if (nav_layout.sidebar > 0) renderSidebar(nav_layout);
         const rail_rect = sidebar_rect;
         // Tight gutter so content fills the window (Browse/grids especially);
         // the player still bleeds edge-to-edge.
@@ -376,6 +426,54 @@ fn renderTopNav(compact: bool, narrow: bool) void {
     });
     defer bar.deinit();
 
+    const in_band = cutout_band > 0;
+    if (!in_band) renderBrandAndToggle(browser_toolbar, compact);
+    // Persistent navigation owns destinations; this row owns the single query.
+    if (browser_toolbar) {
+        @import("browser_hub.zig").renderToolbar();
+    } else {
+        if (!compact) {
+            if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-left", "Back", false, state.app.router.canGoBack())) state.app.router.goBack();
+            if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-right", "Forward", false, state.app.router.canGoForward())) state.app.router.goForward();
+        }
+        omnibox(narrow);
+    }
+    if (state.app.router.current == .search) search_mod.renderShellSearchControls(compact);
+    if (!compact and anyHasMedia()) {
+        if (chromeIconButton(@src(), icons.tvg.lucide.play, "Now playing", false, true)) state.app.router.navigate(.player);
+    }
+    if (!in_band) renderProfileAndMore(compact);
+}
+
+/// iOS cutout strip: brand + sidebar toggle left of the Dynamic Island,
+/// profile + More right of it, centred on the island like status-bar items.
+fn renderCutoutBand(compact: bool) void {
+    const layout_pure = @import("mobile_layout_pure.zig");
+    const h = cutout_band / @max(0.1, state.app.ui_scale);
+    const row_h: f32 = 30;
+    // Padding counts toward the box: content height = band - offset, so the
+    // strip ends exactly where the cutout's safe edge does.
+    const offset = layout_pure.bandOffset(h, row_h);
+    var band = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = h - offset },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = h - offset },
+        .background = true,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app),
+        .padding = .{ .x = theme.spacing.sm, .y = offset, .w = theme.spacing.sm, .h = 0 },
+    });
+    defer band.deinit();
+    var left = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0, .min_size_content = .{ .w = 0, .h = row_h } });
+    renderBrandAndToggle(false, compact);
+    left.deinit();
+    var gap = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+    gap.deinit();
+    var right = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0, .min_size_content = .{ .w = 0, .h = row_h } });
+    renderProfileAndMore(compact);
+    right.deinit();
+}
+
+fn renderBrandAndToggle(browser_toolbar: bool, compact: bool) void {
     // Keep the product identity beside the sidebar control, including when the
     // rail is collapsed. The compact wordmark still leaves the query room to
     // shrink on narrow windows.
@@ -406,26 +504,20 @@ fn renderTopNav(compact: bool, narrow: bool) void {
         sidebar_fixture orelse sidebar_user_expanded,
     ).expanded;
     if (chromeIconButton(@src(), icons.tvg.lucide.@"panel-left", if (sidebar_expanded) "Collapse sidebar" else "Expand sidebar", false, true)) {
-        sidebar_hover_expanded = false;
-        sidebar_collapsed = sidebar_expanded;
-        sidebar_user_expanded = !sidebar_expanded;
-        sidebar_fixture = null;
+        // A rail that auto-hid comes back first; the next tap expands it.
+        if ((comptime @import("../core/platform_pure.zig").mobile) and !rail_auto.visible and !sidebar_expanded) {
+            rail_auto.visible = true;
+        } else {
+            sidebar_hover_expanded = false;
+            sidebar_collapsed = sidebar_expanded;
+            sidebar_user_expanded = !sidebar_expanded;
+            sidebar_fixture = null;
+        }
         dvui.refresh(null, @src(), null);
     }
-    // Persistent navigation owns destinations; this row owns the single query.
-    if (browser_toolbar) {
-        @import("browser_hub.zig").renderToolbar();
-    } else {
-        if (!compact) {
-            if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-left", "Back", false, state.app.router.canGoBack())) state.app.router.goBack();
-            if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-right", "Forward", false, state.app.router.canGoForward())) state.app.router.goForward();
-        }
-        omnibox(narrow);
-    }
-    if (state.app.router.current == .search) search_mod.renderShellSearchControls(compact);
-    if (!compact and anyHasMedia()) {
-        if (chromeIconButton(@src(), icons.tvg.lucide.play, "Now playing", false, true)) state.app.router.navigate(.player);
-    }
+}
+
+fn renderProfileAndMore(compact: bool) void {
     // Household profile avatar + switch menu (hidden with a single profile).
     @import("profiles_ui.zig").avatarMenu();
 
@@ -959,7 +1051,7 @@ fn navRowInteract(row: *dvui.BoxWidget) bool {
 
 // ── Page dispatch ──
 
-fn renderPage(r: Route) !void {
+pub fn renderPage(r: Route) !void {
     switch (r) {
         .player => {
             // Player route: the grid (video/waveform cell) on the left, and — when
@@ -1020,7 +1112,8 @@ fn renderPage(r: Route) !void {
             if (state.app.plugin_tab != .sources) pluginSubTabs();
             @import("../services/plugins.zig").renderSection(state.app.plugin_tab);
         },
-        .agents => if (!@import("profiles_ui.zig").blocksKid()) @import("agent_terminal.zig").render(),
+        // Agents run a PTY (forkpty), which iOS does not provide.
+        .agents => if (comptime @import("../core/platform_pure.zig").mobile) {} else if (!@import("profiles_ui.zig").blocksKid()) @import("agent_terminal.zig").render(),
         .system => {
             // Logs only — Plugins moved to its own nav-bar menu/route. A
             // one-entry tab strip would be pure chrome, so it's dropped.
@@ -1038,7 +1131,7 @@ const CONNECTED_SOURCES = [_]state.DrawerTab{.Wallpapers};
 
 /// Persistent grouped navigation. Ordinary buttons retain keyboard focus and
 /// activation semantics; the icon rail exposes the same labels through tips.
-fn renderSidebar(layout: sidebar_layout.Layout) void {
+pub fn renderSidebar(layout: sidebar_layout.Layout) void {
     var host = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .vertical,
         .min_size_content = .{ .w = layout.sidebar - 1, .h = 0 },
@@ -1050,18 +1143,22 @@ fn renderSidebar(layout: sidebar_layout.Layout) void {
     });
     defer host.deinit();
     sidebar_rect = host.data().borderRectScale().r;
-    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &sidebar_scroll, .horizontal = .none, .vertical = .auto }, .{
+    // Touch scrolls by drag: no bar, and no gutter reserved for one.
+    const touch = comptime @import("../core/platform_pure.zig").mobile;
+    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &sidebar_scroll, .horizontal = .none, .vertical = .auto, .vertical_bar = if (touch) .hide else .auto }, .{
         .expand = .both,
         .background = true,
         .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app),
         .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
         .border = dvui.Rect.all(0),
         .min_size_content = .{ .w = 0, .h = 0 },
-        .max_size_content = .{ .w = layout.sidebar - 9, .h = if (host.data().rect.h > 1) @max(0, host.data().rect.h - (if (layout.expanded) @as(f32, 53) else 93)) else std.math.floatMax(f32) },
+        .max_size_content = .{ .w = layout.sidebar - (if (touch) @as(f32, 1) else 9), .h = if (host.data().rect.h > 1) @max(0, host.data().rect.h - (if (layout.expanded) @as(f32, 53) else 93)) else std.math.floatMax(f32) },
         .padding = dvui.Rect.all(4),
     });
     // Agents is the front door: automations and personalised content first.
-    if (sidebarButton("Agents", icons.tvg.lucide.bot, state.app.router.current == .agents, layout.expanded, 8600)) state.app.router.navigate(.agents);
+    if (comptime !@import("../core/platform_pure.zig").mobile) {
+        if (sidebarButton("Agents", icons.tvg.lucide.bot, state.app.router.current == .agents, layout.expanded, 8600)) state.app.router.navigate(.agents);
+    }
     const routes = [_]Route{ .home, .search, .watching };
     const labels = [_][]const u8{ "Home", "All content", "Watching" };
     const glyphs = [_][]const u8{ icons.tvg.lucide.house, icons.tvg.lucide.search, icons.tvg.lucide.tv };
@@ -1092,6 +1189,10 @@ fn renderSidebar(layout: sidebar_layout.Layout) void {
         .padding = dvui.Rect.all(4),
         .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
         .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+        // Without a fill dvui paints the whole box in the border colour: the
+        // intended 1px divider rendered as a solid block behind the icons.
+        .background = true,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app),
     });
     defer utility.deinit();
     if (components.iconButton(@src(), iconForTab(.Settings), "Settings", state.app.router.current == .settings)) state.app.router.navigate(.settings);
@@ -1157,7 +1258,8 @@ fn sidebarButton(label: []const u8, glyph: []const u8, active: bool, expanded: b
         else => {},
     };
     button.drawBackground();
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+    // Vertical when collapsed so the lone glyph's gravity_x can centre it.
+    var row = dvui.box(@src(), .{ .dir = if (expanded) .horizontal else .vertical }, .{
         .expand = .both,
         .background = false,
         .color_fill = @import("color_compat.zig").wrap(theme.transparent),
@@ -1166,6 +1268,9 @@ fn sidebarButton(label: []const u8, glyph: []const u8, active: bool, expanded: b
     dvui.icon(@src(), label, glyph, .{}, child.override(.{
         .min_size_content = .{ .w = 18, .h = 18 },
         .max_size_content = .{ .w = 18, .h = 18 },
+        // Collapsed rail: centre the glyph so it lines up with the
+        // Settings/Logs footer icons below.
+        .gravity_x = if (expanded) 0 else 0.5,
         .gravity_y = 0.5,
     }));
     if (expanded) dvui.labelNoFmt(@src(), label, .{}, child.override(.{

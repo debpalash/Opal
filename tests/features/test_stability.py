@@ -355,7 +355,7 @@ def test_tmdb_fetch_stages_results():
     # applyPendingResults() at frame start.
     api = open(os.path.join(PROJECT_DIR, "src/services/tmdb_api.zig")).read()
     parse_src = open(os.path.join(PROJECT_DIR, "src/services/tmdb_parse.zig")).read()
-    main_src = open(os.path.join(PROJECT_DIR, "src/main.zig")).read()
+    main_src = _src("src/main.zig")  # includes app_services.zig frame ticks
     for needle in ("pending_results", "results_mutex", "fn applyPendingResults"):
         if needle not in api:
             return "fail", f"tmdb_api.zig lost the staged-results swap ({needle})"

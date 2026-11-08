@@ -2522,6 +2522,36 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_torznab_pure).step);
+    const test_ios_media = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/services/ios_media_pure.zig"), .target = target, .optimize = optimize }) });
+    test_step.dependOn(&b.addRunArtifact(test_ios_media).step);
+    const test_mobile_layout = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/ui/mobile_layout_pure.zig"), .target = target, .optimize = optimize }) });
+    test_step.dependOn(&b.addRunArtifact(test_mobile_layout).step);
+    const test_apibay = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/services/apibay_pure.zig"), .target = target, .optimize = optimize }) });
+    test_step.dependOn(&b.addRunArtifact(test_apibay).step);
+    const test_player_chrome = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/ui/player_chrome_pure.zig"), .target = target, .optimize = optimize }) });
+    test_step.dependOn(&b.addRunArtifact(test_player_chrome).step);
+    const test_rail_autohide = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/ui/rail_autohide_pure.zig"), .target = target, .optimize = optimize }) });
+    test_step.dependOn(&b.addRunArtifact(test_rail_autohide).step);
+    const test_ios_uitest = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/ui/ios_uitest_pure.zig"), .target = target, .optimize = optimize }) });
+    test_step.dependOn(&b.addRunArtifact(test_ios_uitest).step);
+    inline for (.{ "platform_pure", "sdl_result_pure" }) |name| {
+        const mobile_test = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/core/" ++ name ++ ".zig"), .target = target, .optimize = optimize }) });
+        test_step.dependOn(&b.addRunArtifact(mobile_test).step);
+    }
+    const test_catalog_schema = addBoundTest(b, .{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/core/catalog_schema.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    test_catalog_schema.root_module.addImport("opal-native-c", sqlite_bindings.mod);
+    if (is_windows) {
+        test_catalog_schema.root_module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/libsqlite3.dll.a", .{mingw_prefix}) });
+    } else test_catalog_schema.root_module.linkSystemLibrary("sqlite3", .{});
+    if (target.result.os.tag == .macos) test_catalog_schema.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{brew_prefix}) });
+    const run_catalog_schema = b.addRunArtifact(test_catalog_schema);
+    if (is_windows) run_catalog_schema.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    test_step.dependOn(&run_catalog_schema.step);
 
     const test_jackett = addBoundTest(b, .{
         .root_module = b.createModule(.{

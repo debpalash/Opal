@@ -1684,6 +1684,12 @@ var sr_cover_pixels: [MAX_SEARCH_RESULTS]?[]u8 = @as([MAX_SEARCH_RESULTS]?[]u8, 
 var sr_cover_w: [MAX_SEARCH_RESULTS]u32 = std.mem.zeroes([MAX_SEARCH_RESULTS]u32);
 var sr_cover_h: [MAX_SEARCH_RESULTS]u32 = std.mem.zeroes([MAX_SEARCH_RESULTS]u32);
 var sr_cover_tex: [MAX_SEARCH_RESULTS]?dvui.Texture = @as([MAX_SEARCH_RESULTS]?dvui.Texture, @splat(null));
+/// Uploaded search/browse covers (UI-thread state; used by the iOS UI walk).
+pub fn coversReady() usize {
+    var n: usize = 0;
+    for (sr_cover_tex) |tex| n += @intFromBool(tex != null);
+    return n;
+}
 var sr_cover_fetching: [MAX_SEARCH_RESULTS]std.atomic.Value(bool) = @as([MAX_SEARCH_RESULTS]std.atomic.Value(bool), @splat(std.atomic.Value(bool).init(false)));
 // Per-slot failure latch: set TRUE by coverWorker when a fetch yields no pixels
 // (404 / undecodable / truncated download). Gates fetchCover so a dead cover

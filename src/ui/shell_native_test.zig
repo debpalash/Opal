@@ -340,6 +340,7 @@ fn draw() !void {
         try @import("shell.zig").render();
         scaled.deinit();
     } else try @import("shell.zig").render();
+    if (current.route == .home and frames >= 5) try std.testing.expect(@import("home.zig").shelf_actions_visible_for_test);
     if (std.mem.eql(u8, current.name, "jackett-connection")) {
         const editor = @import("jackett_connection.zig");
         const ids = editor.field_label_ids_for_test;

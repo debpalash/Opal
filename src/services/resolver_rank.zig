@@ -478,7 +478,70 @@ pub const PickCand = struct {
     needs_seeds: bool, // plain torrent-index magnet (stremio streams don't)
     match_pct: u8,
     seeds: u16,
+    /// sameSeries(name, query): the release's series title IS the show.
+    same_series: bool = true,
 };
+
+/// Is the release's SERIES title (the words before SxxEyy) the same show as an
+/// episode query's title — not merely containing it? Token presence alone let
+/// "Castlevania Nocturne S01E01" auto-play for "nocturne s01e01" (the 2026
+/// show *Nocturne*). Years, leading articles and country tags are ignored;
+/// any other extra series word means a different show. Non-episode queries and
+/// names without a series prefix are not judged here (true).
+pub fn sameSeries(name: []const u8, query: []const u8) bool {
+    var lname: [256]u8 = undefined;
+    const nl = @min(name.len, lname.len);
+    for (0..nl) |i| lname[i] = std.ascii.toLower(name[i]);
+    var lquery: [256]u8 = undefined;
+    const ql = @min(query.len, lquery.len);
+    for (0..ql) |i| lquery[i] = std.ascii.toLower(query[i]);
+    const qm = subs.findSxxEyy(lquery[0..ql]) orelse return true;
+    if (subs.findSxxEyy(lname[0..nl]) == null) return true;
+    const series = subs.seriesTitle(lname[0..nl]);
+    const qtitle = lquery[0..qm.at];
+    if (significantWords(series) == 0) return true;
+    return wordsSubset(series, qtitle) and wordsSubset(qtitle, series);
+}
+fn ignorableSeriesWord(w: []const u8) bool {
+    if (w.len == 4 and (std.mem.startsWith(u8, w, "19") or std.mem.startsWith(u8, w, "20")) and std.ascii.isDigit(w[2]) and std.ascii.isDigit(w[3])) return true;
+    for ([_][]const u8{ "the", "a", "an", "us", "uk" }) |stop| if (std.mem.eql(u8, w, stop)) return true;
+    return false;
+}
+fn nextWord(text: []const u8, pos: *usize) ?[]const u8 {
+    while (pos.* < text.len and !std.ascii.isAlphanumeric(text[pos.*])) pos.* += 1;
+    if (pos.* >= text.len) return null;
+    const start = pos.*;
+    while (pos.* < text.len and std.ascii.isAlphanumeric(text[pos.*])) pos.* += 1;
+    return text[start..pos.*];
+}
+fn significantWords(text: []const u8) usize {
+    var pos: usize = 0;
+    var n: usize = 0;
+    while (nextWord(text, &pos)) |w| {
+        if (!ignorableSeriesWord(w)) n += 1;
+    }
+    return n;
+}
+fn wordsSubset(sub: []const u8, sup: []const u8) bool {
+    var pos: usize = 0;
+    outer: while (nextWord(sub, &pos)) |w| {
+        if (ignorableSeriesWord(w)) continue;
+        var p2: usize = 0;
+        while (nextWord(sup, &p2)) |v| if (std.mem.eql(u8, w, v)) continue :outer;
+        return false;
+    }
+    return true;
+}
+
+test "regression: Castlevania Nocturne is not the show Nocturne (sameSeries)" {
+    try std.testing.expect(!sameSeries("Castlevania: Nocturne S01E01 1080p WEB", "nocturne s01e01"));
+    try std.testing.expect(sameSeries("Nocturne.2026.S01E01.1080p.WEB.h264", "nocturne s01e01"));
+    try std.testing.expect(sameSeries("The Office US S02E01 720p", "office s02e01"));
+    try std.testing.expect(sameSeries("x-men 97 S02E02 1080p", "x-men 97 s02e02"));
+    try std.testing.expect(!sameSeries("Alan Carrs Epic Gameshow S01E04 Strike it Lucky", "lucky s01e04"));
+    try std.testing.expect(sameSeries("Some Movie 2020 1080p", "some movie")); // not episodic
+    try std.testing.expect(sameSeries("Torrentio 4k HDR", "nocturne s01e01")); // no series prefix to judge
+}
 
 pub const PICK_MIN_MATCH: u8 = 60;
 pub const PICK_MIN_SEEDS: u16 = 2;
@@ -493,6 +556,7 @@ pub fn pickBest(cands: []const PickCand) ?usize {
         if (!c.playable) continue;
         if (c.match_pct < PICK_MIN_MATCH) continue;
         if (c.needs_seeds and c.seeds < PICK_MIN_SEEDS) continue;
+        if (!c.same_series) continue;
         return i;
     }
     return null;

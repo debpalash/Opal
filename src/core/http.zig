@@ -89,6 +89,21 @@ fn prewarmTls(client: *std.http.Client) void {
         bundle.deinit(alloc.allocator);
         return;
     };
+    // iOS exposes no system CA file to std; the app bundles the build host's
+    // PEM roots (scripts/ios-device.py) and SDL reports the bundle directory.
+    if (comptime @import("builtin").os.tag == .ios) {
+        var path_buf: [1024]u8 = undefined;
+        const base = std.mem.span(@extern(*const fn () callconv(.c) ?[*:0]const u8, .{ .name = "opal_ios_resource_dir" })() orelse "");
+        const path = std.fmt.bufPrint(&path_buf, "{s}/cacert.pem", .{std.mem.trimEnd(u8, base, "/")}) catch "";
+        if (base.len == 0 or path.len == 0) {
+            bundle.deinit(alloc.allocator);
+            return;
+        }
+        bundle.addCertsFromFilePathAbsolute(alloc.allocator, io, now, path) catch {
+            bundle.deinit(alloc.allocator);
+            return;
+        };
+    }
     client.now = now;
     std.mem.swap(std.crypto.Certificate.Bundle, &client.ca_bundle, &bundle);
     bundle.deinit(alloc.allocator); // the old (empty) bundle
@@ -152,6 +167,7 @@ pub fn directStreamingClient() *std.http.Client {
 }
 
 pub fn fetchDirect(url: []const u8, buf: []u8, opts: HttpOptions) ?[]const u8 {
+    if (comptime @import("builtin").os.tag == .ios) return @import("http_apple.zig").fetch(url, buf, opts);
     return transport.fetch(directStreamingClient(), url, buf, opts);
 }
 
@@ -171,6 +187,7 @@ pub const effectiveTimeoutSecs = transport.effectiveTimeoutSecs;
 
 /// Fetch URL into caller-provided buffer using the shared keep-alive client.
 pub fn fetch(url: []const u8, buf: []u8, opts: HttpOptions) ?[]const u8 {
+    if (comptime @import("builtin").os.tag == .ios) return @import("http_apple.zig").fetch(url, buf, opts);
     if (workers.isQuitting()) return null;
     return transport.fetch(sharedClient(), url, buf, opts);
 }

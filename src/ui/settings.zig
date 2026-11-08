@@ -215,6 +215,9 @@ fn renderLeftNav(compact: bool) void {
 
     var any_match = false;
     for (nav_tabs, 0..) |nt, idx| {
+        if (comptime @import("../core/platform_pure.zig").mobile) {
+            if (nt.tab == .WebUi or nt.tab == .Scripts or nt.tab == .FileAssoc) continue;
+        }
         // Filter by search query — also surface the tab if a section/setting
         // inside it would match (cheap heuristic: also match against the tab
         // name itself). Compact rail ignores search (no field shown).

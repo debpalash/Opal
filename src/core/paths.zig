@@ -111,6 +111,9 @@ pub fn musicSavePath(buf: []u8) []const u8 {
 /// ~/Downloads/opal (default save path)
 pub fn defaultSavePath(buf: []u8) []const u8 {
     const home = getHome();
+    // iOS: the container root is read-only; Documents is writable and shown
+    // in the Files app (UIFileSharingEnabled).
+    if (comptime @import("builtin").os.tag == .ios) return std.fmt.bufPrint(buf, "{s}/Documents/Downloads", .{home}) catch "/tmp/opal_downloads";
     return std.fmt.bufPrint(buf, "{s}/Downloads/opal", .{home}) catch "/tmp/opal_downloads";
 }
 

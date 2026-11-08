@@ -231,3 +231,19 @@ test "sourceLabel names the host, torrent, or local file" {
     try std.testing.expectEqualStrings("Torrent", sourceLabel("magnet:?xt=urn:btih:AAAA"));
     try std.testing.expectEqualStrings("Local file", sourceLabel("/Users/x/movie.mkv"));
 }
+
+/// How a resolved row's primary URL must be opened. Stremio/Torrentio rows
+/// without debrid carry only an infoHash, which the resolver turns into a
+/// `magnet:` link: those belong to the torrent engine — mpv cannot open a
+/// magnet and failed with "Cannot open file 'magnet:?xt=…'".
+pub const PlayRoute = enum { torrent, direct };
+pub fn playRoute(url: []const u8) PlayRoute {
+    return if (std.ascii.startsWithIgnoreCase(url, "magnet:?")) .torrent else .direct;
+}
+
+test "regression: infoHash-only Stremio rows (magnets) go to the torrent engine, not mpv" {
+    try std.testing.expectEqual(PlayRoute.torrent, playRoute("magnet:?xt=urn:btih:39994ebfa02c4790048effe6d716b27d8f82df4d"));
+    try std.testing.expectEqual(PlayRoute.torrent, playRoute("MAGNET:?xt=urn:btih:abc"));
+    try std.testing.expectEqual(PlayRoute.direct, playRoute("https://example.com/v.mp4"));
+    try std.testing.expectEqual(PlayRoute.direct, playRoute("magnetic.mp4"));
+}

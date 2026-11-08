@@ -334,13 +334,13 @@ pub fn render(src: std.builtin.SourceLocation, id: usize, width: f32, height: f3
             if (texture == null) {
                 if (sdl.SDL_CreateTexture(sdl_renderer, sdl.SDL_PIXELFORMAT_RGBX32, sdl.SDL_TEXTUREACCESS_STREAMING, frame_width, frame_height)) |tex| {
                     _ = sdl.SDL_SetTextureBlendMode(tex, sdl.SDL_BLENDMODE_NONE);
-                    _ = sdl.SDL_SetTextureScaleMode(tex, sdl.SDL_ScaleModeLinear);
+                    _ = sdl.SDL_SetTextureScaleMode(tex, if (@import("builtin").os.tag == .ios) sdl.SDL_SCALEMODE_LINEAR else sdl.SDL_ScaleModeLinear);
                     texture = .{ .ptr = tex, .width = frame_width, .height = frame_height, .format = .rgbx_32, .interpolation = .linear, .wrap_u = .clamp, .wrap_v = .clamp };
                 }
             }
             if (texture) |tex| {
                 const ptr: *sdl.SDL_Texture = @ptrCast(@alignCast(tex.ptr));
-                frame_ready = sdl.SDL_UpdateTexture(ptr, null, buf.ptr, frame_width * 4) == 0;
+                frame_ready = @import("../core/sdl_result_pure.zig").succeeded(sdl.SDL_UpdateTexture(ptr, null, buf.ptr, frame_width * 4));
             }
         }
     }

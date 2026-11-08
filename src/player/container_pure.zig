@@ -1065,3 +1065,18 @@ test "MP4 duration rejects overflowing extended box sizes" {
     const nested = "\x00\x00\x00\x08free\x00\x00\x00\x01mvhd\xff\xff\xff\xff\xff\xff\xff\xff";
     try t.expectEqual(@as(?f64, null), mp4MvhdDuration(nested));
 }
+
+/// While the start range is incomplete the gate re-asserts its pin this often.
+/// One pin at plan time did not survive: the tail pin's prioritize_pieces()
+/// clears every earlier deadline, and file selection resets piece priorities —
+/// a 10 GB release downloaded 557 MB elsewhere while its first 8 MB sat at 25%.
+pub const REPIN_MS: i64 = 2000;
+pub fn repinDue(now_ms: i64, last_pin_ms: i64) bool {
+    return last_pin_ms == 0 or now_ms - last_pin_ms >= REPIN_MS;
+}
+
+test "regression: an unfinished start range is re-pinned, not pinned once" {
+    try std.testing.expect(repinDue(5000, 0));
+    try std.testing.expect(!repinDue(5000, 4000));
+    try std.testing.expect(repinDue(6000, 4000));
+}

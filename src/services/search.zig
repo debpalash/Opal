@@ -1772,6 +1772,8 @@ var gallery_selected_manually = false;
 var gallery_generation: u32 = 0;
 var gallery_show_sources = false;
 var gallery_release_limit: usize = 12;
+/// Content width of the gallery this frame (cards pick the phone layout from it).
+var view_width: f32 = 1000;
 const GalleryCover = struct { identity: u64 = 0, used: u64 = 0, slot: components.CoverSlot = .{} };
 // Stable addresses: poster workers publish into these slots. Never move or
 // recycle a slot while its worker is fetching.
@@ -1983,6 +1985,7 @@ fn renderContentGallery(pending: *?ResultAction) void {
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = dvui.Rect.all(theme.spacing.md) });
     defer content.deinit();
     const width = content.data().contentRect().w;
+    view_width = width;
     // A raw release has no dependable feature artwork. It stays in the compact
     // source comparison until a matching catalog or library record arrives.
     const featured_item = &rows[selected.representative];
@@ -2046,7 +2049,7 @@ fn renderContentGallery(pending: *?ResultAction) void {
                     }
                     grid.deinit();
                 } else {
-                    const rail_height = gallery_layout.shelfHeight(art.h, dvui.themeGet().font_body.textHeight());
+                    const rail_height = gallery_layout.shelfHeightFor(art.h, dvui.themeGet().font_body.textHeight(), gallery_layout.isPhone(width));
                     var rail = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .auto_overlay, .vertical = .none }, .{ .id_extra = 94800 + @as(usize, @intFromEnum(category)), .expand = .horizontal, .min_size_content = .{ .w = 1, .h = rail_height }, .max_size_content = .{ .w = std.math.floatMax(f32), .h = rail_height }, .background = false, .color_fill = .{ .color = theme.transparent } });
                     var strip = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 94900 + @as(usize, @intFromEnum(category)) });
                     for (visible[0..visible_count]) |index| {
@@ -2130,7 +2133,9 @@ fn renderGalleryCard(group: *const search_content.Group, size: gallery_layout.Si
         _ = dvui.spacer(@src(), .{ .id_extra = key +% 3, .min_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .margin = .{ .x = 0, .y = 7, .w = 0, .h = 0 } });
         _ = dvui.spacer(@src(), .{ .id_extra = key +% 4, .min_size_content = .{ .w = size.w, .h = body.withSize(theme.font_size.small).textHeight() } });
     }
-    if (components.actionButton(@src(), "Details", .secondary, key +% 5)) {
+    // Phone: the cover tap is the action; a Details button per card made
+    // every shelf a column of identical buttons.
+    if (!gallery_layout.isPhone(view_width) and components.actionButton(@src(), "Details", .secondary, key +% 5)) {
         gallery_selection = group.identity;
         gallery_selected_manually = true;
         gallery_show_sources = false;
@@ -2735,6 +2740,8 @@ fn attachTorrentToPlayerOwned(tid: c_int, source: []const u8, metadata: state.Pe
         }
 
         p.attachTorrent(tid);
+        // Playback outranks the download queue (see torrent_set_streaming).
+        c.mpv.torrent_set_streaming(state.torrentSession(), tid);
         p.torrent_is_ready = false;
         p.has_metadata = false;
         p.last_load_time = 0;

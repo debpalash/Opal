@@ -1,6 +1,8 @@
 # === Zig ===
 zig-out/
 .zig-cache/
+mobile/ios/Opal.xcodeproj/
+mobile/ios/native-libraries.yml
 .agent/
 /.build-check/
 # === Secrets ===

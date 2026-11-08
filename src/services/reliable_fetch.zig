@@ -129,7 +129,7 @@ pub const Opts = struct {
     max_stream_bytes: usize = 64 * 1024 * 1024,
 };
 
-pub const Backend = enum { curl, browser_tls };
+pub const Backend = enum { curl, browser_tls, native };
 pub const Failure = enum { none, invalid_input, spawn, transport, malformed_response, truncated, empty, cancelled, timed_out };
 
 pub const FetchResult = struct {
@@ -154,6 +154,7 @@ const write_out = "\\n" ++ meta_marker ++ "%{http_code}:%{time_total}";
 /// seam as the body. Callers own both output buffers; returned slices alias
 /// them and remain valid until the next caller mutation.
 pub fn request(url: []const u8, body_out: []u8, headers_out: []u8, opts: Opts) FetchResult {
+    if (comptime @import("builtin").os.tag == .ios) return @import("../core/http_apple.zig").request(url, body_out, headers_out, opts);
     if (@import("../core/workers.zig").isQuitting()) return .{ .failure = .cancelled };
     if (url.len == 0 or body_out.len == 0) return .{ .failure = .invalid_input };
     detect();
@@ -319,6 +320,7 @@ pub const DownloadResult = struct {
 /// or a half-written model can never masquerade as the real file.
 /// `opts.timeout_secs` bounds the whole transfer (set it high for big files).
 pub fn download(url: []const u8, dest_path: []const u8, opts: Opts) DownloadResult {
+    if (comptime @import("builtin").os.tag == .ios) return @import("../core/http_apple.zig").download(url, dest_path, opts);
     if (@import("../core/workers.zig").isQuitting()) return .{ .failure = .cancelled };
     var tmp_buf: [1100]u8 = undefined;
     if (url.len == 0) return .{ .failure = .invalid_input };

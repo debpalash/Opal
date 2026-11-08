@@ -39,6 +39,8 @@ const Gate = struct {
     planned: bool = false,
     refined: bool = false,
     ready: bool = false,
+    /// Last time the start range was (re)pinned — see container_pure.repinDue.
+    last_pin_ms: i64 = 0,
 
     /// Percent of the required bytes present (0-100). Drives the buffering bar.
     progress: u8 = 0,
@@ -239,6 +241,12 @@ pub fn isReady(torrent_id: i32, file_idx: i32, file_name: []const u8, file_size:
 
         logs.pushLog("info", "stream", "stream: enough to start - handing to player (index still racing)", false);
         return true;
+    }
+    // Not there yet: keep the start range the most urgent thing in the swarm.
+    const now_ms = @import("../core/io_global.zig").monotonicMilliTimestamp();
+    if (cp.repinDue(now_ms, g.last_pin_ms)) {
+        pin(torrent_id, file_idx, 0, start_len);
+        g.last_pin_ms = now_ms;
     }
     return false;
 }

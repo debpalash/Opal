@@ -153,6 +153,20 @@ pub fn findJsonNode(json: []const u8, key: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Like `findJsonNode`, but the LAST `"key":{…}`/`[…]` occurrence in `json`.
+pub fn findLastJsonNode(json: []const u8, key: []const u8) ?[]const u8 {
+    var end: usize = json.len;
+    while (std.mem.lastIndexOf(u8, json[0..end], key)) |at| {
+        var p = at + key.len;
+        while (p < json.len and (json[p] == ' ' or json[p] == ':')) p += 1;
+        if (p < json.len and (json[p] == '{' or json[p] == '[')) {
+            if (balancedSpan(json, p)) |span| return span;
+        }
+        end = at;
+    }
+    return null;
+}
+
 /// Iterate the top-level `{…}` objects of a JSON array payload (`[{…},{…}]`).
 pub const ObjIter = struct {
     buf: []const u8,
@@ -482,7 +496,10 @@ pub fn parseMangaEntry(obj: []const u8) ?MangaEntry {
     if (title.len == 0) return null;
 
     var cover: []const u8 = "";
-    if (findJsonNode(obj, "\"relationships\"")) |relationships| {
+    // The manga's own `relationships` is the LAST one in the object: every
+    // attributes.tags[] entry carries its own `"relationships":[]`, and the
+    // first-match lookup used to land on that empty tag array (no cover ever).
+    if (findLastJsonNode(obj, "\"relationships\"")) |relationships| {
         var relations = ObjIter{ .buf = relationships };
         while (relations.next()) |relation| {
             const kind = findJsonStr(relation, "\"type\":\"") orelse continue;
@@ -1164,4 +1181,15 @@ test "comic download accepts a valid PNG smaller than100bytes and rejects HTML o
     try std.testing.expect(acceptsPageBody(image));
     try std.testing.expect(!acceptsPageBody("<html>error</html>"));
     try std.testing.expect(!acceptsPageBody("\x89PNG\r\n\x1a\n"));
+}
+
+test "parseMangaEntry finds cover despite tags carrying empty relationships (iOS no-cover bug)" {
+    const obj =
+        \\{"id":"32d76d19-8a05-4db0-9fc2-e0b0648fe9d0","type":"manga","attributes":{"title":{"en":"Solo Leveling"},
+        \\"tags":[{"id":"36fd93ea-e8b8-445e-b836-358f02b3d33d","type":"tag","attributes":{"name":{"en":"Action"}},"relationships":[]}]},
+        \\"relationships":[{"id":"5671fb47-ebdd-450f-9d7d-347353a926ae","type":"author"},
+        \\{"id":"e6583e52-1125-4c50-8db4-e8d6cf3fb144","type":"cover_art","attributes":{"fileName":"abc.jpg"}}]}
+    ;
+    const e = parseMangaEntry(obj).?;
+    try std.testing.expectEqualStrings("abc.jpg", e.cover_file);
 }

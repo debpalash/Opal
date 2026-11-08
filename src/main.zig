@@ -241,6 +241,10 @@ pub const std_options: std.Options = .{ .logFn = dvui.App.logFn, .log_level = .w
 /// deps, sherpa promotion, the first MediaPlayer, the torrent worker, the
 /// remote JSON API, and the background DB/library load thread. Nothing here
 /// reads dvui_win / state.app.dvui_win, so the window may be assigned after.
+/// Phones/tablets share coreInit but cannot run desktop helper processes
+/// (yt-dlp, python engines, voice CLIs, the LAN web server, DPI bypass).
+const mobile = @import("core/platform_pure.zig").mobile;
+
 pub fn coreInit() !void {
     // Profile startup can log before any database/config workers run.
     logs.logs_allocator = @import("core/alloc.zig").allocator;
@@ -258,12 +262,12 @@ pub fn coreInit() !void {
     // Runtime initialization (env vars can't be read at comptime)
     state.initPaths();
     state.loadTmdbTokenFromEnv();
-    detectResourceRoot();
+    if (!mobile) detectResourceRoot();
 
     // mpv snapshots the yt-dlp executable while the player is initialized.
     // Resolve the bundled absolute path now so a cold YouTube launch cannot
     // race the background bootstrap and get stuck with a bare PATH lookup.
-    {
+    if (!mobile) {
         const ytdlp = @import("services/ytdlp.zig");
         if (cli_arg_count == 0) {
             ytdlp.ensureAvailable();
@@ -408,7 +412,7 @@ pub fn coreInit() !void {
             // Discover optional mpv scripts on this same database-owning init
             // thread. The idle player prewarm can then skip filesystem/SQLite
             // work instead of racing this connection from a second worker.
-            @import("services/scripts.zig").scanScripts();
+            if (!mobile) @import("services/scripts.zig").scanScripts();
             // libmpv now has every setting/script input it needs. Let its idle
             // prewarm overlap voice probes, cache maintenance and history I/O.
             state.app.player_prewarm_ready.store(true, .release);
@@ -423,7 +427,7 @@ pub fn coreInit() !void {
             // promote when the user never picked one and the backend is still
             // the shipping default. Single-byte enum store; the UI thread may
             // read it concurrently, which is benign.
-            {
+            if (!mobile) {
                 const deps = @import("core/deps.zig");
                 const vb = @import("services/voice_backend.zig");
                 const vs = @import("services/voice_setup.zig");
@@ -493,7 +497,7 @@ pub fn coreInit() !void {
                 // to get past a Cloudflare wall, and gating that on Settings ›
                 // Web Remote meant the fallback was off by default and could only
                 // be enabled by also exposing the JSON API to the LAN.
-                @import("services/remote.zig").startLocal();
+                if (!mobile) @import("services/remote.zig").startLocal();
                 const pr = @import("services/plugin_repo.zig");
                 pr.loadLocalManifest();
                 _ = pr.migrateStaleSources();
@@ -512,7 +516,7 @@ pub fn coreInit() !void {
             if (workers.isQuitting()) return;
             // DPI-bypass proxy sidecar: config.load() above restored the flag +
             // mode, so start the loopback proxy now if the user enabled it.
-            if (state.app.dpi_bypass_enabled) @import("services/dpi_bypass.zig").start();
+            if (!mobile and state.app.dpi_bypass_enabled) @import("services/dpi_bypass.zig").start();
             // Signal the UI thread that watch history is ready so the "resume
             // last played?" launch prompt can arm (monotonic one-way flag).
             tmdb_store.loadLists();
@@ -1260,22 +1264,7 @@ fn appFrame() !dvui.App.Result {
         }
     }
 
-    // Apply any theme change requested off the UI thread (config.load runs
-    // theme.setPreset on the background worker, which can't touch dvui directly).
-    theme.reapplyIfPending();
-    if (state.app.config_loaded.load(.acquire)) @import("services/search_preview.zig").publishCredentials(state.app.tmdb.api_key[0..state.app.tmdb.api_key_len]);
-
-    // Queue producers include playlist/AI/remote worker threads. Drain their
-    // bounded commands here so live queue and player state stay UI-thread-owned.
-    @import("services/queue.zig").drainUi();
-    if (state.app.config_loaded.load(.acquire)) @import("services/jackett_server.zig").tick();
-    @import("services/resolver.zig").drainRemoteAction();
-    @import("services/search.zig").updateGalleryRoute();
-    @import("services/search.zig").drainMemorySearch();
-    @import("services/auto_subs.zig").pollAttach();
-    @import("services/babel.zig").tick(); // live captions / translation / recaps
-    @import("player/watch_history.zig").drainUi();
-    @import("services/history.zig").drainDownloadHistoryUi();
+    @import("app_services.zig").tickEarly();
 
     // Adaptive default scale — DVUI already applies a reported display scale,
     // so Auto starts at 1.0× and never shrinks below it. A Linux panel probe
@@ -1300,10 +1289,6 @@ fn appFrame() !dvui.App.Result {
         player_warmup_scheduled = true;
         player.scheduleWarmPlayer(@import("core/alloc.zig").allocator);
     }
-    // A first Home/Recents/direct-play click can land while that worker is
-    // still preparing libmpv. Complete its owned handoff without ever waiting
-    // inside the input/render frame.
-    @import("services/browser.zig").drainDeferredPlayback();
 
     // Keep the few legacy layout consumers on the live dvui window size. Do
     // not query/persist SDL position here: Wayland positions are compositor
@@ -1319,39 +1304,7 @@ fn appFrame() !dvui.App.Result {
         state.app.win_restore_pending = false;
     }
 
-    // Reset the per-frame widget-id sequence counters (sectionHeader / divider /
-    // statusPill). Without this every one of those widgets is a "first frame"
-    // id for dvui, which force-refreshes — a permanent full-rate repaint while
-    // Settings or any status pill is on screen.
-    @import("ui/components.zig").beginFrame();
-    @import("ui/settings.zig").beginFrame();
-
-    // Consume a navigation queued from a worker thread (AI tools, resolver).
-    state.applyPendingNav();
-
-    // Honor a magnet/.torrent action made during delayed DHT startup. The
-    // background initializer only publishes + wakes; the UI thread performs
-    // the player and list mutation here.
-    @import("services/search.zig").drainResolvedTorrentDetail();
-    @import("services/search.zig").flushPendingTorrentOpen();
-
-    // Rejoin saved active swarms only after DB + libtorrent are both ready.
-    // This intentionally does not open a player or change the current route.
-    @import("services/torrent_intents.zig").restoreIfReady();
-    @import("services/downloads.zig").tick();
-    @import("services/wanted.zig").tick();
-    @import("services/library_sync.zig").tick();
-    @import("services/recall_index.zig").tick();
-    @import("services/agent_tasks.zig").tick();
-    @import("services/operator.zig").tick();
-
-    // Swap in TMDB pages staged by fetch workers (UI thread owns `results`;
-    // workers staging + this apply is what keeps the render loop's iteration
-    // safe — see state.zig tmdb.results comment).
-    @import("services/tmdb_api.zig").applyPendingResults();
-    // Drama uses the same worker-stage/UI-publish pattern. Drain it globally so
-    // the web browse page progresses even when the desktop is on another tab.
-    @import("services/drama.zig").pumpPending();
+    @import("app_services.zig").tickServices();
 
     // Poll the native file-open dialog worker. This used to live in the legacy
     // header (renderHeader), which never runs in the default page shell — so
@@ -1514,61 +1467,7 @@ fn appFrame() !dvui.App.Result {
     // Continuum: play a received handoff, reap idle stream sessions.
     @import("services/handoff.zig").tick();
 
-    // Drain a deferred comic-load requested by the remote API thread (loadComic
-    // frees textures via dvui, which is UI-thread-only).
-    @import("services/comics.zig").drainPendingLoad();
-
-    // Process deferred player removal (safe: before any rendering)
-    if (state.app.pending_remove_player_idx >= 0) {
-        const idx = @as(usize, @intCast(state.app.pending_remove_player_idx));
-        if (idx < state.app.players.items.len) {
-            // Lock against the remote API thread, which may be driving mpv on a
-            // captured *MediaPlayer right now (use-after-free otherwise).
-            state.players_mutex.lock();
-            defer state.players_mutex.unlock();
-            @import("services/auto_subs.zig").cancelForMediaChange();
-            var p_rem = state.app.players.orderedRemove(idx);
-            // Save URL for Ctrl+Shift+T undo
-            if (p_rem.current_url_len > 0 and p_rem.current_url_len <= 2048) {
-                state.pushClosedUrl(p_rem.current_url[0..p_rem.current_url_len]);
-            }
-            p_rem.deinit(@import("core/alloc.zig").allocator);
-            if (state.app.active_player_idx >= state.app.players.items.len and state.app.players.items.len > 0) {
-                state.app.active_player_idx = state.app.players.items.len - 1;
-            } else if (state.app.active_player_idx > idx and state.app.active_player_idx > 0) {
-                state.app.active_player_idx -= 1;
-            }
-            if (state.app.players.items.len == 0) {
-                state.app.active_player_idx = 0;
-                // Page shell: the Player route now has nothing to render — leave
-                // it for the last non-player page (or Home) so closing the player
-                // doesn't drop the user on an empty grid.
-                if (state.app.page_shell_enabled) state.app.router.leavePlayer();
-            }
-        }
-        state.app.pending_remove_player_idx = -1;
-    }
-
-    // Single-media invariant — the multi-stream / "add screen" grid feature is
-    // retired: only one player may exist at a time. If extras slipped in (an
-    // append-based open path, session restore), keep the active one and tear the
-    // rest down HERE, at the safe pre-render point — mpv deinit must not race the
-    // render thread, which is why removal is deferred to the frame top.
-    if (state.app.players.items.len > 1) {
-        // Lock against the remote API thread (see the deferred-removal block above).
-        state.players_mutex.lock();
-        defer state.players_mutex.unlock();
-        @import("services/auto_subs.zig").cancelForMediaChange();
-        const keep = @min(state.app.active_player_idx, state.app.players.items.len - 1);
-        var i: usize = state.app.players.items.len;
-        while (i > 0) {
-            i -= 1;
-            if (i == keep) continue;
-            var p_rem = state.app.players.orderedRemove(i);
-            p_rem.deinit(@import("core/alloc.zig").allocator);
-        }
-        state.app.active_player_idx = 0;
-    }
+    @import("app_services.zig").tickPlayers();
 
     // Config persistence is wall-clock debounced inside saveIfDirty(). While a
     // change is pending, arm a cheap one-shot so an otherwise idle dvui loop
@@ -1683,53 +1582,9 @@ fn appFrame() !dvui.App.Result {
         }
     }
 
-    @import("application/playback_update.zig").tick();
-
-    // Native macOS Now Playing + hardware media keys: drain pending remote
-    // commands (play/pause/seek from media keys, AirPods, Control Center)
-    // onto the active player and refresh the system Now Playing card.
-    // Compiles to a no-op on non-macOS.
+    @import("app_services.zig").tickPlayback();
     @import("player/media_remote.zig").frameTick();
     @import("macos/app_menu.zig").frameTick();
-
-    // Live public tracker list: load the cache on the first tick, re-fetch once
-    // a day on a worker. What gets injected into every magnet/.torrent on add,
-    // which is what time-to-first-piece hangs on. Self-throttled to 5 min.
-    @import("services/trackers.zig").tick();
-
-    // Stall watchdog: a torrent with no new bytes and no peers gets a forced
-    // tracker + DHT reannounce (rate-limited, backed off, capped). It runs on
-    // its OWN thread (started in background init) — driving it from here meant
-    // it only ran while dvui was drawing, and dvui idles when the window has no
-    // events, so a torrent wedged in the background was never rescued. All that
-    // is left on the UI thread is showing a toast the watchdog queued.
-    @import("services/torrent_stall.zig").drainToast();
-
-    // Screensaver inhibit: mpv's stop-screensaver requires a VO; we use SW
-    // render, so SDL handles it. cached_paused is event-driven, which removes a
-    // synchronous mpv property query and a repaint-count throttle from this hot
-    // path. Pause/play changes now take effect on their very next UI wake.
-    {
-        const S = struct {
-            var disabled: bool = false;
-        };
-        var any_playing = false;
-        for (state.app.players.items) |p| {
-            if (p.current_url_len > 0 and !p.cached_paused) {
-                any_playing = true;
-                break;
-            }
-        }
-        if (any_playing and !S.disabled) {
-            c.sdl.SDL_DisableScreenSaver();
-            S.disabled = true;
-        } else if (!any_playing and S.disabled) {
-            c.sdl.SDL_EnableScreenSaver();
-            S.disabled = false;
-        }
-    }
-
-    @import("services/wallpapers.zig").tick();
     input.processGlobalInputs();
 
     // Track mouse motion — feeds the shared chrome idle clock.

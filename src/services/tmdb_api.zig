@@ -188,9 +188,9 @@ fn browseCacheKey(buf: []u8) []const u8 {
     const t = &state.app.tmdb;
     return std.fmt.bufPrint(buf, "catalog:browse:v2:{d}:{d}:{d}:{d}:{d}:{d}", .{
         @intFromBool(t.api_key_len > 0),
-        @intFromEnum(t.category),
-        @intFromEnum(t.media_filter),
-        @intFromEnum(t.time_window),
+        @backingInt(t.category),
+        @backingInt(t.media_filter),
+        @backingInt(t.time_window),
         t.genre_idx,
         t.discover_sort,
     }) catch "tmdb:browse:default";

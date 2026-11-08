@@ -8,6 +8,8 @@
 
 Free and open source. No telemetry. No subscription. Optional AI runs locally.
 
+iOS development has started: [build the shared-code preview on a physical iPhone/iPad](docs/ios.md). Desktop feature parity is still in progress.
+
 **[Download Opal](https://github.com/debpalash/Opal/releases/latest)** · [See what’s new](CHANGELOG.md) · [Website](https://opal.palash.dev)
 
 macOS · Linux · Windows alpha
