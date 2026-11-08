@@ -1,0 +1,10 @@
+{
+  "tag": "v0.9.4",
+  "items": [
+    {
+      "path": "assets/releases/v0.9.4/ios-home.png",
+      "alt": "Opal on an iPhone: edge-to-edge home screen with the brand and search in the top band, a compact icon rail, and trending film and TV cards.",
+      "caption": "Opal now runs on iPhone and iPad from the same code as the desktop app. iOS Simulator capture with public catalog data; no account or history shown. The iOS build is an unsigned preview for sideloading."
+    }
+  ]
+}

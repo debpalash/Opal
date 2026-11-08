@@ -25,6 +25,14 @@ Python engines, voice CLIs, Jackett, agents/PTY), the LAN web server and DPI
 bypass. Sources that need them report unavailable at runtime. Downloads go to
 `Documents/Downloads`, which is visible in the Files app.
 
+## Install a release IPA
+
+Each release attaches `Opal-X.Y.Z-ios.ipa`. It is **unsigned** and carries no
+provisioning profile: install it with a sideloading tool (AltStore, Sideloadly or
+similar) that signs it with your own Apple ID. Build one yourself with
+`python3 scripts/ios-device.py --ipa dist/Opal-X.Y.Z-ios.ipa`; the version comes
+from `build.zig.zon`, and local signing material is left out.
+
 ## Requirements
 
 - The repository's Zig 0.17 toolchain, Xcode, XcodeGen, CMake and FFmpeg.

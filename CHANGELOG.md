@@ -10,6 +10,14 @@ Add a section and a fresh feature visual BEFORE tagging. See [the release checkl
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
+## v0.9.4 — 2026-11-08
+
+- **Opal on iPhone and iPad (preview).** The iOS app shares the desktop code: home, movie and TV catalogs, search, torrent streaming, radio, comics, downloads and settings. The layout runs edge to edge — brand and menu sit beside the Dynamic Island, the player fills the screen, and the icon rail hides while you scroll and returns when you scroll back or touch the left edge. Torrent search uses a native index because iOS cannot run the desktop's Python search engines. Install the unsigned `Opal-0.9.4-ios.ipa` with a sideloading tool that signs it with your own Apple ID; there is no App Store or TestFlight build yet.
+- **More reliable torrent streaming.** Re-opening a magnet that is already downloading plays it instead of failing, the torrent you are watching moves ahead of queued downloads, and streams keep requesting their opening pieces until playback starts. A saved download folder from an older install is ignored instead of breaking downloads.
+- **Better episode matching.** Smart play only picks releases from the same series, so a similar title cannot be chosen by mistake.
+- **Manage Jackett inside Opal.** **Connect → Torrent indexers → Start Jackett** downloads a checksum-verified Jackett, runs it on a loopback-only port and saves the connection. Choose all public trackers or individual ones for torrent search. Local Jackett pages open in the browser with HTTPS-only enabled. Private-tracker streaming stays disabled until persistent seeding is supported.
+- **Fixes.** Fullscreen comics navigation works again, and the hover sidebar lines up with the content.
+
 ## v0.9.3 — 2026-11-04
 
 - **Update without leaving Opal.** A small corner prompt offers background downloads and a separate Restart button. Writable macOS app bundles install and reopen automatically, with checksum and bundle verification and rollback if the new app cannot launch. Updated apps reopen reliably while background services start. Automatic checks can be turned off in Settings → About; other platforms use their installer or package manager.

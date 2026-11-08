@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE = 'com.debpalash.opal.ios'
@@ -199,6 +200,64 @@ def assets():
              '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '30', '-c:a', 'aac', '-b:a', '32k', '-af', 'volume=0.01', '-movflags', '+faststart', preview])
 
 
+def app_version():
+    """The desktop app version (build.zig.zon) — the IPA ships the same number."""
+    return re.search(r'\.version\s*=\s*"([^"]+)"', (ROOT / 'build.zig.zon').read_text()).group(1)
+
+
+def version_settings(version):
+    """MARKETING_VERSION=X.Y.Z and a monotonically increasing CFBundleVersion."""
+    major, minor, patch = (int(part) for part in re.match(r'(\d+)\.(\d+)\.(\d+)', version).groups())
+    return [f'MARKETING_VERSION={major}.{minor}.{patch}', f'CURRENT_PROJECT_VERSION={major * 10000 + minor * 100 + patch}']
+
+
+# Machine-local signing material never leaves this machine: a release IPA is
+# unsigned and the user's sideloading tool signs it with their own identity.
+# `install()` copies the developer's provisioning profile (team, name, device
+# UDIDs) into the build product, so a later build would otherwise carry it.
+PRIVATE_BUNDLE_PARTS = {'embedded.mobileprovision', '_CodeSignature', 'archived-expanded-entitlements.xcent'}
+
+
+def ipa_entries(app):
+    """(file, archive name) pairs for Payload/<app>, without signing material."""
+    app = Path(app)
+    entries = []
+    for path in sorted(app.rglob('*')):
+        relative = path.relative_to(app)
+        if PRIVATE_BUNDLE_PARTS.intersection(relative.parts) or not path.is_file():
+            continue
+        entries.append((path, f'Payload/{app.name}/{relative.as_posix()}'))
+    return entries
+
+
+MACHO_MAGICS = {b'\xcf\xfa\xed\xfe', b'\xfe\xed\xfa\xcf', b'\xca\xfe\xba\xbe'}
+
+
+def release_bytes(path, strip=None):
+    """File contents for the IPA. Mach-O files lose debug/local symbols: their
+    stab entries hold absolute build paths (the builder's home directory)."""
+    data = Path(path).read_bytes()
+    if data[:4] not in MACHO_MAGICS:
+        return data
+    with tempfile.TemporaryDirectory() as tmp:
+        copy = Path(tmp) / Path(path).name
+        copy.write_bytes(data)
+        (strip or (lambda target: run(['xcrun', 'strip', '-S', '-x', target])))(copy)
+        return copy.read_bytes()
+
+
+def package_ipa(app, destination, strip=None):
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(destination, 'w', zipfile.ZIP_DEFLATED) as ipa:
+        for path, name in ipa_entries(app):
+            info = zipfile.ZipInfo(name, date_time=time.localtime(path.stat().st_mtime)[:6])
+            info.external_attr = (path.stat().st_mode & 0o777 | 0o100000) << 16
+            info.compress_type = zipfile.ZIP_DEFLATED
+            ipa.writestr(info, release_bytes(path, strip))
+    return destination
+
+
 def build(simulator=False):
     sdk_name = 'iphonesimulator' if simulator else 'iphoneos'
     output = 'zig-out/ios-simulator' if simulator else 'zig-out/ios'
@@ -209,7 +268,7 @@ def build(simulator=False):
     run(['xcodegen', 'generate', '--spec', 'mobile/ios/project.yml'])
     command = ['xcodebuild', '-project', 'mobile/ios/Opal.xcodeproj', '-scheme', 'Opal', '-configuration', 'Release', '-sdk', sdk_name,
                '-destination', 'generic/platform=iOS Simulator' if simulator else 'generic/platform=iOS',
-               '-derivedDataPath', '.zig-cache/ios-simulator-xcode' if simulator else '.zig-cache/ios-xcode', 'CODE_SIGNING_ALLOWED=NO']
+               '-derivedDataPath', '.zig-cache/ios-simulator-xcode' if simulator else '.zig-cache/ios-xcode', 'CODE_SIGNING_ALLOWED=NO', *version_settings(app_version())]
     if simulator:
         command += ['SUPPORTED_PLATFORMS=iphonesimulator', 'ARCHS=arm64', 'LIBRARY_SEARCH_PATHS=' + str(ROOT / output / 'lib'), 'HEADER_SEARCH_PATHS=' + str(ROOT / output / 'include')]
     run([*command, 'build'])
@@ -235,9 +294,15 @@ def main():
     parser.add_argument('--install', action='store_true')
     parser.add_argument('--launch', action='store_true')
     parser.add_argument('--smoke', action='store_true', help='Verify shared-player playback within 30 seconds, then stop the test app')
+    parser.add_argument('--ipa', metavar='PATH', help='Write an unsigned, profile-free IPA of the device build (for release; sideload tools sign it)')
     args = parser.parse_args()
     if not args.skip_build:
         build(args.simulator)
+    if args.ipa:
+        if args.simulator:
+            raise SystemExit('--ipa packages the physical-device build; drop --simulator.')
+        print(package_ipa(OUTPUT, args.ipa))
+        return
     if args.simulator:
         device = simulator_device(args.device)
         identifier = device['udid']

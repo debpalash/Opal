@@ -3,6 +3,7 @@ import datetime
 import hashlib
 import importlib.util
 import json
+import re
 from pathlib import Path
 import unittest
 import tempfile
@@ -115,6 +116,46 @@ class DeviceTests(unittest.TestCase):
         with self.assertRaises(RuntimeError): self.run_selection(devices)
         self.assertEqual(self.run_selection(devices, 'udid-two'), ('two', 'udid-two'))
         with self.assertRaises(RuntimeError): self.run_selection(devices, 'sim')
+
+
+class ReleaseIpaTests(unittest.TestCase):
+    # REGRESSION: install() copies the developer's provisioning profile (team,
+    # name, device UDIDs) into the build product; a release IPA must not ship it.
+    def test_release_ipa_omits_provisioning_profile_and_signature(self):
+        import zipfile
+        with tempfile.TemporaryDirectory() as tmp:
+            app = Path(tmp) / 'Opal.app'
+            (app / '_CodeSignature').mkdir(parents=True)
+            (app / '_CodeSignature/CodeResources').write_text('sig')
+            (app / 'embedded.mobileprovision').write_text('UDID TEAM')
+            (app / 'archived-expanded-entitlements.xcent').write_text('ent')
+            (app / 'Opal').write_text('binary'); (app / 'Opal').chmod(0o755)
+            (app / 'Info.plist').write_text('plist')
+            ipa = ios.package_ipa(app, Path(tmp) / 'out/Opal.ipa', strip=lambda target: None)
+            with zipfile.ZipFile(ipa) as z:
+                self.assertEqual(['Payload/Opal.app/Info.plist', 'Payload/Opal.app/Opal'], sorted(z.namelist()))
+                self.assertTrue((z.getinfo('Payload/Opal.app/Opal').external_attr >> 16) & 0o100)
+
+    # REGRESSION: the release binary's stab symbols carried /Users/<builder>/... paths.
+    def test_release_binaries_are_stripped_of_build_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / 'Opal'
+            binary.write_bytes(b'\xcf\xfa\xed\xfe' + b'/Users/builder/src/bridge.m')
+            text = Path(tmp) / 'Info.plist'
+            text.write_bytes(b'/Users/builder is data, not a symbol table')
+            stripped = []
+            def strip(target):
+                stripped.append(target.name)
+                target.write_bytes(b'\xcf\xfa\xed\xfe')
+            self.assertEqual(b'\xcf\xfa\xed\xfe', ios.release_bytes(binary, strip))
+            self.assertEqual(text.read_bytes(), ios.release_bytes(text, strip))
+            self.assertEqual(['Opal'], stripped)
+            self.assertIn(b'/Users/builder', binary.read_bytes())  # the build product itself is untouched
+
+    def test_ipa_version_follows_the_app_version(self):
+        self.assertEqual(['MARKETING_VERSION=0.9.4', 'CURRENT_PROJECT_VERSION=904'], ios.version_settings('0.9.4'))
+        self.assertTrue(re.fullmatch(r'\d+\.\d+\.\d+', ios.app_version()))
+        self.assertIn('$(MARKETING_VERSION)', (ROOT / 'mobile/ios/project.yml').read_text())
 
 
 class PlaybackSmokeTests(unittest.TestCase):
