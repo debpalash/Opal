@@ -1672,3 +1672,19 @@ def test_release_ios_ipa():
     }
     bad = [k for k, ok in checks.items() if not ok]
     return ("fail", "; ".join(bad)) if bad else ("pass", "IPA built post-publish, attached, and checksummed")
+
+
+@test("README native previews are reproducible from the capture script", "Build")
+def test_readme_native_capture():
+    script = _src("scripts/readme-art/capture-native.py")
+    media = _src("src/ui/media_native_test.zig")
+    credits = _src("assets/readme/CREDITS.md")
+    names = ("sintel-player", "bunny-player", "connections")
+    checks = {
+        "capture runs only on explicit opt-in": 'getenv("OPAL_README_CAPTURE")' in media and "OPAL_README_CAPTURE='1'" in script,
+        "every published preview is produced by the script": all(f"'{n}'" in script and os.path.exists(os.path.join(PROJECT_DIR, f"assets/readme/{n}.webp")) for n in names),
+        "exports drop metadata": "'-strip'" in script,
+        "licensed source frames are checked in and credited": all(os.path.exists(os.path.join(PROJECT_DIR, f"assets/readme/sources/{f}")) and f in credits for f in ("sintel-frame.jpg", "bunny-frame.jpg")),
+    }
+    bad = [k for k, ok in checks.items() if not ok]
+    return ("fail", "; ".join(bad)) if bad else ("pass", "three previews regenerate from licensed frames, opt-in only")

@@ -254,6 +254,10 @@ fn draw() !void {
 }
 
 test "Native media offline SDL fixture" {
+    if (clock.getenv("OPAL_README_CAPTURE") != null) {
+        try captureReadme();
+        return;
+    }
     for ([_][2]u32{ .{ 1360, 850 }, .{ 640, 800 } }) |size| {
         for ([_]@TypeOf(mode){ .dock, .player, .more, .playlist, .torrent, .youtube }) |view| {
             if (clock.getenv("OPAL_MEDIA_CASE")) |only| {
@@ -269,4 +273,59 @@ test "Native media offline SDL fixture" {
             try capture.capture(size[0], size[1], @tagName(view), setup, draw, cleanup);
         }
     }
+}
+
+// Opt-in documentation captures use the production shell, video surface and
+// controls with a paused, openly licensed film frame. No provider requests.
+var readme_bunny = false;
+fn setupReadme() !void {
+    mode = .player;
+    try setup();
+    const p = fixture_player.?;
+    const title: [:0]const u8 = if (readme_bunny) "Big Buck Bunny" else "Sintel";
+    _ = c.mpv_set_property_string(p.mpv_ctx, "force-media-title", title);
+    field(&p.np_title, &p.np_title_len, title);
+    field(&p.np_subtitle, &p.np_subtitle_len, "Blender Foundation · CC BY 3.0");
+    p.cached_vid_no = false;
+    p.cached_playlist_count = 1;
+    p.cached_duration = if (readme_bunny) 596 else 52;
+    p.last_seen_pos = if (readme_bunny) 60 else 30;
+    theme.active_preset = .midnight;
+    state.app.page_shell_enabled = true;
+    state.app.last_mouse_move_ms = clock.milliTimestamp();
+}
+fn drawReadme() !void {
+    if (fixture_player) |p| {
+        if (p.texture == null) {
+            const source = if (readme_bunny) "assets/readme/sources/bunny-frame.jpg" else "assets/readme/sources/sintel-frame.jpg";
+            const bytes = try clock.cwdReadFileAlloc(source, allocator, 4 * 1024 * 1024);
+            defer allocator.free(bytes);
+            const frame = @import("../core/image_decode.zig").browserFrame(bytes) orelse return error.ReadmeFrameDecode;
+            defer frame.deinit();
+            p.texture = try dvui.Texture.fromImageSource(.{ .pixels = .{ .rgba = frame.pixels[0 .. @as(usize, @intCast(frame.width)) * @as(usize, @intCast(frame.height)) * 4], .width = @intCast(frame.width), .height = @intCast(frame.height), .interpolation = .linear } });
+        }
+    }
+    @import("components.zig").beginFrame();
+    try @import("shell.zig").render();
+}
+fn cleanupReadme() void {
+    if (fixture_player) |p| if (p.texture) |texture| dvui.textureDestroyLater(texture);
+    cleanup();
+}
+fn setupReadmeConnections() !void {
+    theme.active_preset = .midnight;
+    state.app.page_shell_enabled = true;
+    state.app.ui_scale = 1;
+    state.app.router.current = .connect;
+}
+fn captureReadme() !void {
+    const workers = @import("../core/workers.zig");
+    workers.init();
+    workers.beginShutdownAndDrain(0);
+    defer workers.finishShutdown();
+    for ([_]bool{ false, true }) |bunny| {
+        readme_bunny = bunny;
+        try capture.capture(1400, 900, if (bunny) "bunny-player" else "sintel-player", setupReadme, drawReadme, cleanupReadme);
+    }
+    try capture.capture(1400, 900, "connections", setupReadmeConnections, drawReadme, null);
 }
