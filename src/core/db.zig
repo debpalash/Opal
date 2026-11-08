@@ -272,31 +272,8 @@ fn createTables() void {
     // just like the watch_history migration.
     exec("ALTER TABLE aimemory ADD COLUMN position_secs REAL DEFAULT 0");
 
-    // TMDB items
-    exec(
-        \\CREATE TABLE IF NOT EXISTS tmdb_items (
-        \\  id INTEGER PRIMARY KEY,
-        \\  title TEXT NOT NULL DEFAULT '',
-        \\  year TEXT DEFAULT '',
-        \\  release_date TEXT DEFAULT '',
-        \\  rating REAL DEFAULT 0,
-        \\  overview TEXT DEFAULT '',
-        \\  media_type TEXT DEFAULT 'movie',
-        \\  genre_text TEXT DEFAULT '',
-        \\  poster_path TEXT DEFAULT '',
-        \\  created_at INTEGER DEFAULT (strftime('%s','now'))
-        \\)
-    );
-
-    // TMDB user lists (favorites, watchlist, watching)
-    exec(
-        \\CREATE TABLE IF NOT EXISTS tmdb_lists (
-        \\  item_id INTEGER NOT NULL,
-        \\  list_name TEXT NOT NULL,
-        \\  added_at INTEGER DEFAULT (strftime('%s','now')),
-        \\  PRIMARY KEY (item_id, list_name)
-        \\)
-    );
+    // Both desktop and iOS use the same catalog schema.
+    @import("catalog_schema.zig").create(db_handle.?) catch {};
 
     // TMDB poster cache
     exec(

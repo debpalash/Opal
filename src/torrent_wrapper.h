@@ -101,6 +101,8 @@ int torrent_is_paused(TorrentSession session, int torrent_id);
 int torrent_has_error(TorrentSession session, int torrent_id);
 void torrent_force_recheck(TorrentSession session, int torrent_id);
 int torrent_get_num_peers(TorrentSession session, int torrent_id);
+void torrent_set_streaming(TorrentSession session, int torrent_id);
+int torrent_debug_status(TorrentSession session, int torrent_id, char* out, int out_len);
 int torrent_get_upload_rate(TorrentSession session, int torrent_id);
 long long torrent_get_total_size(TorrentSession session, int torrent_id);
 

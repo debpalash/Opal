@@ -500,14 +500,26 @@ static int add_magnet(TorrentSession session, const char* magnet_url, const char
     lt::error_code ec;
     lt::add_torrent_params atp = lt::parse_magnet_uri(magnet_url, ec);
     if (ec) {
-#ifdef TORRENT_WRAPPER_DEBUG
+        // Always surfaced: a rejected magnet is otherwise indistinguishable
+        // from a duplicate in Opal's logs (and iOS has no debug build of this).
         std::cerr << "Failed to parse magnet: " << ec.message() << std::endl;
-#endif
         return -1;
     }
     
     atp.save_path = save_path;
     atp.flags |= lt::torrent_flags::duplicate_is_error;
+
+    // Re-opening a magnet that is already in the session (e.g. restored paused
+    // from the last run) plays that transfer instead of failing as a duplicate.
+    if (!paused) {
+        std::lock_guard<std::mutex> lk(ctx->mtx);
+        for (auto& [id, existing] : ctx->torrents) {
+            if (!existing || !existing->alive || !existing->handle.is_valid()) continue;
+            if (!hashes_match(atp.info_hashes, existing->handle.info_hashes())) continue;
+            existing->handle.resume();
+            return id;
+        }
+    }
 
     const bool memory_only = ctx->memory_only.load();
     // Fast-Lane Metadata Injection: reuse cached .torrent if available
@@ -585,9 +597,7 @@ static int add_magnet(TorrentSession session, const char* magnet_url, const char
     }
     
     if (ec) {
-#ifdef TORRENT_WRAPPER_DEBUG
         std::cerr << "add_torrent failed: " << ec.message() << std::endl;
-#endif
         return -1;
     }
 
@@ -1361,6 +1371,40 @@ extern "C" int torrent_get_num_peers(TorrentSession session, int torrent_id) {
     try {
         if (!node->alive || !node->handle.is_valid()) return 0;
         return node->handle.status().num_peers;
+    } catch (...) {}
+    return 0;
+}
+
+// The torrent a player is streaming must never sit in libtorrent's auto-managed
+// queue: abandoned smart-play attempts and background downloads filled the
+// active slots and the playing movie stayed "queued" (paused + auto_managed).
+extern "C" void torrent_set_streaming(TorrentSession session, int torrent_id) {
+    if (!session || torrent_id < 0) return;
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+    auto node = get_node(ctx, torrent_id);
+    if (!node || !node->alive || !node->handle.is_valid()) return;
+    try {
+        node->handle.unset_flags(lt::torrent_flags::auto_managed);
+        node->handle.resume();
+    } catch (...) {}
+}
+
+// One-line swarm/storage status for diagnostics (UI walk, logs): state,
+// flags, peers/seeds, rates, error and save path.
+extern "C" int torrent_debug_status(TorrentSession session, int torrent_id, char* out, int out_len) {
+    if (!session || torrent_id < 0 || !out || out_len <= 0) return 0;
+    out[0] = 0;
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+    auto node = get_node(ctx, torrent_id);
+    if (!node || !node->alive || !node->handle.is_valid()) return 0;
+    try {
+        lt::torrent_status st = node->handle.status(lt::torrent_handle::query_save_path);
+        const auto f = st.flags;
+        int n = std::snprintf(out, out_len, "state=%d paused=%d upload_mode=%d auto=%d peers=%d seeds=%d dl=%d done=%lld err=%s mem=%d path=%s",
+            static_cast<int>(st.state), (f & lt::torrent_flags::paused) ? 1 : 0, (f & lt::torrent_flags::upload_mode) ? 1 : 0,
+            (f & lt::torrent_flags::auto_managed) ? 1 : 0, st.num_peers, st.num_seeds, st.download_payload_rate,
+            static_cast<long long>(st.total_wanted_done), st.errc ? st.errc.message().c_str() : "none", node->memory ? 1 : 0, st.save_path.c_str());
+        return n > 0 ? 1 : 0;
     } catch (...) {}
     return 0;
 }

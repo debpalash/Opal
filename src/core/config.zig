@@ -456,7 +456,7 @@ pub fn load() void {
     }
 
     remote.applyBinding(restored_bind, restored_port);
-    if (state.app.web_remote_enabled and !state.app.is_headless) remote.start();
+    if (!@import("platform_pure.zig").mobile and state.app.web_remote_enabled and !state.app.is_headless) remote.start();
 
     // Restore after every row: credentials can appear after the connected row.
     @import("../services/opds.zig").setConfiguredConnected(restore_opds_connected);
@@ -681,7 +681,11 @@ fn applyConfig(key: []const u8, val: []const u8) void {
     } else if (std.mem.eql(u8, key, "auto_check_updates")) {
         state.app.auto_check_updates = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "save_path")) {
-        if (val.len > 0 and val.len < state.app.save_path_buf.len) {
+        const platform = @import("platform_pure.zig");
+        // A path from a previous iOS container keeps the runtime default.
+        if (val.len > 0 and val.len < state.app.save_path_buf.len and
+            platform.storedPathUsable(val, @import("paths.zig").homeDir(), platform.mobile))
+        {
             @memcpy(state.app.save_path_buf[0..val.len], val);
             state.app.save_path_len = val.len;
         }

@@ -179,7 +179,7 @@ def test_responsive_shell_tiers():
         "tiny width tier": "TINY_PT" in sc and "isTiny(" in sc,
         "short height tier": "SHORT_PT" in sc and "isShort(" in sc,
         "one omnibox in every width tier": "omnibox(narrow);" in sh and "if (!compact) omnibox" not in sh and "omnibox(true);" not in sh,
-        "resize reads live window": "const window_rect = dvui.windowRect()" in sh
+        "resize reads live window": "const window_rect = dvui.windowRect()" in sh or ("const window_rect = hostWindowRect()" in sh and "var r = dvui.windowRect();" in sh)
             and "root.data().rect.w" not in sh,
         "breakpoint swap converges": "last_tier" in sh and "dvui.refresh(null" in sh,
         "compact destinations remain reachable": all(route in sh for route in
@@ -433,7 +433,7 @@ def test_auto_download_subs():
         return "fail", "engine lost the auto_load search→download chain flag"
     auto = open(os.path.join(PROJECT_DIR, "src/services/auto_subs.zig")).read()
     auto_pure = open(os.path.join(PROJECT_DIR, "src/services/auto_subs_pure.zig")).read()
-    main = open(os.path.join(PROJECT_DIR, "src/main.zig")).read()
+    main = _src("src/main.zig")  # includes app_services.zig frame ticks
     build = open(os.path.join(PROJECT_DIR, "build.zig")).read()
     if "bounded_process.StreamProcess.init" not in auto or "cancel_epoch" not in auto:
         return "fail", "AI subtitle ffmpeg/Whisper children are not deadline/cancellation contained"

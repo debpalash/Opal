@@ -23,7 +23,8 @@ const io_global = @import("../core/io_global.zig");
 const transparent = theme.transparent;
 
 const STRIP_MAX: usize = 24; // cap cards per strip (perf)
-const STRIP_CHROME: f32 = 78; // compact title/status/tools below each poster
+const STRIP_CHROME: f32 = tmdb.POSTER_SHELF_CHROME;
+pub var shelf_actions_visible_for_test = false;
 const SCROLLBAR_HOLD_NS: i128 = 900 * std.time.ns_per_ms;
 
 // Scrollbars are useful feedback while content is moving, but permanent rails
@@ -62,6 +63,21 @@ pub fn showOverview() void {
 var chat_sidebar_open: bool = true; // Claude-style history rail (auto-hidden when narrow)
 
 pub fn render() void {
+    if (comptime @import("builtin").os.tag == .ios) {
+        // Shared Home shelves, catalog model, poster widgets and navigation.
+        // Desktop-only AI workers and library producers are not started on iOS.
+        var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = false });
+        defer scroll.deinit();
+        var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = dvui.Rect.all(8) });
+        defer col.deinit();
+        const card_w = std.math.clamp((dvui.windowRect().w - 16) / 3.25, 92.0, 116.0);
+        _ = renderTrendingRail(card_w);
+        if (state.app.tmdb.watchlist.items.len > 0) posterStrip("Watchlist", icons.tvg.lucide.bookmark, &state.app.tmdb.watchlist, .Watchlist, 2, card_w);
+        if (state.app.tmdb.favorites.items.len > 0) posterStrip("Favorites", icons.tvg.lucide.star, &state.app.tmdb.favorites, .Favorites, 3, card_w);
+        if (state.app.tmdb.results.items.len == 0) components.loadingState("Loading your catalog…");
+        tmdb.renderPosterDetails(&state.app.tmdb.results);
+        return;
+    }
     // Home is the conversational console: once a conversation exists the page
     // IS the chat (transcript + pinned composer, like ChatGPT/Claude); when
     // idle it's a hero prompt over the media hub (rails + stats).
@@ -1009,6 +1025,11 @@ fn posterStrip(title: []const u8, icon: []const u8, items: *std.ArrayListUnmanag
     var i: usize = 0;
     while (i < n) : (i += 1) {
         tmdb.renderPosterCard(&items.items[i], i, card_w, poster_h);
+    }
+    if (@import("builtin").is_test and n > 0) {
+        const action = tmdb.first_details_bounds_for_test;
+        const clip = scroll.data().contentRectScale().r;
+        shelf_actions_visible_for_test = action.h > 0 and action.y >= clip.y and action.y + action.h <= clip.y + clip.h;
     }
 }
 

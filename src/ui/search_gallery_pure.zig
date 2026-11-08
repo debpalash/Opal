@@ -17,8 +17,27 @@ pub fn coverCrop(image: Size, target: Size) Crop {
     const height = source_ratio / target_ratio;
     return .{ .y = (1 - height) / 2, .h = height };
 }
+/// Phone widths: shelves show ~3 portrait covers (not 1.5 desktop-sized cards)
+/// and cards drop their Details button — tapping the cover opens details.
+pub fn isPhone(viewport_width: f32) bool {
+    return viewport_width < 480;
+}
 pub fn cardSize(shape: Shape, viewport_width: f32) Size {
     const compact = viewport_width < 640;
+    if (isPhone(viewport_width)) {
+        const gap: f32 = 12;
+        const third = (viewport_width - gap * 2) / 3.15;
+        const width: f32 = switch (shape) {
+            .portrait => std.math.clamp(third, 84, 116),
+            .square => std.math.clamp(third, 84, 116),
+            .landscape => std.math.clamp(viewport_width * 0.62, 168, 224),
+        };
+        return .{ .w = width, .h = switch (shape) {
+            .portrait => width * 1.5,
+            .square => width,
+            .landscape => width * 9 / 16,
+        } };
+    }
     const width: f32 = switch (shape) {
         .portrait => if (compact) 128 else 164,
         .square => if (compact) 148 else 180,
@@ -40,6 +59,10 @@ pub fn heroCopyGravity(width: f32) f32 {
 pub fn shelfHeight(art_height: f32, body_height: f32) f32 {
     // Two title lines, a metadata line, button, and widget margins/padding.
     return art_height + body_height * 4 + 64;
+}
+/// Phone shelves carry no Details button: two title lines + metadata only.
+pub fn shelfHeightFor(art_height: f32, body_height: f32, phone: bool) f32 {
+    return if (phone) art_height + body_height * 3 + 40 else shelfHeight(art_height, body_height);
 }
 pub fn heroArtSize(width: f32, backdrop: bool) Size {
     const w = if (backdrop) @min(560, @max(200, if (stackedHero(width)) width - 24 else width * 0.49)) else @min(184, @max(112, width * 0.2));
@@ -64,6 +87,15 @@ test "search cards retain meaningful aspect ratios at narrow and wide widths" {
         try std.testing.expectEqual(square.w, square.h);
         try std.testing.expectApproxEqAbs(@as(f32, 16.0 / 9.0), video.w / video.h, 0.001);
     }
+}
+test "phone shelves fit three covers and drop the Details row" {
+    const w: f32 = 330; // iPhone content width beside the rail
+    try std.testing.expect(isPhone(w) and !isPhone(640));
+    const art = cardSize(.portrait, w);
+    try std.testing.expect(art.w * 3 + 24 <= w + 1);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.5), art.h / art.w, 0.001);
+    try std.testing.expect(shelfHeightFor(art.h, 18, true) < shelfHeightFor(art.h, 18, false));
+    try std.testing.expect(cardSize(.landscape, w).w < w);
 }
 test "search hero stacks on narrow windows without expanding portrait artwork" {
     try std.testing.expect(stackedHero(600));

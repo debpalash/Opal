@@ -26,6 +26,128 @@ import tempfile
 import textwrap
 
 
+@test("iOS device-only selection and development signing policy", "Platforms")
+def test_ios_device_pipeline():
+    result = subprocess.run([sys.executable, os.path.join(PROJECT_DIR, 'tests/test_ios_device.py')], capture_output=True, text=True, timeout=30)
+    return ('pass', 'paired physical devices only; matching app, device, expiry and signing identity required') if result.returncode == 0 else ('fail', result.stderr[-1600:])
+
+
+@test("Apple native HTTP transport preserves requests and bounds network work", "Platforms")
+def test_ios_http_transport():
+    if sys.platform != 'darwin':
+        return 'skip', 'Foundation transport requires the Apple SDK'
+    result = subprocess.run([sys.executable, os.path.join(PROJECT_DIR, 'tests/test_ios_http.py')], capture_output=True, text=True, timeout=30)
+    return ('pass', 'real Foundation transport: headers/body, origin-safe redirects, limits, deadlines and cancellation') if result.returncode == 0 else ('fail', result.stderr[-1600:])
+
+
+@test("Touch shell: no hover-pinned sidebar, centred rail, aligned cards, edge-to-edge", "Platforms")
+def test_touch_shell_layout():
+    shell = _src("src/ui/shell.zig")
+    tmdb = _src("src/services/tmdb.zig")
+    frame = _src("src/ui/ios_frame.zig")
+    walk = _src("src/ui/ios_uitest.zig")
+    problems = []
+    # REGRESSION: on iOS the last tap point stayed "hovered", pinning the peek sidebar open.
+    if 'const peek = !(comptime @import("../core/platform_pure.zig").mobile)' not in shell:
+        problems.append("sidebar hover peek not disabled on touch")
+    # REGRESSION: collapsed rail glyphs sat left of the centred Settings/Logs icons.
+    if ".gravity_x = if (expanded) 0 else 0.5" not in shell or ".vertical_bar = if (touch) .hide else .auto" not in shell:
+        problems.append("collapsed rail glyphs not centred / touch scrollbar gutter kept")
+    # REGRESSION: dvui.button centred the poster title while rating/year were left-aligned.
+    if "title_btn.init(" not in tmdb or "dvui.button(@src(), wrapped_title" in tmdb:
+        problems.append("poster title not left-aligned")
+    if "layout.immersive(safe, keyboard)" not in frame:
+        problems.append("iOS shell not edge-to-edge")
+    # The strip beside the Dynamic Island carries brand/toggle/menu; the player
+    # transport sits on the bottom edge rather than above the home indicator.
+    if "shell.cutout_band = edges.top" not in frame or "fn renderCutoutBand" not in shell:
+        problems.append("cutout band unused")
+    if ".h = edges.bottom } });" not in frame or ".h = safe.bottom" in frame:
+        problems.append("player controls still inset by the home-indicator area")
+    grid = _src("src/ui/grid.zig")
+    player = _src("src/player/player.zig")
+    # REGRESSION: the audio/radio pane's full-screen pause button swallowed Back
+    # and every transport tap on touch.
+    if grid.count("paneCatcher(.{") != 3 or "setPlayerTopChrome(" not in frame:
+        problems.append("full-pane catchers still claim player chrome taps")
+    # REGRESSION: iOS libmpv lacks the visualizer filters; the failed graph stopped radio.
+    if "vis.filtersAvailable(" not in player:
+        problems.append("visualizer applied without its ffmpeg filters")
+    if '"radio_back"' not in walk:
+        problems.append("UI walk lacks the radio Back tap")
+    if "trackRailAutohide()" not in shell or "rail_autohide_pure.zig" not in shell:
+        problems.append("collapsed rail auto-hide not wired")
+    if ".ready = pageLoaded" not in walk or '"landscape"' not in walk:
+        problems.append("UI walk lacks browser load wait or landscape step")
+    return ("fail", "; ".join(problems)) if problems else ("pass", "touch shell layout guards in place")
+
+
+@test("Re-opening a magnet already in the session plays it instead of failing", "Torrent")
+def test_magnet_reopen_reuses_transfer():
+    cpp = _src("src/torrent_wrapper.cpp")
+    body = cpp[cpp.find("static int add_magnet(TorrentSession session"):]
+    body = body[:body.find("ctx->ses->add_torrent(atp, ec)")]
+    # REGRESSION: a torrent restored paused from the last run made the same
+    # magnet fail with "invalid magnet or already added".
+    if "hashes_match(atp.info_hashes, existing->handle.info_hashes())" not in body or "existing->handle.resume()" not in body:
+        return ("fail", "add_magnet does not reuse an existing transfer before add_torrent")
+    return ("pass", "duplicate magnet resumes and returns the existing transfer id")
+
+
+@test("iOS torrents: file I/O, playing torrent outranks the queue, native APIBay", "Torrent")
+def test_ios_torrent_pipeline():
+    cpp = _src("src/torrent_wrapper.cpp")
+    search = _src("src/services/search.zig")
+    resolver = _src("src/services/resolver.zig")
+    gate = _src("src/player/stream_gate.zig")
+    problems = []
+    # REGRESSION: device torrents hit "Operation not permitted" once the phone
+    # auto-locked mid-stream; downloads must stay writable while locked.
+    bridge = _src("mobile/ios/bridge.m")
+    if 'URLByAppendingPathComponent:@"Downloads"' not in bridge or "NSFileProtectionCompleteUntilFirstUserAuthentication} ofItemAtPath:downloads.path" not in bridge:
+        problems.append("Downloads folder protection not relaxed for locked-phone streaming")
+    # REGRESSION: the playing movie sat queued (paused+auto_managed) behind abandoned attempts.
+    if "torrent_set_streaming" not in cpp or "torrent_set_streaming(state.torrentSession(), tid)" not in search:
+        problems.append("streamed torrent still subject to the auto-managed queue")
+    # REGRESSION: no Python on iOS meant zero general torrent results.
+    # REGRESSION: the saved save_path pointed into a previous iOS container.
+    if "storedPathUsable(val, @import(\"paths.zig\").homeDir(), platform.mobile)" not in _src("src/core/config.zig"):
+        problems.append("stale iOS container save path still honoured")
+    if "resolveApibayNative(query)" not in resolver:
+        problems.append("no native torrent index on iOS")
+    # REGRESSION: a 10 GB release's first 8 MB stalled at 25% while 557 MB arrived elsewhere.
+    if "cp.repinDue(" not in gate:
+        problems.append("stream gate pins the start range only once")
+    return ("fail", "; ".join(problems)) if problems else ("pass", "iOS torrent pipeline guards in place")
+
+
+@test("iOS host reuses the desktop startup, service ticks, shell and browser", "Platforms")
+def test_ios_shared_host():
+    frame = _src("src/ui/ios_frame.zig")
+    main = _src("src/main.zig")
+    services = _src("src/app_services.zig")
+    tmdb = _src("src/services/tmdb.zig") + _src("src/services/tmdb_api.zig")
+    project = _src("mobile/ios/project.yml")
+    problems = []
+    for needle in ('main.zig").coreInit()', 'app_services.zig").tickEarly()', 'app_services.zig").tickServices()',
+                   'app_services.zig").tickPlayers()', 'shell.zig").render()', 'browser.zig").loadContent('):
+        if needle not in frame:
+            problems.append("ios_frame missing " + needle)
+    for needle in ('app_services.zig").tickEarly()', 'app_services.zig").tickServices()', 'app_services.zig").tickPlayers()'):
+        if needle not in main:
+            problems.append("main.zig no longer shares " + needle)
+    if "pub fn tickEarly" not in services or "pub fn tickPlayers" not in services:
+        problems.append("app_services tick functions missing")
+    # REGRESSION: iOS once stubbed out Find sources / TV episodes / catalog fetch.
+    if "os.tag == .ios" in tmdb:
+        problems.append("tmdb modules still carry iOS-only stubs")
+    if "- native_browser.m" not in project or "cacert.pem" not in project:
+        problems.append("project.yml lacks the UIKit browser or bundled CA roots")
+    if "or @import(\"builtin\").os.tag == .ios" not in _src("src/services/native_browser.zig"):
+        problems.append("native browser not enabled on iOS")
+    return ("fail", "; ".join(problems)) if problems else ("pass", "one startup/tick/shell path for desktop and iOS")
+
+
 def _run_py(script):
     """Run a snippet against a THROWAWAY config/cache root so the suite never
     reads or writes the developer's real installed sources."""

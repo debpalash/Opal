@@ -32,7 +32,7 @@ pub const CancelEpoch = union(enum) {
         expected: u64,
     },
 
-    fn fired(self: CancelEpoch) bool {
+    pub fn fired(self: CancelEpoch) bool {
         return switch (self) {
             .epoch32 => |token| token.value.load(.acquire) != token.expected,
             .epoch64 => |token| token.value.load(.acquire) != token.expected,

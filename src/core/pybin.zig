@@ -55,6 +55,8 @@ fn works(exe: []const u8) bool {
 /// The first interpreter that actually works, or null when Python is absent.
 /// Probed once per process; the result is cached.
 pub fn python() ?[]const u8 {
+    // Mobile sandboxes cannot run interpreters; skip the spawn probe.
+    if (comptime @import("platform_pure.zig").mobile) return null;
     if (probed.load(.acquire)) {
         return if (resolved_len > 0) resolved_buf[0..resolved_len] else null;
     }
@@ -78,6 +80,7 @@ pub fn python() ?[]const u8 {
 
 /// Human-facing reason for the Settings/logs when nothing resolved.
 pub fn missingHint() []const u8 {
+    if (comptime @import("platform_pure.zig").mobile) return "Python search engines are desktop-only; plugin and Torznab sources still work.";
     return if (is_windows)
         "Python not found. Install it from python.org (the Microsoft Store alias on PATH is not a real interpreter), then restart Opal."
     else

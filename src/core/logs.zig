@@ -116,6 +116,8 @@ pub fn deinit() void {
 }
 
 pub fn pushLog(level: []const u8, prefix: []const u8, text: []const u8, is_error: bool) void {
+    // iOS has no terminal: mirror to the device console (Xcode / simctl --console).
+    if (comptime @import("builtin").os.tag == .ios) std.log.info("[{s}] {s}: {s}", .{ level, prefix, text });
     // Severity is derived from `level`, not the call-site `is_error` bool: that
     // bool was set inconsistently across the codebase (dozens of plain "info"
     // logs passed `true`), which painted the whole Logs view red. `level`

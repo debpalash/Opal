@@ -2354,6 +2354,54 @@ fn resolveInstalledPlugins(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 // Main torrent thread: uses nova2.py (same proven engine as Torrent Only tab)
+/// Native APIBay search (apibay_pure.zig) for builds without the nova2 engines.
+fn resolveApibayNative(query: []const u8) SourceStatus {
+    const ab = @import("apibay_pure.zig");
+    const base = @import("../core/source_config.zig").get("apibay", "base") orelse return .unavailable;
+    var url_buf: [1024]u8 = undefined;
+    const url = ab.queryUrl(base, query, 0, &url_buf) orelse return .failed;
+    const body_buf = alloc.alloc(u8, 512 * 1024) catch return .failed;
+    defer alloc.free(body_buf);
+    @import("../core/rate_limit.zig").acquire("apibay", 1.0);
+    const body = @import("../core/http.zig").fetch(url, body_buf, .{
+        .timeout_secs = 10,
+        .user_agent = @import("../core/app_meta.zig").user_agent,
+    }) orelse return .transport_failed;
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return .parse_failed;
+    defer parsed.deinit();
+    if (parsed.value != .array) return .parse_failed;
+    const field = struct {
+        fn get(obj: std.json.ObjectMap, key: []const u8) []const u8 {
+            const v = obj.get(key) orelse return "";
+            return if (v == .string) v.string else "";
+        }
+    }.get;
+    var pushed: usize = 0;
+    for (parsed.value.array.items) |entry| {
+        if (entry != .object) continue;
+        const o = entry.object;
+        const r = ab.row(field(o, "name"), field(o, "info_hash"), field(o, "seeders"), field(o, "leechers"), field(o, "size")) orelse continue;
+        var item = std.mem.zeroes(ResolvedItem);
+        item.source = .torrent;
+        item.provider = search_view.Provider.init("apibay");
+        const nlen = @min(r.name.len, 255);
+        @memcpy(item.name[0..nlen], r.name[0..nlen]);
+        item.name_len = nlen;
+        var mag_buf: [2048]u8 = undefined;
+        const mag = ab.magnet(r, &mag_buf) orelse continue;
+        @memcpy(item.url[0..mag.len], mag);
+        item.url_len = mag.len;
+        item.quality = detectQuality(r.name);
+        item.seeds = r.seeds;
+        item.leech = r.leech;
+        item.size_bytes = r.size;
+        const det = std.fmt.bufPrint(&item.detail, "Torrent · APIBay · {d} seeds", .{r.seeds}) catch "Torrent · APIBay";
+        item.detail_len = det.len;
+        if (pushResult(item)) pushed += 1;
+    }
+    return if (pushed > 0) .done else .no_results;
+}
+
 fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
     var outcome: SourceStatus = .done;
     defer {
@@ -2365,6 +2413,12 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
 
     // nova2.py requires running from the engines/ parent directory
     const py = @import("../core/pybin.zig").python() orelse {
+        // No Python (iOS): the installed apibay endpoint is queried natively so
+        // the phone still has a general torrent index for movies and episodes.
+        if (comptime @import("../core/platform_pure.zig").mobile) {
+            outcome = resolveApibayNative(query);
+            return;
+        }
         outcome = .unavailable;
         logs.pushLog("error", "resolver", @import("../core/pybin.zig").missingHint(), true);
         return;
@@ -4516,6 +4570,11 @@ pub fn playResolvedItem(item: *const ResolvedItem) void {
             } else @import("browser.zig").playDirect(.{ .url = url, .audio_only = true, .title = item.name[0..item.name_len], .subtitle = item.author[0..item.author_len], .art_url = item.poster_url[0..item.poster_url_len] });
         },
         .youtube, .stremio, .local, .radio => {
+            const url = item.url[0..item.url_len];
+            if (@import("resolver_dedup_pure.zig").playRoute(url) == .torrent) {
+                @import("search.zig").loadTorrentToPlayer(url);
+                return;
+            }
             @import("browser.zig").playDirect(.{
                 .url = item.url[0..item.url_len],
                 .fallback_url = item.fallback_url[0..item.fallback_url_len],

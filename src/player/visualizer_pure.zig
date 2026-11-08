@@ -64,6 +64,14 @@ pub fn shouldApply(style: Style, headless: bool, already_applied: bool) bool {
     return !headless and !already_applied and style != .off;
 }
 
+/// The graph needs ffmpeg's showfreqs/showwaves/drawgrid/geq. The iOS libmpv
+/// build ships without them, and a graph that fails to parse is FATAL to mpv's
+/// lavfi-complex: playback of the stream itself stops (radio/podcasts sat at
+/// 0:00). Only builds that carry the full filter set may apply it.
+pub fn filtersAvailable(mobile: bool) bool {
+    return !mobile;
+}
+
 /// The gradient's far end (violet). The near end is the theme accent, so the bars
 /// run accent → violet across the spectrum.
 pub const END_R: u8 = 131;
@@ -222,6 +230,11 @@ test "style labels round-trip (settings persistence)" {
     }
     // An unknown label (hand-edited or older config) falls back, never crashes.
     try t.expectEqual(Style.bars, Style.fromLabel("bogus"));
+}
+
+test "regression: mobile libmpv without showfreqs/drawgrid never gets the graph" {
+    try std.testing.expect(!filtersAvailable(true));
+    try std.testing.expect(filtersAvailable(false));
 }
 
 test "headless audio skips every visualization style" {

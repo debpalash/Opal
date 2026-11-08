@@ -61,6 +61,7 @@ def _create_isolated_db_fixture():
         return
 
     db_source = Path(PROJECT_DIR, "src", "core", "db.zig").read_text(encoding="utf-8")
+    db_source += "\n" + Path(PROJECT_DIR, "src", "core", "catalog_schema.zig").read_text(encoding="utf-8")
     statements = []
     lines = db_source.splitlines()
     i = 0
@@ -200,9 +201,19 @@ def get_db():
     return sqlite3.connect(Path(DB_PATH).resolve().as_uri() + "?mode=ro", uri=True)
 
 
+# appFrame's per-frame service/player/playback ticks live in app_services.zig
+# (shared with the iOS host). Wiring checks against main.zig see both files.
+_FRAME_PARTS = {"src/main.zig": ("src/main.zig", "src/app_services.zig")}
+
+
 def _src(rel):
-    p = os.path.join(PROJECT_DIR, rel)
-    return open(p, encoding="utf-8").read() if os.path.exists(p) else ""
+    parts = _FRAME_PARTS.get(rel.replace("\\", "/"), (rel,))
+    out = []
+    for part in parts:
+        p = os.path.join(PROJECT_DIR, part)
+        if os.path.exists(p):
+            out.append(open(p, encoding="utf-8").read())
+    return "\n".join(out)
 
 
 def _posix_shell():

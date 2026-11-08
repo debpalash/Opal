@@ -332,7 +332,7 @@ fn uploadFrame(p: *player.MediaPlayer) bool {
         player.perf.upload_ns += dt;
         player.perf.upload_max_ns = @max(player.perf.upload_max_ns, dt);
     }
-    return rc == 0;
+    return @import("../core/sdl_result_pure.zig").succeeded(rc);
 }
 
 fn sdlPixelFormat(fmt: dvui.enums.TexturePixelFormat) u32 {
@@ -357,6 +357,11 @@ fn chooseSwFormat() void {
     if (sw_format_chosen) return;
     sw_format_chosen = true;
     if (player.sw_format_forced) return;
+    if (comptime @import("builtin").os.tag == .ios) {
+        // SDL3's Metal renderer accepts BGRA32 directly.
+        player.sw_format = "bgra";
+        return;
+    }
     const renderer: *c.sdl.SDL_Renderer = @ptrCast(@alignCast(dvui.currentWindow().backend.impl.renderer));
     var info: c.sdl.SDL_RendererInfo = undefined;
     if (c.sdl.SDL_GetRendererInfo(renderer, &info) != 0) return;
@@ -387,12 +392,12 @@ fn chooseSwFormat() void {
 fn createStreamingTexture(w: u32, h: u32, fmt: dvui.enums.TexturePixelFormat) !dvui.Texture {
     if (comptime @import("build_options").headless) return error.TextureCreate;
     const renderer: *c.sdl.SDL_Renderer = @ptrCast(@alignCast(dvui.currentWindow().backend.impl.renderer));
-    _ = c.sdl.SDL_SetHint(c.sdl.SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+    if (comptime @import("builtin").os.tag != .ios) _ = c.sdl.SDL_SetHint(c.sdl.SDL_HINT_RENDER_SCALE_QUALITY, "linear");
     const tex = c.sdl.SDL_CreateTexture(renderer, sdlPixelFormat(fmt), c.sdl.SDL_TEXTUREACCESS_STREAMING, @intCast(w), @intCast(h)) orelse {
         logs.pushLog("error", "player", "video texture creation failed — SDL_CreateTexture", true);
         return error.TextureCreate;
     };
-    _ = c.sdl.SDL_SetTextureScaleMode(tex, c.sdl.SDL_ScaleModeLinear);
+    _ = c.sdl.SDL_SetTextureScaleMode(tex, if (@import("builtin").os.tag == .ios) c.sdl.SDL_SCALEMODE_LINEAR else c.sdl.SDL_ScaleModeLinear);
     const pma_blend = c.sdl.SDL_ComposeCustomBlendMode(
         c.sdl.SDL_BLENDFACTOR_ONE,
         c.sdl.SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
@@ -412,6 +417,35 @@ fn createStreamingTexture(w: u32, h: u32, fmt: dvui.enums.TexturePixelFormat) !d
 /// texture), with a URL-hash guard for a leak-free swap when the item changes
 /// while a prior fetch is still in flight (same pattern as the podcast covers).
 /// UI-thread only.
+/// True when this frame's press/release lands on player chrome (top bar or
+/// transport). The full-pane click catchers below are drawn BEFORE that chrome,
+/// so as plain buttons they claimed every touch first: on iOS, Back and every
+/// transport control merely toggled pause on audio/radio.
+fn pointerOnPlayerChrome() bool {
+    const footer_mod = @import("footer.zig");
+    const shell = @import("shell.zig");
+    for (dvui.events()) |e| {
+        if (e.evt != .mouse) continue;
+        const me = e.evt.mouse;
+        if (me.action != .press and me.action != .release) continue;
+        if (chromeContains(state.app.show_cell_overlay, footer_mod.mouseInControlPanel(me.p), shell.mouseInPlayerTopChrome(me.p))) return true;
+    }
+    return false;
+}
+fn chromeContains(overlay_shown: bool, in_controls: bool, in_top_chrome: bool) bool {
+    return @import("player_chrome_pure.zig").ownsPointer(overlay_shown, in_controls, in_top_chrome);
+}
+
+/// Full-pane click catcher that yields to player chrome (see pointerOnPlayerChrome).
+fn paneCatcher(opts: dvui.Options) bool {
+    if (pointerOnPlayerChrome()) {
+        var b = dvui.box(@src(), .{}, opts.override(.{ .background = true }));
+        b.deinit();
+        return false;
+    }
+    return dvui.button(@src(), "", .{}, opts);
+}
+
 fn renderAudioNowPlaying(i: usize, p: *player.MediaPlayer) void {
     const text_mod = @import("../core/text.zig");
 
@@ -422,7 +456,7 @@ fn renderAudioNowPlaying(i: usize, p: *player.MediaPlayer) void {
     var np_overlay = dvui.overlay(@src(), .{ .id_extra = i + 8800, .expand = .both });
     defer np_overlay.deinit();
 
-    if (dvui.button(@src(), "", .{}, .{
+    if (paneCatcher(.{
         .id_extra = i + 8801,
         .expand = .both,
         .color_fill = @import("color_compat.zig").wrap(theme.video_letterbox),
@@ -1493,7 +1527,7 @@ pub fn renderGrid() !void {
                         });
                         defer placeholder_overlay.deinit();
 
-                        if (dvui.button(@src(), "", .{}, .{
+                        if (paneCatcher(.{
                             .id_extra = i + 5510,
                             .expand = .both,
                             .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_deep),
@@ -1514,7 +1548,7 @@ pub fn renderGrid() !void {
                 const comics = @import("../services/comics.zig");
 
                 // Click to select pane
-                if (dvui.button(@src(), "", .{}, .{
+                if (paneCatcher(.{
                     .id_extra = i + 5000,
                     .expand = .both,
                     .color_fill = @import("color_compat.zig").wrap(theme.transparent),

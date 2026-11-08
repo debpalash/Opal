@@ -483,13 +483,13 @@ fn renderToolbar() void {
     // Destinations stay visible even on narrow windows. Tooltips give each
     // icon its full name; the highlighted pill identifies the current view.
     const destinations = [_]browse_filters.Item{
-        .{ .id = @intFromEnum(state.TmdbView.Trending), .label = "Browse", .icon = icons.tvg.lucide.compass },
-        .{ .id = @intFromEnum(state.TmdbView.Search), .label = "Search", .icon = icons.tvg.lucide.search, .visible = @import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled) },
-        .{ .id = @intFromEnum(state.TmdbView.Favorites), .label = "Favorites", .icon = icons.tvg.lucide.star },
-        .{ .id = @intFromEnum(state.TmdbView.Watchlist), .label = "Watchlist", .icon = icons.tvg.lucide.bookmark },
-        .{ .id = @intFromEnum(state.TmdbView.Watching), .label = "Watching", .icon = icons.tvg.lucide.eye },
+        .{ .id = @backingInt(state.TmdbView.Trending), .label = "Browse", .icon = icons.tvg.lucide.compass },
+        .{ .id = @backingInt(state.TmdbView.Search), .label = "Search", .icon = icons.tvg.lucide.search, .visible = @import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled) },
+        .{ .id = @backingInt(state.TmdbView.Favorites), .label = "Favorites", .icon = icons.tvg.lucide.star },
+        .{ .id = @backingInt(state.TmdbView.Watchlist), .label = "Watchlist", .icon = icons.tvg.lucide.bookmark },
+        .{ .id = @backingInt(state.TmdbView.Watching), .label = "Watching", .icon = icons.tvg.lucide.eye },
     };
-    if (bar.menu(@src(), .{ .items = &destinations, .selected = @intFromEnum(state.app.tmdb.view) })) |id| switchView(@enumFromInt(id));
+    if (bar.menu(@src(), .{ .items = &destinations, .selected = @backingInt(state.app.tmdb.view) })) |id| switchView(@fromBackingInt(@intCast(id)));
 
     // Catalog search — always visible so Movies/TV search is discoverable
     // instead of hidden behind the Search tab. Typing auto-switches to the
@@ -505,18 +505,18 @@ fn renderToolbar() void {
             toolbarDivider(901);
             const keyed = state.app.tmdb.api_key_len > 0;
             if (!keyed) {
-                const folded = keyless_meta.foldKeylessCategory(@enumFromInt(@intFromEnum(state.app.tmdb.category)));
-                state.app.tmdb.category = @enumFromInt(@intFromEnum(folded));
+                const folded = keyless_meta.foldKeylessCategory(@fromBackingInt(@intCast(@backingInt(state.app.tmdb.category))));
+                state.app.tmdb.category = @fromBackingInt(@intCast(@backingInt(folded)));
             }
             const categories = [_]browse_filters.Item{
-                .{ .id = @intFromEnum(state.TmdbCategory.trending), .label = if (keyed) "Trending" else "Popular", .icon = icons.tvg.lucide.flame },
-                .{ .id = @intFromEnum(state.TmdbCategory.popular), .label = "Popular", .icon = icons.tvg.lucide.@"trending-up", .visible = keyed },
-                .{ .id = @intFromEnum(state.TmdbCategory.top_rated), .label = "Top Rated", .icon = icons.tvg.lucide.trophy },
-                .{ .id = @intFromEnum(state.TmdbCategory.now_playing), .label = if (!keyed) "New" else if (state.app.tmdb.media_filter == .tv) "On Air" else "In Cinemas", .icon = if (keyed) icons.tvg.lucide.clapperboard else icons.tvg.lucide.sparkles },
-                .{ .id = @intFromEnum(state.TmdbCategory.upcoming), .label = "Upcoming", .icon = icons.tvg.lucide.@"calendar-days", .visible = keyed },
+                .{ .id = @backingInt(state.TmdbCategory.trending), .label = if (keyed) "Trending" else "Popular", .icon = icons.tvg.lucide.flame },
+                .{ .id = @backingInt(state.TmdbCategory.popular), .label = "Popular", .icon = icons.tvg.lucide.@"trending-up", .visible = keyed },
+                .{ .id = @backingInt(state.TmdbCategory.top_rated), .label = "Top Rated", .icon = icons.tvg.lucide.trophy },
+                .{ .id = @backingInt(state.TmdbCategory.now_playing), .label = if (!keyed) "New" else if (state.app.tmdb.media_filter == .tv) "On Air" else "In Cinemas", .icon = if (keyed) icons.tvg.lucide.clapperboard else icons.tvg.lucide.sparkles },
+                .{ .id = @backingInt(state.TmdbCategory.upcoming), .label = "Upcoming", .icon = icons.tvg.lucide.@"calendar-days", .visible = keyed },
             };
-            if (bar.menu(@src(), .{ .items = &categories, .selected = if (state.app.tmdb.genre_idx == 0) @intFromEnum(state.app.tmdb.category) else null })) |id| {
-                state.app.tmdb.category = @enumFromInt(id);
+            if (bar.menu(@src(), .{ .items = &categories, .selected = if (state.app.tmdb.genre_idx == 0) @backingInt(state.app.tmdb.category) else null })) |id| {
+                state.app.tmdb.category = @fromBackingInt(@intCast(id));
                 state.app.tmdb.genre_idx = 0;
                 state.app.tmdb.page = 1;
                 resetGalleryScroll();
@@ -524,12 +524,12 @@ fn renderToolbar() void {
             }
             toolbarDivider(902);
             const media = [_]browse_filters.Item{
-                .{ .id = @intFromEnum(state.TmdbMediaFilter.all), .label = "All", .icon = icons.tvg.lucide.@"layout-grid" },
-                .{ .id = @intFromEnum(state.TmdbMediaFilter.movie), .label = "Movies", .icon = icons.tvg.lucide.film },
-                .{ .id = @intFromEnum(state.TmdbMediaFilter.tv), .label = "TV", .icon = icons.tvg.lucide.tv },
+                .{ .id = @backingInt(state.TmdbMediaFilter.all), .label = "All", .icon = icons.tvg.lucide.@"layout-grid" },
+                .{ .id = @backingInt(state.TmdbMediaFilter.movie), .label = "Movies", .icon = icons.tvg.lucide.film },
+                .{ .id = @backingInt(state.TmdbMediaFilter.tv), .label = "TV", .icon = icons.tvg.lucide.tv },
             };
-            if (bar.menu(@src(), .{ .items = &media, .selected = @intFromEnum(state.app.tmdb.media_filter) })) |id| {
-                state.app.tmdb.media_filter = @enumFromInt(id);
+            if (bar.menu(@src(), .{ .items = &media, .selected = @backingInt(state.app.tmdb.media_filter) })) |id| {
+                state.app.tmdb.media_filter = @fromBackingInt(@intCast(id));
                 state.app.tmdb.page = 1;
                 resetGalleryScroll();
                 api.fetchCurrentView(false);
@@ -772,6 +772,10 @@ fn renderTimeChip(idx: usize, tw: state.TmdbTimeWindow, label: []const u8) void 
 /// CARD_VMARGIN above and below, and skeleton tiles use the same size.
 const CARD_FOOTER_H: f32 = 152;
 const CARD_VMARGIN: f32 = 3;
+
+/// Shelves and the virtualized gallery must reserve the same card footprint.
+pub const POSTER_SHELF_CHROME = CARD_FOOTER_H + CARD_VMARGIN * 2;
+pub var first_details_bounds_for_test: dvui.Rect.Physical = .{};
 
 /// Gallery scroll position — module-level so it survives sub-tab/page-route
 /// switches (dvui's per-id retained scroll state is dropped whenever the
@@ -1232,7 +1236,10 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
     var title_lines: [520]u8 = undefined;
     const title_font = theme.mediaTitleFont(title, dvui.themeGet().font_body);
     const wrapped_title = shared_components.twoLineTitle(title, title_font, card_w - 4, &title_lines);
-    if (dvui.button(@src(), wrapped_title, .{}, .{
+    // Left-aligned like the rating row and year below it (dvui.button
+    // centres its label, which left the title floating mid-card).
+    var title_btn: dvui.ButtonWidget = undefined;
+    title_btn.init(@src(), .{}, .{
         .font = title_font,
         .id_extra = idx + 500,
         .expand = .horizontal,
@@ -1243,9 +1250,14 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
         .color_fill_hover = .{ .color = theme.colors.bg_hover },
         .color_fill_press = .{ .color = theme.colors.bg_elevated },
         .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-    })) {
-        openOrSearch(item);
-    }
+    });
+    title_btn.processEvents();
+    title_btn.drawBackground();
+    dvui.labelNoFmt(@src(), wrapped_title, .{}, title_btn.data().options.strip().override(title_btn.style()).override(.{ .gravity_x = 0, .gravity_y = 0.5 }));
+    title_btn.drawFocus();
+    const title_clicked = title_btn.clicked();
+    title_btn.deinit();
+    if (title_clicked) openOrSearch(item);
 
     // Year
     if (item.year_len > 0) {
@@ -1265,6 +1277,7 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
             poster_details_tv = std.mem.eql(u8, item.media_type[0..@min(item.media_type_len, item.media_type.len)], "tv");
             poster_details_open = true;
         }
+        if (@import("builtin").is_test and idx == 0) first_details_bounds_for_test = shared_components.action_bounds_for_test;
         var gap = dvui.box(@src(), .{}, .{ .expand = .horizontal });
         gap.deinit();
         var menu = dvui.menu(@src(), .horizontal, .{ .id_extra = idx + 7000 });
@@ -1289,7 +1302,7 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
     }
 }
 
-fn renderPosterDetails(items: *std.ArrayListUnmanaged(state.TmdbItem)) void {
+pub fn renderPosterDetails(items: *std.ArrayListUnmanaged(state.TmdbItem)) void {
     if (!poster_details_open) return;
     const item = for (items.items) |*candidate| {
         const tv = std.mem.eql(u8, candidate.media_type[0..@min(candidate.media_type_len, candidate.media_type.len)], "tv");
@@ -1713,7 +1726,7 @@ fn openTvDetail(item: *state.TmdbItem) void {
 
 /// Clear the TV detail view and return to the gallery. Bumps the generation so
 /// any in-flight worker can't repopulate state after we leave.
-fn closeTvDetail() void {
+pub fn closeTvDetail() void {
     const t = &state.app.tmdb;
     freeEpisodeStills();
     t.tv_detail_open = false;
@@ -2877,6 +2890,7 @@ fn smartPlayEpisode(query: []const u8, generation: u64) void {
                     .needs_seeds = it.source == .torrent,
                     .match_pct = it.match_pct,
                     .seeds = it.seeds,
+                    .same_series = rank.sameSeries(it.name[0..it.name_len], query),
                 };
             }
             if (rank.pickForStartup(cands[0..n], resolver.isResolving() and waited < 150)) |pi| {

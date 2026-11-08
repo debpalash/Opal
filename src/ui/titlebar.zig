@@ -157,6 +157,8 @@ fn ctlButton(id: u32, icon_data: []const u8, danger: bool) bool {
 /// Draw the bar. Call once, at the very top of the frame (above all other
 /// chrome). No-op when the custom title bar isn't active.
 pub fn render() void {
+    // Comptime gate: the window-control body uses SDL2-only window calls.
+    if (comptime !is_windows) return;
     if (!active()) return;
     const win = sdl_window;
 

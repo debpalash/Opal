@@ -18,7 +18,7 @@ def test_page_router():
 @test("Page Shell Wired", "Page Shell")
 def test_page_shell():
     shell = os.path.join(PROJECT_DIR, "src/ui/shell.zig")
-    main = open(os.path.join(PROJECT_DIR, "src/main.zig")).read()
+    main = _src("src/main.zig")  # includes app_services.zig frame ticks
     if (os.path.exists(shell)
             and "page_shell_enabled" in main
             and "shell.zig" in main):
@@ -50,7 +50,7 @@ def test_omnibox_search():
     shell = open(os.path.join(PROJECT_DIR, "src/ui/shell.zig")).read()
     header = open(os.path.join(PROJECT_DIR, "src/ui/header.zig")).read()
     search = open(os.path.join(PROJECT_DIR, "src/services/search.zig")).read()
-    main = open(os.path.join(PROJECT_DIR, "src/main.zig")).read()
+    main = _src("src/main.zig")  # includes app_services.zig frame ticks
     memory_entry = _between(search, "pub fn memorySearch(", "fn memorySearchWorker(")
     if ("submitScopedQuery" in shell and "pub fn submitQuery" in search and "navigate(.search)" in shell
             and "switch (browser_pure.classifyOmnibox(trimmed))" in header
