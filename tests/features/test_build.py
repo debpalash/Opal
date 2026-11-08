@@ -1655,3 +1655,20 @@ def test_release_visuals():
     if result.returncode:
         return "fail", (result.stderr or result.stdout)[-1200:]
     return "pass", "fresh release assets validated; missing, stale, unsafe and invalid visuals rejected"
+
+
+@test("Release attaches an unsigned iOS IPA and lists it in SHA256SUMS", "Build")
+def test_release_ios_ipa():
+    release = _src(".github/workflows/release.yml")
+    ipa = _src(".github/workflows/ios-ipa.yml")
+    checks = {
+        # The IPA is built after publish so a failed iOS build never blocks desktop downloads.
+        "release calls the IPA workflow after publish": "uses: ./.github/workflows/ios-ipa.yml" in release and "needs: publish" in release,
+        "IPA built by the tested packager": "scripts/ios-device.py --ipa" in ipa,
+        # REGRESSION: v0.9.4's hand-uploaded IPA was missing from SHA256SUMS.txt.
+        "IPA checksum appended to the manifest": "SHA256SUMS.txt --clobber" in ipa and "shasum -a 256 Opal-*-ios.ipa" in ipa,
+        "tag must match the app version": "check-release-version.py" in ipa,
+        "PR builds never upload": "if: env.OPAL_RELEASE_TAG != ''" in ipa,
+    }
+    bad = [k for k, ok in checks.items() if not ok]
+    return ("fail", "; ".join(bad)) if bad else ("pass", "IPA built post-publish, attached, and checksummed")

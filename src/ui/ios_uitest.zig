@@ -13,6 +13,7 @@ var started_ms: i64 = 0;
 var step_ms: i64 = 0;
 var entered = false;
 var failures: usize = 0;
+var done_logged = false;
 
 const Step = struct {
     name: []const u8,
@@ -50,7 +51,13 @@ const steps = [_]Step{
 pub fn tick() void {
     const now = io.milliTimestamp();
     if (started_ms == 0) started_ms = now;
-    if (step >= steps.len) return;
+    const only = io.getenv("OPAL_UITEST_ONLY") orelse "";
+    while (step < steps.len and !entered and !pure.selected(steps[step].name, only)) step += 1;
+    if (step >= steps.len) {
+        if (!done_logged) log("OPAL_UITEST_DONE failures={d}", .{failures});
+        done_logged = true;
+        return;
+    }
     // Let first-launch startup (DB, config, torrent session) settle.
     if (now - started_ms < 2_000) return keepAwake();
     const s = steps[step];
@@ -67,13 +74,12 @@ pub fn tick() void {
         .wait => {},
         .pass, .fail => |verdict| {
             if (verdict == .fail) failures += 1;
-            var detail_buf: [512]u8 = undefined;
+            var detail_buf: [768]u8 = undefined;
             log("OPAL_UITEST {s} {s} {s} ms={d}", .{ s.name, @tagName(verdict), detail(s.name, &detail_buf), elapsed });
             log("OPAL_UITEST_SHOT {s}", .{s.name});
             step += 1;
             entered = false;
             step_ms = now;
-            if (step == steps.len) log("OPAL_UITEST_DONE failures={d}", .{failures});
         },
     }
     keepAwake();
@@ -90,6 +96,24 @@ fn log(comptime fmt: []const u8, args: anytype) void {
 
 fn always() bool {
     return true;
+}
+
+/// Selected file, its size and how much of the start / first 8 MB / tail is local.
+fn gateInfo(p: anytype, buf: []u8) []const u8 {
+    if (p.current_torrent_id < 0 or p.selected_file_idx < 0) return "file=unselected ";
+    const ses = state.torrentSession();
+    const mpvc = @import("../core/c.zig").mpv;
+    const size = mpvc.torrent_get_file_size(ses, p.current_torrent_id, p.selected_file_idx);
+    const tail_off = if (size > (8 << 20)) size - (8 << 20) else 0;
+    return std.fmt.bufPrint(buf, "file={d}/{d} size={d}MB start1={d}% head8={d}% tail8={d}% fileprog={d:.3} ", .{
+        p.selected_file_idx,
+        mpvc.torrent_get_file_count(ses, p.current_torrent_id),
+        @divTrunc(size, 1 << 20),
+        mpvc.torrent_range_progress(ses, p.current_torrent_id, p.selected_file_idx, 0, 1 << 20),
+        mpvc.torrent_range_progress(ses, p.current_torrent_id, p.selected_file_idx, 0, 8 << 20),
+        mpvc.torrent_range_progress(ses, p.current_torrent_id, p.selected_file_idx, tail_off, size - tail_off),
+        mpvc.torrent_get_file_progress(ses, p.current_torrent_id, p.selected_file_idx),
+    }) catch "";
 }
 
 fn detail(name: []const u8, buf: []u8) []const u8 {
@@ -122,7 +146,8 @@ fn detail(name: []const u8, buf: []u8) []const u8 {
         var st: [256]u8 = undefined;
         st[0] = 0;
         if (p.current_torrent_id >= 0) _ = @import("../core/c.zig").mpv.torrent_debug_status(state.torrentSession(), p.current_torrent_id, &st, st.len);
-        return std.fmt.bufPrint(buf, "\"{s}\" pos={d:.1} dur={d:.0} torrent={d} url={s} {s}", .{ if (std.mem.eql(u8, name, "vq_play")) t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)] else "Breaking Bad S01E01", p.last_seen_pos, p.cached_duration, p.current_torrent_id, p.current_url[0..@min(p.current_url_len, 48)], std.mem.sliceTo(&st, 0) }) catch "";
+        var gate_buf: [200]u8 = undefined;
+        return std.fmt.bufPrint(buf, "\"{s}\" pos={d:.1} dur={d:.0} ready={} loading={} cache_pause={} torrent={d} {s}url={s} {s}", .{ if (std.mem.eql(u8, name, "vq_play")) t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)] else "Breaking Bad S01E01", p.last_seen_pos, p.cached_duration, p.torrent_is_ready, p.is_loading, p.cached_paused_for_cache, p.current_torrent_id, gateInfo(p, &gate_buf), p.current_url[0..@min(p.current_url_len, 48)], std.mem.sliceTo(&st, 0) }) catch "";
     }
     if (std.mem.eql(u8, name, "movie_torrent") and movie_pick_len == 0) return "no magnet among the movie's sources";
     if ((std.mem.eql(u8, name, "player_torrent") or std.mem.eql(u8, name, "movie_torrent")) and state.app.active_player_idx < state.app.players.items.len) {
@@ -131,16 +156,8 @@ fn detail(name: []const u8, buf: []u8) []const u8 {
         st[0] = 0;
         if (p.current_torrent_id >= 0) _ = @import("../core/c.zig").mpv.torrent_debug_status(state.torrentSession(), p.current_torrent_id, &st, st.len);
         const pick = if (std.mem.eql(u8, name, "movie_torrent")) movie_pick[0..movie_pick_len] else "Sintel";
-        const ses = state.torrentSession();
-        const mpvc = @import("../core/c.zig").mpv;
-        var gate_buf: [160]u8 = undefined;
-        const gate: []const u8 = if (p.current_torrent_id >= 0 and p.selected_file_idx >= 0) std.fmt.bufPrint(&gate_buf, "file={d}/{d} size={d}MB head8={d}% fileprog={d:.2} ", .{
-            p.selected_file_idx,
-            mpvc.torrent_get_file_count(ses, p.current_torrent_id),
-            @divTrunc(mpvc.torrent_get_file_size(ses, p.current_torrent_id, p.selected_file_idx), 1 << 20),
-            mpvc.torrent_range_progress(ses, p.current_torrent_id, p.selected_file_idx, 0, 8 << 20),
-            mpvc.torrent_get_file_progress(ses, p.current_torrent_id, p.selected_file_idx),
-        }) catch "" else "file=unselected ";
+        var gate_buf: [200]u8 = undefined;
+        const gate = gateInfo(p, &gate_buf);
         return std.fmt.bufPrint(buf, "\"{s}\" seeds={d} pos={d:.1} dur={d:.0} ready={} torrent={d} {s}{s}", .{ pick, movie_pick_seeds, p.last_seen_pos, p.cached_duration, p.torrent_is_ready, p.current_torrent_id, gate, std.mem.sliceTo(&st, 0) }) catch "";
     }
     if (std.mem.startsWith(u8, name, "player")) {

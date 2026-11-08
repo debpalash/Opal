@@ -412,6 +412,33 @@ pub fn episodeRetryDecision(attempts: usize, same_source: bool, resolving: bool)
     return if (attempts < 3) .retry else .manual;
 }
 
+/// A failed smart-play attempt's torrent is released only if that attempt
+/// created it: transfer ids are never reused and only grow, so an id at or
+/// above the session's next id when the attempt started is the attempt's own.
+/// A transfer the user already had (re-opened magnet reuses its id) is kept.
+pub fn attemptOwnsTorrent(tid: i32, first_new_id: i32) bool {
+    return tid >= 0 and first_new_id >= 0 and tid >= first_new_id;
+}
+
+/// Release only once no player still streams it (the next attempt has taken
+/// over, or the user moved on), so the failing stream is never yanked mid-load.
+pub fn releaseAbandonedTorrent(tid: i32, still_attached: bool) bool {
+    return tid >= 0 and !still_attached;
+}
+
+// REGRESSION: abandoned smart-play attempts kept downloading forever (and were
+// resumed on the next launch), competing with the stream actually being played.
+test "abandoned smart-play torrent is released once unreferenced, user transfers kept" {
+    try std.testing.expect(attemptOwnsTorrent(7, 7));
+    try std.testing.expect(attemptOwnsTorrent(9, 7));
+    try std.testing.expect(!attemptOwnsTorrent(3, 7)); // pre-existing download reused
+    try std.testing.expect(!attemptOwnsTorrent(-1, 7));
+    try std.testing.expect(!attemptOwnsTorrent(8, -1)); // restored session: unknown origin
+    try std.testing.expect(!releaseAbandonedTorrent(9, true));
+    try std.testing.expect(releaseAbandonedTorrent(9, false));
+    try std.testing.expect(!releaseAbandonedTorrent(-1, false));
+}
+
 test "episode fallback is bounded and cannot replace unrelated playback" {
     try std.testing.expectEqual(RetryDecision.ignore, episodeRetryDecision(1, false, false));
     try std.testing.expectEqual(RetryDecision.ignore, episodeRetryDecision(1, true, true));
