@@ -4,6 +4,28 @@
 It uses the Opal logo, real screenshots, and original recordings. The texture is
 an embedded SVG grain filter; exports need no generated background or network.
 
+## Fresh native previews
+
+Run from the repository root with Zig, ImageMagick, and native build dependencies:
+
+```sh
+python3 scripts/readme-art/capture-native.py
+```
+
+This captures the actual production shell, video surface, and transport controls
+in hidden SDL windows with an isolated profile. It uses the checked-in, openly
+licensed film frames in `assets/readme/sources/`; no download or screen-recording
+permission is needed. The explicit `OPAL_README_CAPTURE=1` mode only runs when
+requested and leaves the normal media layout checks unchanged. Review all three
+exports after regenerating them. Film credits, sources, and the distinction
+between paused-frame previews and live playback are in
+[`assets/readme/CREDITS.md`](../../assets/readme/CREDITS.md).
+
+## Legacy framed artwork
+
+The remaining instructions cover the older HTML compositions and recordings,
+which remain available for existing links.
+
 ## Render
 
 Install ego-browser, FFmpeg, and ImageMagick, then use your checkout's absolute path:
