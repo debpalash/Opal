@@ -222,6 +222,7 @@ test "Native embedded browser security measures owned traffic and removes tracki
         native.api.opal_browser_test_pump();
         if (privacy.api.opal_security_rules_ready() != 0) break;
     }
+    if (privacy.api.opal_security_rules_ready() == 0) std.debug.print("security content rules never compiled\n", .{});
     try std.testing.expect(privacy.api.opal_security_rules_ready() != 0);
     privacy.resetStats();
     var server = try (try std.Io.net.IpAddress.parse("127.0.0.1", 0)).listen(io.io(), .{ .reuse_address = true });
@@ -242,6 +243,7 @@ test "Native embedded browser security measures owned traffic and removes tracki
         if (stats.bytes > 0 and stats.ads > 0 and stats.cookies > 0) break;
     }
     const stats = privacy.stats();
+    if (stats.bytes == 0 or stats.ads == 0 or stats.cookies == 0) std.debug.print("security stats: bytes={d} ads={d} cookies={d}\n", .{ stats.bytes, stats.ads, stats.cookies });
     try std.testing.expect(stats.bytes > 0);
     try std.testing.expect(stats.ads > 0);
     try std.testing.expect(stats.cookies > 0);
@@ -883,8 +885,13 @@ test "Native embedded browser companion wallpaper is below icons and never takes
     const path = path_buf[0..path_text.len :0];
     defer io.cwdDeleteFile(path) catch {};
     var output: [2048]u8 = undefined;
-    const result = @import("../core/bounded_process.zig").run(&.{ "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=64x64:r=10", "-t", "0.3", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", path }, &output, .{ .timeout_ms = 15_000 });
-    if (!result.ok()) return error.TestUnexpectedResult;
+    // FFmpeg's built-in MPEG-4 encoder: CI builds FFmpeg with
+    // --disable-autodetect, so libx264 is absent there. AVPlayer plays mp4v.
+    const result = @import("../core/bounded_process.zig").run(&.{ "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=64x64:r=10", "-t", "0.3", "-c:v", "mpeg4", "-pix_fmt", "yuv420p", "-y", path }, &output, .{ .timeout_ms = 15_000 });
+    if (!result.ok()) {
+        std.debug.print("wallpaper fixture ffmpeg failed: {s}\n", .{result.output});
+        return error.TestUnexpectedResult;
+    }
     try std.testing.expectEqual(@as(c_int, 1), opal_wallpaper_start(path, 1));
     defer opal_wallpaper_stop();
     try std.testing.expectEqual(@as(c_int, 1), opal_wallpaper_test_desktop());

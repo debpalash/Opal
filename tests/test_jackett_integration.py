@@ -214,11 +214,15 @@ class H(http.server.BaseHTTPRequestHandler):
 http.server.HTTPServer(('127.0.0.1',c['Port']),H).serve_forever()
 ''')
             binary.chmod(0o700)
+            log = open(root / 'manager.stderr', 'w+')
             process = subprocess.Popen([sys.executable, str(ROOT / 'src/services/jackett_manager.py'), '--root', temp],
-                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                                       stdout=subprocess.PIPE, stderr=log, text=True)
             try:
                 import select
-                deadline = time.monotonic() + 8
+                # Two cold interpreters (manager + fixture child) on a loaded CI
+                # runner exceeded the old 8 s window; the manager allows 40 s.
+                started = time.monotonic()
+                deadline = started + 30
                 events = []
                 while time.monotonic() < deadline:
                     readable, _, _ = select.select([process.stdout], [], [], .2)
@@ -228,7 +232,11 @@ http.server.HTTPServer(('127.0.0.1',c['Port']),H).serve_forever()
                         event = json.loads(line)
                         events.append(event)
                         if event['event'] == 'ready': break
-                self.assertEqual(events[-1]['event'], 'ready', events)
+                if not events or events[-1]['event'] != 'ready':
+                    log.seek(0)
+                    self.fail(f'no ready event after {time.monotonic() - started:.1f}s: events={events} '
+                              f'manager_exit={process.poll()} child_started={(root / "data/child.pid").exists()} '
+                              f'stderr={log.read()[-1200:]!r}')
                 child_pid = int((root / 'data/child.pid').read_text())
                 process.terminate()
                 self.assertEqual(process.wait(timeout=4), 0)
@@ -237,6 +245,7 @@ http.server.HTTPServer(('127.0.0.1',c['Port']),H).serve_forever()
             finally:
                 if process.poll() is None: process.kill(); process.wait()
                 process.stdout.close()
+                log.close()
 
 
 if __name__ == '__main__': unittest.main()

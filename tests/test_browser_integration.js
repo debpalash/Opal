@@ -23,6 +23,18 @@ async function background(){
  await api.runtime.onMessage.fn(message,sender);assert.equal(sent.at(-1).message.video,null);
  assert.equal((await api.runtime.onMessage.fn({what:'play-youtube',url:'https://example.com/'},{...sender,url:'https://example.com/'})).ok,false);
 }
+// REGRESSION: macOS 15 WebKit rejects webRequest in MV3 backgrounds; one bad
+// listener used to abort background.js before runtime.onMessage registered.
+async function backgroundWithoutWebRequest(){
+ const throwing={addListener(){throw new Error('Non-persistent background content cannot listen to `webRequest` events.')}};
+ for(const webRequest of [undefined,{onSendHeaders:throwing,onHeadersReceived:throwing}]){
+  const sent=[];const api={webRequest,tabs:{onRemoved:event(),onUpdated:event()},runtime:{onMessage:event(),async sendNativeMessage(app,message){sent.push(message);return {ok:true}}}};
+  vm.runInNewContext(read('background'),{browser:api,URL,Map});
+  const sender={tab:{id:3},frameId:0,url:'https://www.youtube.com/watch?v=abcdefghijk'};
+  assert.equal((await api.runtime.onMessage.fn({what:'play-youtube',url:sender.url,time:4},sender)).ok,true);
+  assert.equal(sent[0].video,null);assert.equal(sent[0].time,4);
+ }
+}
 async function content(site = 'https://www.youtube.com/watch?v=abcdefghijk'){
  let sent,pause=0,observer;const buttons=[];
  const host={classList:{contains(){return false}},append(b){b.isConnected=true;b.parentElement=this;buttons.push(b)}};
@@ -37,4 +49,4 @@ async function content(site = 'https://www.youtube.com/watch?v=abcdefghijk'){
  assert.equal(sent.time,91.25);assert.equal(sent.duration,0);assert.equal(sent.rate,1.5);assert.equal(sent.volume,0.4);assert.equal(sent.muted,true);assert.equal(pause,1);
  buttons[0].isConnected=false;observer();assert.equal(buttons.length,2);
 }
-(async()=>{await background();await content();await content('https://example.com/');console.log('Browser integration: header capture, sender validation, SPA reset, trusted handoff and reinjection passed')})().catch(error=>{console.error(error);process.exitCode=1});
+(async()=>{await background();await backgroundWithoutWebRequest();await content();await content('https://example.com/');console.log('Browser integration: header capture, sender validation, SPA reset, trusted handoff and reinjection passed')})().catch(error=>{console.error(error);process.exitCode=1});
