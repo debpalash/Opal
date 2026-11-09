@@ -2593,7 +2593,7 @@ pub fn applyPicturePreset(p: anytype) void {
     applyVideoGrade(p);
 }
 
-/// Sets the single labelled `@opal-eq` ffmpeg eq filter from picture preset +
+/// Sets the single labelled `@opal-eq` ffmpeg lutyuv filter (iOS has no `eq`) from picture preset +
 /// manual sliders (combined, clamped). mpv's brightness/contrast/saturation/
 /// gamma properties do nothing under the SW render API, so the grade is a `vf`.
 /// Safe with hwdec: frames of `*-copy` decoders (auto/auto-safe on desktop,
@@ -2616,13 +2616,13 @@ pub fn applyVideoGrade(p: anytype) void {
         .saturation = state.app.vf_saturation,
         .gamma = state.app.vf_gamma,
     });
-    var spec_buf: [160]u8 = undefined;
+    var spec_buf: [512]u8 = undefined;
     const spec = av_pure.gradeFilterSpec(&spec_buf, v);
 
     var rm = [_]?[*:0]const u8{ "vf", "remove", av_pure.grade_filter_label, null };
     _ = c.mpv.mpv_command(p.mpv_ctx, @ptrCast(&rm));
     if (spec.len == 0) return;
-    var arg_buf: [256]u8 = undefined;
+    var arg_buf: [640]u8 = undefined;
     const arg = @import("opal-fmt").bufPrintZ(&arg_buf, "{s}:lavfi=[{s}]", .{ av_pure.grade_filter_label, spec }) catch return;
     var add = [_]?[*:0]const u8{ "vf", "add", arg.ptr, null };
     _ = c.mpv.mpv_command(p.mpv_ctx, @ptrCast(&add));

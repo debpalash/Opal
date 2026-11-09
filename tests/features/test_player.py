@@ -1961,7 +1961,7 @@ def test_mobile_autohide_ignores_position():
     return "pass", "only real input resets the chrome idle timer"
 
 
-@test("Picture presets/sliders change rendered pixels under SW render (vf eq)", "Player")
+@test("Picture presets/sliders change rendered pixels under SW render (lutyuv)", "Player")
 def test_picture_grade_changes_pixels():
     import shutil, tempfile, re
     zig = shutil.which("zig")

@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
     const char *rm[] = {"vf", "remove", "@opal-eq", NULL};
     mpv_command(m, rm);
     if (argv[i][0]) {
-      char arg[512];
+      char arg[768];
       snprintf(arg, sizeof arg, "@opal-eq:lavfi=[%s]", argv[i]);
       const char *add[] = {"vf", "add", arg, NULL};
       int r = mpv_command(m, add);
