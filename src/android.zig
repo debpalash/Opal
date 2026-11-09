@@ -60,17 +60,27 @@ export fn opal_android_player_probe(time: *f64, video: *bool) callconv(.c) bool 
 export fn opal_android_active_transfers() callconv(.c) bool {
     const state = @import("core/state.zig");
     const c = @import("core/c.zig");
+    const pure = @import("mobile/android_pure.zig");
     var live: usize = 0;
     const ses = state.torrentSession();
     if (ses != null) {
         const n = c.mpv.torrent_count(ses);
         var id: c_int = 0;
         while (id < n) : (id += 1) {
-            if (c.mpv.torrent_is_alive(ses, id) != 0 and c.mpv.torrent_is_paused(ses, id) == 0) live += 1;
+            if (c.mpv.torrent_is_alive(ses, id) == 0) continue;
+            // Seeding-only torrents don't keep the foreground service alive.
+            var pbuf: [1024]u8 = undefined;
+            pbuf[0] = 0;
+            var progress: f32 = 0;
+            var rate: c_int = 0;
+            var seeds: c_int = 0;
+            const rc = c.mpv.torrent_poll(ses, id, -1, &pbuf, 1024, &progress, &rate, &seeds);
+            const paused = c.mpv.torrent_is_paused(ses, id) != 0;
+            if (pure.torrentKeepsAwake(paused, rc >= 0 and pbuf[0] != 0, progress)) live += 1;
         }
     }
     const agg = @import("services/download_engine.zig").activeAndQueued();
-    return @import("mobile/android_pure.zig").hasActiveTransfers(live, agg.active, agg.queued);
+    return pure.hasActiveTransfers(live, agg.active, agg.queued);
 }
 
 extern "c" var environ: ?[*:null]?[*:0]u8;

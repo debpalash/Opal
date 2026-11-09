@@ -16,8 +16,8 @@ Android-only pieces:
 - config/session save when the app goes to the background
 - Back button: trapped (not closing the app). It leaves the player, then pops
   navigation history; at the home root the app moves to the background.
-- Background transfers: when torrents or HTTP downloads are active as the app
-  is paused, `OpalTorrentService` (foreground service, `dataSync`, partial
+- Background transfers: when torrents are downloading (not just seeding) or
+  HTTP downloads are active as the app is paused, `OpalTorrentService` (foreground service, `dataSync`, partial
   wake lock) shows an ongoing low-importance "Opal is transferring"
   notification in the "Transfers" channel. It stops on resume or when nothing
   is active. `POST_NOTIFICATIONS` is requested once (API 33+) the first time a

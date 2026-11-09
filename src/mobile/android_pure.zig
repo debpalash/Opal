@@ -42,6 +42,25 @@ pub fn backAction(in_player: bool, can_go_back: bool) BackAction {
 }
 
 /// The transfer foreground service is wanted while anything is moving or queued.
+/// Whether one torrent should keep the background service (notification +
+/// wake lock) alive: unpaused and still fetching metadata or downloading.
+/// Seeding-only torrents do not — they would hold a wake lock indefinitely.
+pub fn torrentKeepsAwake(paused: bool, has_metadata: bool, progress: f32) bool {
+    if (paused) return false;
+    if (!has_metadata) return true;
+    return !(progress >= 1.0);
+}
+
+test "torrentKeepsAwake: downloading yes, seeding and paused no" {
+    try std.testing.expect(torrentKeepsAwake(false, false, 0));
+    try std.testing.expect(torrentKeepsAwake(false, true, 0.42));
+    try std.testing.expect(!torrentKeepsAwake(false, true, 1.0));
+    try std.testing.expect(!torrentKeepsAwake(true, true, 0.42));
+    try std.testing.expect(!torrentKeepsAwake(true, false, 0));
+    // NaN progress from a bad poll counts as still downloading, not seeding.
+    try std.testing.expect(torrentKeepsAwake(false, true, std.math.nan(f32)));
+}
+
 pub fn hasActiveTransfers(live_unpaused_torrents: usize, http_active: usize, http_queued: usize) bool {
     return live_unpaused_torrents + http_active + http_queued > 0;
 }
