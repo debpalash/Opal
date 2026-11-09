@@ -168,6 +168,12 @@ fn lifecycleWatch(_: ?*anyopaque, event: [*c]sdl.SDL_Event) callconv(.c) bool {
 pub fn appInit(win: *dvui.Window) !void {
     _ = sdl.SDL_AddEventWatch(lifecycleWatch, null);
     @import("core/state.zig").app.dvui_win = win;
+    // Immersive fullscreen: dvui creates a windowed SDL window, so SDLActivity's
+    // setWindowStyle(false) re-showed the status/navigation bars over our own
+    // hideBars(). A fullscreen SDL window makes SDL apply immersive-sticky and
+    // LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS, so the app owns the status-bar area;
+    // the cutout safe insets still keep content clear of the camera hole.
+    _ = sdl.SDL_SetWindowFullscreen(@ptrCast(win.backend.impl.window), true);
     shell.init();
     // Core init brings up the threaded Io and native libs; re-assert afterwards.
     installSignalHandlers();

@@ -998,7 +998,7 @@ pub const MediaPlayer = struct {
             allocator.destroy(self);
             return error.MpvCreateFailed;
         };
-        const hw_val = if (state.app.hwdec_enabled) "auto-safe" else "no";
+        const hw_val = @import("hwdec_feedback_pure.zig").optionValue(state.app.hwdec_enabled, @import("builtin").abi.isAndroid(), true);
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "hwdec", hw_val);
         // Headless: use the null video output so libmpv never opens a display
         // surface. Audio + property events + seek all still work for control.
