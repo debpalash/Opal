@@ -10,6 +10,7 @@ pub fn build(b: *std.Build) void {
         b.graph.environ_map.get("ANDROID_NDK_ROOT") orelse @panic("Pass -Dndk=<NDK root> or set ANDROID_NDK_ROOT");
     const prefix = b.option([]const u8, "deps-prefix", "Native deps prefix with include/ and lib/") orelse ".zig-cache/android-native/prefix";
     const version = b.option([]const u8, "version", "App version string") orelse "0.0.0-android-dev";
+    const unwind = b.option([]const u8, "unwind", "NDK libunwind.a (provides _Unwind_Resume to libmain.so)");
     const extra_includes = b.option([]const []const u8, "include", "Extra include dirs (local checks)") orelse &.{};
 
     const target = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .android, .android_api_level = api });
@@ -73,6 +74,9 @@ pub fn build(b: *std.Build) void {
     so.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{prefix}) });
     so.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib/aarch64-linux-android/{d}", .{ sysroot, api }) });
     so.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib/aarch64-linux-android", .{sysroot}) });
+    // NDK clang links libunwind.a into every .so; without it _Unwind_Resume is
+    // unresolved and System.loadLibrary("main") fails at launch.
+    if (unwind) |path| so.root_module.addObjectFile(.{ .cwd_relative = path });
     inline for (.{ "SDL3", "mpv", "avcodec", "sqlite3", "webp", "opal_torrent", "torrent-rasterbar", "ssl", "crypto", "c++_shared", "log", "android", "m", "dl" }) |name| {
         so.root_module.linkSystemLibrary(name, .{ .use_pkg_config = .no });
     }

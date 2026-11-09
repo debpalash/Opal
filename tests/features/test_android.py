@@ -216,6 +216,24 @@ def test_android_ndk_lib_paths():
     return ("fail", f"missing: {missing}") if missing else ("pass", "libmain.so finds log/android/m/dl/c++_shared in the NDK sysroot")
 
 
+@test("Android libmain.so links libunwind and is checked for unresolved symbols", "Android")
+def test_android_libmain_resolves():
+    # Regression: the first CI APK's libmain.so had a strong undefined
+    # _Unwind_Resume that no bundled or system library provides -> dlopen fails.
+    src = _src("build-android.zig")
+    spec = importlib.util.spec_from_file_location("android_build", os.path.join(PROJECT_DIR, "scripts/android-build.py"))
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    checks = {
+        "build links libunwind.a": 'b.option([]const u8, "unwind"' in src and "so.root_module.addObjectFile(.{ .cwd_relative = path })" in src,
+        "script passes -Dunwind": "'-Dunwind=' + str(find_unwind(ndk))" in _src("scripts/android-build.py"),
+        "script verifies before gradle": "verify_libmain(ndk)" in _src("scripts/android-build.py"),
+        "missing symbol is reported": mod.unresolved_symbols(["_Unwind_Resume", "SDL_Init"], ["SDL_Init@@SDL3_0.0.0"]) == ["_Unwind_Resume"],
+        "versioned providers resolve": mod.unresolved_symbols(["SDL_Init", "malloc@LIBC"], ["SDL_Init@@SDL3_0.0.0", "malloc"]) == [],
+    }
+    missing = [k for k, v in checks.items() if not v]
+    return ("fail", f"missing: {missing}") if missing else ("pass", "libunwind linked; unresolved imports fail the build")
+
+
 @test("Android native compile gate (opt-in OPAL_ANDROID_CHECK=1)", "Android")
 def test_android_zig_check():
     if os.environ.get("OPAL_ANDROID_CHECK") != "1":

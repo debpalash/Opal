@@ -78,6 +78,49 @@ def stub_libs():
         (d / n).write_bytes(b'')
 
 
+def ndk_bin(ndk):
+    return next((ndk / 'toolchains/llvm/prebuilt').glob('*/bin'))
+
+
+def find_unwind(ndk):
+    """libunwind.a for aarch64: NDK clang links it into every .so; Zig does not,
+    leaving `_Unwind_Resume` unresolved and dlopen of libmain.so failing."""
+    hits = sorted((ndk / 'toolchains/llvm/prebuilt').glob('*/lib/clang/*/lib/linux/aarch64/libunwind.a'))
+    if not hits:
+        raise SystemExit('libunwind.a not found in NDK ' + str(ndk))
+    return hits[-1]
+
+
+def unresolved_symbols(undefined, provided):
+    """Strong undefined symbols of libmain.so that no loaded library defines.
+    Symbol versions (`name@@VER`) are stripped on both sides."""
+    strip = lambda n: n.split('@', 1)[0]
+    have = {strip(n) for n in provided}
+    return sorted({strip(n) for n in undefined} - have)
+
+
+def verify_libmain(ndk):
+    """Fail the build if libmain.so would not dlopen: every strong undefined
+    symbol must come from a bundled .so or the API-level NDK system libs."""
+    nm = ndk_bin(ndk) / 'llvm-nm'
+    jni = OUT / 'jniLibs/arm64-v8a'
+    def syms(path, *flags):
+        out = subprocess.run([str(nm), '-D', *flags, str(path)], capture_output=True, text=True, check=True).stdout
+        return [line.split()[-1] for line in out.splitlines() if line.strip()]
+    undefined = [l for l in subprocess.run([str(nm), '-D', '-u', str(jni / 'libmain.so')], capture_output=True, text=True, check=True).stdout.splitlines() if l.strip().startswith('U ')]
+    undefined = [l.split()[-1] for l in undefined]
+    provided = []
+    sysroot_api = next((ndk / 'toolchains/llvm/prebuilt').glob('*/sysroot')) / 'usr/lib/aarch64-linux-android' / API
+    for lib in list(jni.glob('*.so')) + list(sysroot_api.glob('*.so')):
+        # Some NDK .so files (libc++.so) are linker scripts, not ELF.
+        if lib.name != 'libmain.so' and lib.open('rb').read(4) == b'\x7fELF':
+            provided += syms(lib, '--defined-only')
+    missing = unresolved_symbols(undefined, provided)
+    if missing:
+        raise SystemExit('libmain.so has unresolved symbols (dlopen would fail): ' + ', '.join(missing[:40]))
+    print(f'libmain.so: {len(undefined)} imports, all resolved', flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--deps-prefix', help='prebuilt native prefix; skips building dependencies')
@@ -98,7 +141,7 @@ def main():
     elif not a.skip_zig:
         run(['zig', 'build', '--build-file', ROOT / 'build-android.zig', 'so', '--release=fast', '-Dndk=' + str(ndk),
              '-Dapi=' + API, '-Ddeps-prefix=' + str(prefix), '-Dversion=' + version, '-fsys=sdl3',
-             '--prefix', OUT], cwd=ROOT, env=env)
+             '-Dunwind=' + str(find_unwind(ndk)), '--prefix', OUT], cwd=ROOT, env=env)
     write_assets()
     if a.deps_prefix:
         # Pre-built prefixes ship the runtime libs and SDL Java alongside the headers.
@@ -113,6 +156,8 @@ def main():
         java = prefix / 'sdl-java'
         if java.is_dir() and not (OUT / 'sdl-java').exists():
             shutil.copytree(java, OUT / 'sdl-java')
+    if not a.stub_libs and not a.skip_zig:
+        verify_libmain(ndk)
     jdk = find_jdk()
     genv = dict(env, JAVA_HOME=jdk)
     sdk = os.environ.get('ANDROID_HOME') or str(ndk.parents[1])
