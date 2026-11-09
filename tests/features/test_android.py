@@ -380,6 +380,26 @@ def test_android_bundles_plugin_manifest():
     return ("fail", f"missing: {missing}") if missing else ("pass", "APK ships the real source catalog")
 
 
+@test("Android installs SIGIO/SIGPIPE handlers via raw rt_sigaction", "Android")
+def test_android_sigio_handler():
+    # Regression (OnePlus 12, Android 16): killed by signal 29 ~2 s after launch.
+    # Zig's std.c.Sigaction for aarch64 Android is glibc-shaped (handler first);
+    # bionic LP64 starts with sa_flags, so std.posix.sigaction installed SIG_DFL and
+    # Io.Threaded's cancel SIGIO killed the process. /proc SigCgt confirmed it.
+    a = _src("src/android.zig")
+    body = a[a.index("fn installSignalHandlers()"):]
+    body = body[:body.index("\n}\n")]
+    checks = {
+        "raw syscall for SIGIO": "linux.sigaction(.IO, &act, null)" in body,
+        "raw syscall for SIGPIPE": "linux.sigaction(.PIPE, &act, null)" in body,
+        "not the libc path": "std.posix.sigaction" not in body,
+        "Io initialised first": body.index('io_global.zig").io()') < body.index("linux.sigaction(.IO"),
+        "installed at start and after core init": a.count("installSignalHandlers();") >= 2,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    return ("fail", f"missing: {missing}") if missing else ("pass", "SIGIO/SIGPIPE caught; Io cancellation no longer kills the app")
+
+
 @test("Android native compile gate (opt-in OPAL_ANDROID_CHECK=1)", "Android")
 def test_android_zig_check():
     if os.environ.get("OPAL_ANDROID_CHECK") != "1":
@@ -416,3 +436,19 @@ def test_android_reliable_fetch_no_curl():
     if "std.process.Child" in std_be or "bounded_process" in std_be:
         bad.append("http_std spawns a process")
     return _fail(bad, "request/download/stream route Android to http_std (no curl)")
+
+
+@test("Android has no curl binary: scrape/comics fetch only via reliable_fetch", "Android")
+def test_android_no_curl_spawn_scrape_comics():
+    bad = []
+    for f in ("src/services/scrape_fetch.zig", "src/services/comics.zig"):
+        s = _src(f)
+        for needle in ("reliable_fetch.backend(", ".backend().bin", "Child.init", "StreamProcess", "std.process.Child", '"curl"'):
+            if needle in s:
+                bad.append(f + " uses " + needle)
+    rf = _src("src/services/reliable_fetch.zig")
+    for fn in ("pub fn request(", "pub fn download("):
+        body = rf[rf.index(fn):rf.index(fn) + 600]
+        if "isAndroid()" not in body or "http_std.zig" not in body:
+            bad.append("reliable_fetch " + fn + " lacks Android http_std gate")
+    return _fail(bad, "scrape/comics reach no curl spawn; reliable_fetch routes Android to http_std")

@@ -85,8 +85,31 @@ export fn opal_android_active_transfers() callconv(.c) bool {
 
 extern "c" var environ: ?[*:null]?[*:0]u8;
 
+/// Zig's threaded Io cancels blocked syscalls by sending SIGIO to the worker
+/// thread and relies on a do-nothing handler that Threaded.init installs with
+/// std.posix.sigaction. On aarch64 Android that goes through libc with Zig's
+/// glibc-shaped Sigaction (handler first), but bionic's LP64 struct sigaction
+/// starts with sa_flags — so bionic reads a null handler and installs SIG_DFL.
+/// /proc/<pid>/status showed SIGIO never caught and the first cancellation
+/// killed the app ("status=29", ~2 s after launch). Use the raw rt_sigaction
+/// syscall (kernel layout) instead, after the Io exists so its broken install
+/// cannot run later and reset ours. SIGPIPE likewise (closed sockets).
+fn ignoreSignal(_: std.os.linux.SIG) callconv(.c) void {}
+fn installSignalHandlers() void {
+    _ = @import("core/io_global.zig").io();
+    const linux = std.os.linux;
+    const act: linux.Sigaction = .{
+        .handler = .{ .handler = ignoreSignal },
+        .mask = linux.sigemptyset(),
+        .flags = linux.SA.RESTART,
+    };
+    _ = linux.sigaction(.IO, &act, null);
+    _ = linux.sigaction(.PIPE, &act, null);
+}
+
 fn runDvuiMain(argc: c_int, argv: [*][*:0]u8) !u8 {
     opal_android_prepare_environment();
+    installSignalHandlers();
     const gpa = @import("core/alloc.zig").allocator;
 
     var arena_allocator: std.heap.ArenaAllocator = .init(gpa);
@@ -146,6 +169,8 @@ pub fn appInit(win: *dvui.Window) !void {
     _ = sdl.SDL_AddEventWatch(lifecycleWatch, null);
     @import("core/state.zig").app.dvui_win = win;
     shell.init();
+    // Core init brings up the threaded Io and native libs; re-assert afterwards.
+    installSignalHandlers();
 }
 pub fn appDeinit(win: *dvui.Window) void {
     _ = win;
