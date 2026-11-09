@@ -10,6 +10,12 @@ Add a section and a fresh feature visual BEFORE tagging. See [the release checkl
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
+## v0.10.0 — 2026-11-09
+
+- **Opal on Android (preview).** The Android app runs the same code as the desktop: home, movie and TV catalogs, search, torrent streaming, subtitles, downloads and settings. Playback is immersive — the app owns the status-bar area, landscape videos rotate the player to landscape and fill the screen edge to edge, and the compact control bar hides while you watch and returns with a tap. Back leaves the player, then steps back through pages. Downloads keep running in the background with a "Transfers" notification (seeding alone does not keep the phone awake). Install `Opal-0.10.0-android.apk` (arm64, Android 8.0+) by allowing installs from unknown sources. Not yet on Android: the built-in web browser (links open in your browser), the phone web UI, voice features, Jackett and Python search engines.
+- **Faster torrent start.** Streams now ask for the piece that locates the video index first, then about five seconds of video, then the rest — instead of requesting 16 MB at once — so playback can begin sooner on slower swarms. This applies on every platform.
+- **Phone and tablet player.** On Android (and the iPhone layout, which shares this code) the player bar is one compact full-width row, the video fills the screen under the camera cutout, a tap on the video shows or hides the controls, and menus close when you tap outside them.
+
 ## v0.9.4 — 2026-11-08
 
 - **Opal on iPhone and iPad (preview).** The iOS app shares the desktop code: home, movie and TV catalogs, search, torrent streaming, radio, comics, downloads and settings. The layout runs edge to edge — brand and menu sit beside the Dynamic Island, the player fills the screen, and the icon rail hides while you scroll and returns when you scroll back or touch the left edge. Torrent search uses a native index because iOS cannot run the desktop's Python search engines. Install the unsigned `Opal-0.9.4-ios.ipa` with a sideloading tool that signs it with your own Apple ID; there is no App Store or TestFlight build yet.
