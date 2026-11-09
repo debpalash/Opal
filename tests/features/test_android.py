@@ -400,6 +400,25 @@ def test_android_sigio_handler():
     return ("fail", f"missing: {missing}") if missing else ("pass", "SIGIO/SIGPIPE caught; Io cancellation no longer kills the app")
 
 
+@test("Android: immersive fullscreen window and mediacodec-copy hwdec", "Android")
+def test_android_fullscreen_and_hwdec():
+    # On device: SDLActivity.setWindowStyle(false) re-showed the bars (windowed SDL
+    # window), and hwdec=auto picked direct mediacodec -> "Both surface and
+    # native_window are NULL", nothing played.
+    a = _src("src/android.zig")
+    pl = _src("src/player/player.zig")
+    st = _src("src/ui/settings.zig")
+    pure = _src("src/player/hwdec_feedback_pure.zig")
+    checks = {
+        "fullscreen SDL window": "SDL_SetWindowFullscreen(@ptrCast(win.backend.impl.window), true)" in a,
+        "android hwdec is copy-back": 'if (android) return "mediacodec-copy";' in pure,
+        "player init routes through it": "optionValue(state.app.hwdec_enabled, @import(\"builtin\").abi.isAndroid(), true)" in pl,
+        "settings toggle routes through it": "optionValue(state.app.hwdec_enabled, @import(\"builtin\").abi.isAndroid(), false)" in st,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    return ("fail", f"missing: {missing}") if missing else ("pass", "bars hidden by SDL fullscreen; Android decodes via mediacodec-copy")
+
+
 @test("Android native compile gate (opt-in OPAL_ANDROID_CHECK=1)", "Android")
 def test_android_zig_check():
     if os.environ.get("OPAL_ANDROID_CHECK") != "1":
