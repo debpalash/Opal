@@ -10,6 +10,8 @@ name: Release
 #                      vendored MS onnxruntime; see the job for why)
 #   • ios            — unsigned sideload IPA, attached after publish   [preview]
 #                      (ios-ipa.yml; never blocks the desktop release)
+#   • android        — debug-signed sideload APK, attached after publish [preview]
+#                      (android-apk.yml; never blocks the desktop release)
 #   • aur            — opal-media-player source + prebuilt -bin      [gated]
 #                      (binary tarball repackage); gated on
 #                      AUR_PUBLISH_ENABLED='true' + AUR_SSH_PRIVATE_KEY secret.
@@ -827,6 +829,14 @@ jobs:
   ios:
     needs: publish
     uses: ./.github/workflows/ios-ipa.yml
+    with:
+      tag: ${{ inputs.version || github.ref_name }}
+
+  # Runs after `ios` so the two jobs never race on rewriting SHA256SUMS.txt.
+  android:
+    needs: [publish, ios]
+    if: ${{ always() && needs.publish.result == 'success' }}
+    uses: ./.github/workflows/android-apk.yml
     with:
       tag: ${{ inputs.version || github.ref_name }}
 

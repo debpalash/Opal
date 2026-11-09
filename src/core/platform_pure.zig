@@ -5,6 +5,30 @@ pub fn isMobile(os: std.Target.Os.Tag, abi: std.Target.Abi) bool {
     return os == .ios or abi.isAndroid();
 }
 pub const mobile = isMobile(builtin.os.tag, builtin.abi);
+
+/// Mobile hosts run the dvui SDL3 backend; desktop still links SDL2, whose
+/// renderer constants have different names.
+pub fn usesSdl3(os: std.Target.Os.Tag, abi: std.Target.Abi) bool {
+    return isMobile(os, abi);
+}
+pub const sdl3 = usesSdl3(builtin.os.tag, builtin.abi);
+
+/// Default save folder under HOME on sandboxed mobile hosts (null on desktop).
+pub fn mobileSaveSubdir(os: std.Target.Os.Tag, abi: std.Target.Abi) ?[]const u8 {
+    if (os == .ios) return "Documents/Downloads";
+    if (abi.isAndroid()) return "Downloads";
+    return null;
+}
+test "usesSdl3 and mobileSaveSubdir cover iOS and Android only" {
+    try std.testing.expect(usesSdl3(.ios, .none));
+    try std.testing.expect(usesSdl3(.linux, .android));
+    try std.testing.expect(!usesSdl3(.linux, .gnu));
+    try std.testing.expect(!usesSdl3(.macos, .none));
+    try std.testing.expectEqualStrings("Documents/Downloads", mobileSaveSubdir(.ios, .none).?);
+    try std.testing.expectEqualStrings("Downloads", mobileSaveSubdir(.linux, .android).?);
+    try std.testing.expect(mobileSaveSubdir(.linux, .gnu) == null);
+    try std.testing.expect(mobileSaveSubdir(.macos, .none) == null);
+}
 test "mobile targets exclude desktop helper processes without excluding desktop Linux" {
     try std.testing.expect(isMobile(.ios, .none));
     try std.testing.expect(isMobile(.linux, .android));

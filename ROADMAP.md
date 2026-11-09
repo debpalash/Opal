@@ -119,6 +119,7 @@
 - [x] speaches (OpenAI-compatible server at localhost:8000)
 
 ### 5.4 — Mobile Companion
+- [x] Android preview APK (shared desktop app in an SDL3 host)
 - [ ] Android client (stream from Opal server)
 - [ ] iOS client
 - [ ] Offline sync (download for mobile playback)

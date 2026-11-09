@@ -14,7 +14,7 @@ pub var cleaned_for_test: std.atomic.Value(u32) = .init(0);
 /// Install once during client initialization; never mutate a live shared client.
 /// All operations retain the original Io backend and userdata.
 pub fn nativeIo(base: std.Io) std.Io {
-    if (builtin.os.tag != .macos and builtin.os.tag != .windows) return base;
+    if (builtin.os.tag != .macos and builtin.os.tag != .windows and !builtin.abi.isAndroid()) return base;
     lock.lock();
     defer lock.unlock();
     if (base.vtable == &wrapped) return base;
@@ -30,7 +30,12 @@ pub fn nativeIo(base: std.Io) std.Io {
 fn lookup(userdata: ?*anyopaque, host: Host, queue: *std.Io.Queue(Host.LookupResult), opts: Host.LookupOptions) Host.LookupError!void {
     const base: std.Io = .{ .userdata = userdata, .vtable = original.? };
     defer queue.close(base);
-    return if (builtin.os.tag == .windows) Windows.resolve(base, host, queue, opts) else Darwin.resolve(base, host, queue, opts);
+    return if (builtin.os.tag == .windows)
+        Windows.resolve(base, host, queue, opts)
+    else if (comptime builtin.abi.isAndroid())
+        Bionic.resolve(base, host, queue, opts)
+    else
+        Darwin.resolve(base, host, queue, opts);
 }
 
 const Darwin = struct {
@@ -118,6 +123,51 @@ const Darwin = struct {
                 else => continue,
             };
             if (opts.family != null and opts.family.? != std.meta.activeTag(ip)) continue;
+            queue.putOne(base, .{ .address = ip }) catch return error.Canceled;
+            count += 1;
+        }
+        if (count == 0) return error.NoAddressReturned;
+        if (opts.canonical_name_buffer) |buf| {
+            @memcpy(buf[0..host.bytes.len], host.bytes);
+            queue.putOne(base, .{ .canonical_name = .{ .bytes = buf[0..host.bytes.len] } }) catch return error.Canceled;
+        }
+    }
+};
+
+/// Zig's non-glibc Linux resolver reads /etc/resolv.conf, which Android lacks;
+/// bionic's getaddrinfo talks to the system resolver (netd).
+const Bionic = struct {
+    fn resolve(base: std.Io, host: Host, queue: *std.Io.Queue(Host.LookupResult), opts: Host.LookupOptions) Host.LookupError!void {
+        try base.checkCancel();
+        if (std.Io.net.IpAddress.parse(host.bytes, opts.port)) |ip| {
+            if (opts.family == null or opts.family.? == std.meta.activeTag(ip)) queue.putOne(base, .{ .address = ip }) catch return error.Canceled;
+            return;
+        } else |_| {}
+        var name: [Host.max_len + 1:0]u8 = undefined;
+        @memcpy(name[0..host.bytes.len], host.bytes);
+        name[host.bytes.len] = 0;
+        var hints: std.c.addrinfo = std.mem.zeroes(std.c.addrinfo);
+        hints.family = if (opts.family) |f| (if (f == .ip4) std.posix.AF.INET else std.posix.AF.INET6) else std.posix.AF.UNSPEC;
+        hints.socktype = std.posix.SOCK.STREAM;
+        var res: ?*std.c.addrinfo = null;
+        if (@backingInt(std.c.getaddrinfo(@ptrCast(&name), null, &hints, &res)) != 0) return error.UnknownHostName;
+        defer if (res) |r| std.c.freeaddrinfo(r);
+        try base.checkCancel();
+        var count: usize = 0;
+        var cur = res;
+        while (cur) |row| : (cur = row.next) {
+            const sa = row.addr orelse continue;
+            const ip: std.Io.net.IpAddress = switch (sa.family) {
+                std.posix.AF.INET => blk: {
+                    const v: *align(1) const std.posix.sockaddr.in = @ptrCast(sa);
+                    break :blk .{ .ip4 = .{ .bytes = @bitCast(v.addr), .port = opts.port } };
+                },
+                std.posix.AF.INET6 => blk: {
+                    const v: *align(1) const std.posix.sockaddr.in6 = @ptrCast(sa);
+                    break :blk .{ .ip6 = .{ .bytes = v.addr, .port = opts.port, .flow = v.flowinfo, .interface = .{ .index = v.scope_id } } };
+                },
+                else => continue,
+            };
             queue.putOne(base, .{ .address = ip }) catch return error.Canceled;
             count += 1;
         }

@@ -1786,6 +1786,7 @@ fn consumeVtHashResult() void {
 
 // Open a directory in the OS file manager (Finder / Explorer / xdg-open).
 fn openInFileManager(path: []const u8) void {
+    if (comptime @import("../core/platform_pure.zig").mobile) return;
     const builtin = @import("builtin");
     const cmd: []const u8 = switch (builtin.target.os.tag) {
         .macos => "open",

@@ -15,7 +15,7 @@ Downloads · RSS · Plugins · Local AI · Voice control · Agent automation
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-8b5cf6)](LICENSE)
 [![CI](https://github.com/debpalash/Opal/actions/workflows/ci.yml/badge.svg)](https://github.com/debpalash/Opal/actions/workflows/ci.yml)
 
-**macOS · Linux · Windows · iOS · Android (planned)**
+**macOS · Linux · Windows · iOS · Android (preview)**
 
 **[Download](https://github.com/debpalash/Opal/releases/latest)** · [Website](https://opal.palash.dev) · [Features](#everything-in-one-app) · [Install](#get-it) · [What’s new](CHANGELOG.md)
 
@@ -103,7 +103,7 @@ Or grab a package from [Releases](https://github.com/debpalash/Opal/releases/lat
 | **Linux** | AppImage, `.deb`, `.rpm`, or AUR `opal-media-player-bin` |
 | **Windows** (alpha) | `.msi` or portable `.zip` |
 | **iOS** (preview) | Sideload the `.ipa`, or [build for your device](docs/ios.md) |
-| **Android** | Planned |
+| **Android** (preview) | Sideload the `.apk`, or [build it](docs/android.md) |
 
 <details>
 <summary><b>Install notes</b></summary>

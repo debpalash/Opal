@@ -63,7 +63,7 @@ pub fn showOverview() void {
 var chat_sidebar_open: bool = true; // Claude-style history rail (auto-hidden when narrow)
 
 pub fn render() void {
-    if (comptime @import("builtin").os.tag == .ios) {
+    if (comptime @import("../core/platform_pure.zig").mobile) {
         // Shared Home shelves, catalog model, poster widgets and navigation.
         // Desktop-only AI workers and library producers are not started on iOS.
         var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = false });

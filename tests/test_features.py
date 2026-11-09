@@ -59,6 +59,7 @@ from features import (  # noqa: F401
     test_browser_privacy,
     test_database,
     test_build,
+    test_android,
     test_voice,
     test_ai,
     test_theming,

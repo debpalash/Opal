@@ -1,0 +1,52 @@
+{
+  "note": "SDL3 matches dvui's sdl3 dependency (3.4.x); libSDL3.so and the Java sources must come from the same release.",
+  "ndk": {
+    "version": "27.1.12297006",
+    "url": "https://dl.google.com/android/repository/android-ndk-r27b-linux.zip",
+    "sha256": "33e16af1a6bbabe12cad54b2117085c07eab7e4fa67cdd831805f0e94fd826c1"
+  },
+  "sources": [
+    {
+      "name": "sdl3",
+      "version": "3.4.18",
+      "url": "https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18.tar.gz",
+      "sha256": "9c75cf16330322c217dedd2e0609f1124f1b54b8633e763467b4684d0f4334a3"
+    },
+    {
+      "name": "mpv-android",
+      "version": "ebf1b3f0cbe9d6154a43cf6ec1ad6fc32a1b2d47",
+      "url": "https://github.com/mpv-android/mpv-android/archive/ebf1b3f0cbe9d6154a43cf6ec1ad6fc32a1b2d47.tar.gz",
+      "sha256": "b68767e7bc95bec1459063c2401f48823ad43c406e2e687a571018ac8c9f9d74"
+    },
+    {
+      "name": "libtorrent",
+      "version": "2.1.2",
+      "url": "https://github.com/arvidn/libtorrent/releases/download/v2.1.2/libtorrent-rasterbar-2.1.2.tar.gz",
+      "sha256": "3362546d9cd71b9e49ee6cac7d3f1f914ce9cdb217c86b63d5b22cbed0334dbc"
+    },
+    {
+      "name": "openssl",
+      "version": "3.3.5",
+      "url": "https://github.com/openssl/openssl/releases/download/openssl-3.3.5/openssl-3.3.5.tar.gz",
+      "sha256": "9d62c00a5a6903740c8703f0e006257f429d565d3b91ac1a9bd4a4c700002e01"
+    },
+    {
+      "name": "boost",
+      "version": "1.87.0",
+      "url": "https://archives.boost.io/release/1.87.0/source/boost_1_87_0.tar.bz2",
+      "sha256": "af57be25cb4c4f4b413ed692fe378affb4352ea50fbe294a11ef548f4d527d89"
+    },
+    {
+      "name": "libwebp",
+      "version": "1.5.0",
+      "url": "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.5.0.tar.gz",
+      "sha256": "7d6fab70cf844bf6769077bd5d7a74893f8ffd4dfb42861745750c63c2a5c92c"
+    },
+    {
+      "name": "sqlite",
+      "version": "3.50.4",
+      "url": "https://www.sqlite.org/2025/sqlite-amalgamation-3500400.zip",
+      "sha256": "1d3049dd0f830a025a53105fc79fd2ab9431aea99e137809d064d8ee8356b032"
+    }
+  ]
+}
