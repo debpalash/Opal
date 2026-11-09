@@ -12,6 +12,7 @@ extern fn opal_android_resource_dir() [*:0]const u8;
 extern fn opal_android_safe_area(top: *f32, bottom: *f32, left: *f32, right: *f32, keyboard: *f32) void;
 extern fn opal_android_ready() void;
 extern fn opal_android_pick_file() void;
+extern fn opal_android_set_landscape(on: bool) void;
 extern fn opal_android_move_task_to_back() void;
 
 /// No UI walkthrough hook exists on Android.
@@ -34,6 +35,9 @@ pub fn pickFile() void {
 pub fn takeBack() bool {
     if (comptime !android) return false;
     return @import("android_pure.zig").back_pending.swap(false, .acq_rel);
+}
+pub fn setLandscape(on: bool) void {
+    if (comptime android) opal_android_set_landscape(on);
 }
 pub fn moveTaskToBack() void {
     if (comptime android) opal_android_move_task_to_back();

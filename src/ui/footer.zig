@@ -834,6 +834,57 @@ pub fn renderSubPicker() void {
 //   4. Chapter pips  (2px wide, `text_tertiary`) — only when has_metadata
 //   5. Hover knob    (8px circle, `accent_primary`) — appears on hover;
 //      track expands to 6px on hover.
+/// Cutout insets (px, natural) that the mobile bar pads its content by while
+/// its background still spans the full width. Set by the mobile frame.
+pub var mobile_side_inset: @import("mobile_layout_pure.zig").Insets = .{};
+
+fn mobileBarButton(src: std.builtin.SourceLocation, id: usize, icon: []const u8, active: bool, tooltip: []const u8, kind: PickerKind) bool {
+    const ml = @import("mobile_layout_pure.zig");
+    var wd: dvui.WidgetData = undefined;
+    const hit = playerButtonIcon(src, "mobile-bar", icon, .{}, .{}, .{
+        .id_extra = id,
+        .data_out = &wd,
+        .color_fill = @import("color_compat.zig").wrap(playerControlFill(active)),
+        .color_fill_hover = @import("color_compat.zig").wrap(playerControlHover()),
+        .color_fill_press = @import("color_compat.zig").wrap(playerControlFill(true)),
+        .color_text = @import("color_compat.zig").wrap(if (active) theme.colors.accent else player_text),
+        .border = dvui.Rect.all(0),
+        .corners = dvui.CornerRect.all(theme.radius.sm),
+        .gravity_y = 0.5,
+        .padding = dvui.Rect.all(ml.BAR_ICON_PAD),
+        .min_size_content = .{ .w = ml.BAR_ICON, .h = ml.BAR_ICON },
+        .max_size_content = .{ .w = ml.BAR_ICON, .h = ml.BAR_ICON },
+    });
+    if (kind != .none) recordAnchor(kind, wd.borderRectScale().r);
+    components.tip(@src(), wd, tooltip);
+    return hit;
+}
+
+/// Compact mobile transport: a single full-width row. Everything else
+/// (fullscreen, picture, seek +/-10s, aspect, chapters, close...) stays behind
+/// the more (ellipsis) popover.
+fn renderMobileBar(active_p: *player.MediaPlayer, toggle_icon: []const u8, percent_pos: f64, time_pos: f64, duration: f64, now_ms: i64) void {
+    const ml = @import("mobile_layout_pure.zig");
+    const inset = mobile_side_inset;
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = ml.BAR_HEIGHT },
+        .max_size_content = .{ .w = 0, .h = ml.BAR_HEIGHT },
+        .padding = .{ .x = inset.left, .y = 0, .w = inset.right, .h = 0 },
+    });
+    defer row.deinit();
+
+    if (mobileBarButton(@src(), 1, toggle_icon, false, "Play/Pause", .none)) active_p.togglePause();
+    renderScrubber(active_p, percent_pos, time_pos, duration, now_ms);
+    var aud_buf: [32]u8 = undefined;
+    const aud = currentTrackChipText(active_p.mpv_ctx, "audio", &aud_buf);
+    if (mobileBarButton(@src(), 2, icons.tvg.lucide.music, aud.active, "Audio track", .audio)) togglePicker(.audio);
+    var sub_buf: [32]u8 = undefined;
+    const sub = currentTrackChipText(active_p.mpv_ctx, "sub", &sub_buf);
+    if (mobileBarButton(@src(), 3, icons.tvg.lucide.captions, sub.active, "Subtitles", .sub)) togglePicker(.sub);
+    if (mobileBarButton(@src(), 4, icons.tvg.lucide.@"ellipsis-vertical", open_picker == .more, "Playback options", .more)) togglePicker(.more);
+}
+
 fn renderScrubber(
     active_p: *player.MediaPlayer,
     percent_pos: f64,
@@ -1702,7 +1753,13 @@ pub fn renderLiquidGlassOverlay() void {
     // ═══════════════════════════════════════════════════════════════
     // ROW 1 — Scrubber + chapter pips + hover time-at-cursor
     // ═══════════════════════════════════════════════════════════════
-    renderScrubber(active_p, percent_pos, time_pos, duration, now_ms);
+    const compact = comptime @import("../core/platform_pure.zig").mobile;
+    if (compact) {
+        // One edge-to-edge row: play/pause | time | seek | time | audio, subs, more.
+        renderMobileBar(active_p, toggle_icon, percent_pos, time_pos, duration, now_ms);
+    } else {
+        renderScrubber(active_p, percent_pos, time_pos, duration, now_ms);
+    }
 
     // Name + stats were fetched every frame (torrent_get_name +
     // torrent_poll IPC at ~30fps); cache at ~2Hz keyed on the torrent id
@@ -1726,7 +1783,7 @@ pub fn renderLiquidGlassOverlay() void {
     // ═══════════════════════════════════════════════════════════════
     // ROW 2 — Controls: transport | time | volume | pickers | close
     // ═══════════════════════════════════════════════════════════════
-    {
+    if (!compact) {
         var ctrl_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             // DVUI adds padding outside min_size_content: 36 + 2 + 2 = 40.
@@ -2265,6 +2322,12 @@ pub fn renderLiquidGlassOverlay() void {
             if (pickerMenuChip(@src(), 721, icons.tvg.lucide.@"skip-forward", skip_policy.buttonLabel(cur.decision), true, "Skip this segment", .none)) skip_segments.requestSkip();
         }
 
+        if (comptime @import("../core/platform_pure.zig").mobile) {
+            if (pickerMenuChip(@src(), 730, icons.tvg.lucide.x, "Close player", false, "Close this player", .none)) {
+                state.app.pending_remove_player_idx = @as(i32, @intCast(state.app.active_player_idx));
+                closePickers();
+            }
+        }
         if (pickerMenuChip(@src(), 713, icons.tvg.lucide.@"maximize-2", "Fullscreen", false, "Toggle fullscreen", .none)) {
             if (state.app.fullscreen_player_idx != null) state.app.fullscreen_player_idx = null else state.app.fullscreen_player_idx = state.app.active_player_idx;
             closePickers();

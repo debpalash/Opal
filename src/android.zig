@@ -85,8 +85,31 @@ export fn opal_android_active_transfers() callconv(.c) bool {
 
 extern "c" var environ: ?[*:null]?[*:0]u8;
 
+/// Zig's threaded Io cancels blocked syscalls by sending SIGIO to the worker
+/// thread and relies on a do-nothing handler that Threaded.init installs with
+/// std.posix.sigaction. On aarch64 Android that goes through libc with Zig's
+/// glibc-shaped Sigaction (handler first), but bionic's LP64 struct sigaction
+/// starts with sa_flags — so bionic reads a null handler and installs SIG_DFL.
+/// /proc/<pid>/status showed SIGIO never caught and the first cancellation
+/// killed the app ("status=29", ~2 s after launch). Use the raw rt_sigaction
+/// syscall (kernel layout) instead, after the Io exists so its broken install
+/// cannot run later and reset ours. SIGPIPE likewise (closed sockets).
+fn ignoreSignal(_: std.os.linux.SIG) callconv(.c) void {}
+fn installSignalHandlers() void {
+    _ = @import("core/io_global.zig").io();
+    const linux = std.os.linux;
+    const act: linux.Sigaction = .{
+        .handler = .{ .handler = ignoreSignal },
+        .mask = linux.sigemptyset(),
+        .flags = linux.SA.RESTART,
+    };
+    _ = linux.sigaction(.IO, &act, null);
+    _ = linux.sigaction(.PIPE, &act, null);
+}
+
 fn runDvuiMain(argc: c_int, argv: [*][*:0]u8) !u8 {
     opal_android_prepare_environment();
+    installSignalHandlers();
     const gpa = @import("core/alloc.zig").allocator;
 
     var arena_allocator: std.heap.ArenaAllocator = .init(gpa);
@@ -145,7 +168,15 @@ fn lifecycleWatch(_: ?*anyopaque, event: [*c]sdl.SDL_Event) callconv(.c) bool {
 pub fn appInit(win: *dvui.Window) !void {
     _ = sdl.SDL_AddEventWatch(lifecycleWatch, null);
     @import("core/state.zig").app.dvui_win = win;
+    // Immersive fullscreen: dvui creates a windowed SDL window, so SDLActivity's
+    // setWindowStyle(false) re-showed the status/navigation bars over our own
+    // hideBars(). A fullscreen SDL window makes SDL apply immersive-sticky and
+    // LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS, so the app owns the status-bar area;
+    // the cutout safe insets still keep content clear of the camera hole.
+    _ = sdl.SDL_SetWindowFullscreen(@ptrCast(win.backend.impl.window), true);
     shell.init();
+    // Core init brings up the threaded Io and native libs; re-assert afterwards.
+    installSignalHandlers();
 }
 pub fn appDeinit(win: *dvui.Window) void {
     _ = win;
@@ -157,6 +188,26 @@ fn persist() void {
     config.captureCloseSession();
     config.save();
 }
+var landscape_locked: bool = false;
+
 pub fn appFrame() !dvui.App.Result {
+    syncPlayerOrientation();
     return shell.frame();
+}
+
+/// Rotate into landscape for a landscape video on the player, back to free
+/// rotation elsewhere. Only calls into Java when the decision changes.
+fn syncPlayerOrientation() void {
+    const st = @import("core/state.zig");
+    var w: i64 = 0;
+    var h: i64 = 0;
+    if (st.app.active_player_idx < st.app.players.items.len) {
+        const p = st.app.players.items[st.app.active_player_idx];
+        w = p.cached_video_width;
+        h = p.cached_video_height;
+    }
+    const want = @import("mobile/android_pure.zig").playerLandscape(st.app.router.current == .player, w, h);
+    if (want == landscape_locked) return;
+    landscape_locked = want;
+    @import("mobile/host.zig").setLandscape(want);
 }

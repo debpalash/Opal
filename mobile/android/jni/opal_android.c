@@ -117,6 +117,12 @@ void opal_android_prepare_environment(void) {
     mkdir_p(g_resource_dir);
     extract_asset("cacert.pem", g_resource_dir);
     extract_asset("plugins-manifest.json", g_resource_dir);
+    // Subtitle/OSD fonts for libass (no fontconfig fonts on Android).
+    char fonts[1100];
+    snprintf(fonts, sizeof(fonts), "%s/fonts", g_resource_dir);
+    mkdir_p(fonts);
+    extract_asset("fonts/NotoSans-Regular.ttf", g_resource_dir);
+    extract_asset("fonts/NotoSans-Bold.ttf", g_resource_dir);
 }
 
 const char *opal_android_resource_dir(void) {
@@ -145,6 +151,21 @@ void opal_android_pick_file(void) {
     jclass cls = (*env)->GetObjectClass(env, activity);
     jmethodID method = cls ? (*env)->GetMethodID(env, cls, "pickFile", "()V") : NULL;
     if (method) (*env)->CallVoidMethod(env, activity, method);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+    }
+    if (cls) (*env)->DeleteLocalRef(env, cls);
+    (*env)->DeleteLocalRef(env, activity);
+}
+
+void opal_android_set_landscape(bool on) {
+    JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
+    jobject activity = (jobject)SDL_GetAndroidActivity();
+    if (!env || !activity) return;
+    jclass cls = (*env)->GetObjectClass(env, activity);
+    jmethodID method = cls ? (*env)->GetMethodID(env, cls, "setPlayerLandscape", "(Z)V") : NULL;
+    if (method) (*env)->CallVoidMethod(env, activity, method, on ? JNI_TRUE : JNI_FALSE);
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionDescribe(env);
         (*env)->ExceptionClear(env);

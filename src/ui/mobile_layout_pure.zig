@@ -36,6 +36,58 @@ pub fn bandOffset(band: f32, height: f32) f32 {
     const island_center = (11 + band - 2) / 2;
     return @max(0, @min(band - height, island_center - height / 2));
 }
+/// Player route on mobile: the video layer is edge to edge, ignoring the
+/// cutout/status-bar insets that every other route honours. Only chrome
+/// controls (back button, transport bar) stay inside `chromeInsets`.
+pub fn playerVideoInsets(is_player: bool, requested: Insets) Insets {
+    return if (is_player) .{} else requested;
+}
+pub fn playerChromeInsets(requested: Insets) Insets {
+    return requested;
+}
+/// Compact one-row mobile transport bar: content height == minimum touch target.
+pub const MIN_TOUCH: f32 = 40;
+pub const BAR_HEIGHT: f32 = MIN_TOUCH;
+/// Icon content + padding of a bar button; always reaches MIN_TOUCH.
+pub const BAR_ICON: f32 = 20;
+pub const BAR_ICON_PAD: f32 = (MIN_TOUCH - BAR_ICON) / 2;
+/// Chrome fully hidden once idle passes threshold + fade.
+pub fn chromeVisible(idle_ms: i64, threshold_ms: i64, fade_ms: i64) bool {
+    return idle_ms < threshold_ms + fade_ms;
+}
+/// New "last activity" timestamp after a tap on the player. A tap on the video
+/// toggles chrome (visible -> hide at once, hidden -> show); a tap on chrome
+/// just keeps it alive.
+pub fn tapActivity(now_ms: i64, last_ms: i64, in_chrome: bool, threshold_ms: i64, fade_ms: i64) i64 {
+    if (!chromeVisible(now_ms - last_ms, threshold_ms, fade_ms)) return now_ms;
+    if (in_chrome) return now_ms;
+    return now_ms - threshold_ms - fade_ms;
+}
+test "player video is edge to edge while chrome keeps the safe insets" {
+    const safe: Insets = .{ .top = 14, .right = 35 };
+    const v = playerVideoInsets(true, safe);
+    try std.testing.expectEqual(@as(f32, 0), v.top);
+    try std.testing.expectEqual(@as(f32, 0), v.right);
+    try std.testing.expectEqual(@as(f32, 35), playerChromeInsets(safe).right);
+    try std.testing.expectEqual(@as(f32, 35), playerVideoInsets(false, safe).right);
+}
+test "mobile bar buttons meet the touch target" {
+    try std.testing.expect(BAR_ICON + 2 * BAR_ICON_PAD >= MIN_TOUCH);
+    try std.testing.expect(BAR_HEIGHT >= MIN_TOUCH);
+}
+test "tap on video toggles chrome, tap on chrome keeps it" {
+    const t: i64 = 2500;
+    const f: i64 = 220;
+    // visible, tap video -> hidden
+    const hid = tapActivity(10_000, 9_000, false, t, f);
+    try std.testing.expect(!chromeVisible(10_000 - hid, t, f));
+    // hidden, tap anywhere -> shown
+    const shown = tapActivity(20_000, 10_000, false, t, f);
+    try std.testing.expect(chromeVisible(20_000 - shown, t, f));
+    // visible, tap chrome -> stays visible
+    const kept = tapActivity(10_000, 9_000, true, t, f);
+    try std.testing.expect(chromeVisible(10_000 - kept, t, f));
+}
 test "band controls centre on the island and fit inside the band" {
     const off = bandOffset(50, 32);
     try std.testing.expect(off >= 0 and off + 32 <= 50);

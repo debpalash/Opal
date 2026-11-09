@@ -106,3 +106,18 @@ test "regression: Android save path under HOME passes storedPathUsable" {
     try std.testing.expect(platform.storedPathUsable(path, home, true));
     try std.testing.expect(!platform.storedPathUsable("/sdcard/Download", home, true));
 }
+
+/// Immersive player orientation: a landscape video on the player route locks
+/// the activity to sensor-landscape so it fills the screen edge to edge;
+/// everything else (portrait/square video, audio, other pages) rotates freely.
+pub fn playerLandscape(in_player: bool, video_w: i64, video_h: i64) bool {
+    return in_player and video_w > 0 and video_h > 0 and video_w > video_h;
+}
+
+test "playerLandscape: only a landscape video on the player route" {
+    try std.testing.expect(playerLandscape(true, 1920, 1080));
+    try std.testing.expect(!playerLandscape(true, 1080, 1920));
+    try std.testing.expect(!playerLandscape(true, 1080, 1080));
+    try std.testing.expect(!playerLandscape(true, 0, 0)); // audio / not decoded yet
+    try std.testing.expect(!playerLandscape(false, 1920, 1080));
+}

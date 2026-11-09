@@ -1,0 +1,10 @@
+{
+  "tag": "v0.10.0",
+  "items": [
+    {
+      "path": "assets/releases/v0.10.0/android-player.png",
+      "alt": "Opal on an Android phone in landscape: Sintel fills the screen edge to edge with a subtitle line and a single compact control bar showing play, time, seek bar, audio, subtitles and more.",
+      "caption": "Opal now runs on Android. Immersive landscape playback with a compact, auto-hiding control bar and subtitles, captured on a OnePlus 12 (Android 16) while streaming Sintel by torrent. Sintel \u00a9 Blender Foundation, CC BY 3.0."
+    }
+  ]
+}

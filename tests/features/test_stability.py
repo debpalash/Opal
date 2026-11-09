@@ -549,7 +549,7 @@ def test_stream_readiness_gate():
         # Priorities BEFORE deadlines: prioritize_pieces() calls
         # remove_time_critical_pieces(), so the reverse order silently drops them.
         "priorities before deadlines": (cpp.index("prioritize_pieces(prios)")
-                                        < cpp.index("set_piece_deadline(lt::piece_index_t(p), dl)")),
+                                        < cpp.index("set_piece_deadline(lt::piece_index_t(p), dl + (p - first_piece) * step)")),
 
         # An incomplete body closes the connection and invokes ffmpeg recovery;
         # it is never misreported as a successful EOF.

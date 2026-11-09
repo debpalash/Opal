@@ -79,7 +79,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: .zig-cache/android-native
-          key: android-native-${{ hashFiles('mobile/android/dependencies.json', 'scripts/android-deps.py') }}
+          key: android-native-${{ hashFiles('mobile/android/dependencies.json', 'scripts/android-deps.py', 'src/torrent_wrapper.cpp', 'src/torrent_wrapper.h') }}
       - name: Release signing key
         # Stable key so updates install over older APKs; without the secrets the
         # APK is debug-signed (uninstall before upgrading).

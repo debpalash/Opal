@@ -84,7 +84,7 @@ pub fn hasPlan(torrent_id: i32, file_idx: i32) bool {
     return false;
 }
 
-fn pin(torrent_id: i32, file_idx: i32, off: u64, len: u64) void {
+fn pin(torrent_id: i32, file_idx: i32, off: u64, len: u64, deadline_ms: i32) void {
     if (len == 0) return;
     c.mpv.torrent_prioritize_range(
         state.torrentSession(),
@@ -92,8 +92,13 @@ fn pin(torrent_id: i32, file_idx: i32, off: u64, len: u64) void {
         file_idx,
         @intCast(off),
         @intCast(len),
-        0, // deadline 0 = "already due" = maximum urgency
+        deadline_ms, // base deadline; wrapper adds PIECE_STEP_MS per piece
+        cp.PIECE_STEP_MS,
     );
+}
+
+fn pinSet(torrent_id: i32, file_idx: i32, set: cp.PinSet) void {
+    for (set.pins[0..set.n]) |p| pin(torrent_id, file_idx, p.off, p.len, p.deadline_ms);
 }
 
 fn rangeReady(torrent_id: i32, file_idx: i32, off: u64, len: u64) bool {
@@ -140,9 +145,7 @@ pub fn isReady(torrent_id: i32, file_idx: i32, file_name: []const u8, file_size:
 
         // Probe first, so the exact tail can be computed before we spend bandwidth
         // on a guessed one.
-        pin(torrent_id, file_idx, 0, @min(cp.PROBE_BYTES, file_size));
-        pin(torrent_id, file_idx, 0, g.plan.head_end);
-        pin(torrent_id, file_idx, g.plan.tail_start, g.plan.tailLen());
+        pinSet(torrent_id, file_idx, cp.planPins(g.plan));
 
         var lb: [160]u8 = undefined;
         const msg = std.fmt.bufPrint(&lb, "stream: {s} {d}MB - head {d}MB + tail {d}MB ({s})", .{
@@ -182,7 +185,7 @@ pub fn isReady(torrent_id: i32, file_idx: i32, file_name: []const u8, file_size:
 
                 if (g.plan.tail_start != before.tail_start) {
                     // Stop paying for the guessed tail; pin the real one.
-                    pin(torrent_id, file_idx, g.plan.tail_start, g.plan.tailLen());
+                    pinSet(torrent_id, file_idx, cp.backgroundPins(g.plan));
 
                     var lb: [160]u8 = undefined;
                     const msg = std.fmt.bufPrint(&lb, "stream: exact index at {d}MB - tail now {d}MB (was {d}MB guess)", .{
@@ -218,7 +221,6 @@ pub fn isReady(torrent_id: i32, file_idx: i32, file_name: []const u8, file_size:
     //
     // Waiting for the full 16 MB head + tail was correct but needlessly slow: it
     // was the reason a torrent pulling 8 MB/s still showed "Buffering 87%".
-    const head_len = @min(g.plan.head_end, file_size);
     // Duration-derived: enough bytes for ~2 seconds of THIS file, clamped.
     // A low-bitrate 700 MB film waits for ~1 MB instead of a flat 4 MB; a
     // high-bitrate 4K file gets up to 8 MB so it doesn't immediately re-buffer.
@@ -229,15 +231,14 @@ pub fn isReady(torrent_id: i32, file_idx: i32, file_name: []const u8, file_size:
 
     // `start_pct` came from the same required range. Do not issue a second
     // synchronous libtorrent query just to ask the boolean form of the answer.
-    if (start_pct == 100) {
+    if (cp.startReady(start_pct)) {
         g.ready = true;
         g.progress = 100;
 
         // Keep the rest of the head and the index racing in the background: the
         // demuxer is about to ask for the index, and playback is about to ask for
         // the head.
-        pin(torrent_id, file_idx, 0, head_len);
-        pin(torrent_id, file_idx, g.plan.tail_start, g.plan.tailLen());
+        pinSet(torrent_id, file_idx, cp.backgroundPins(g.plan));
 
         logs.pushLog("info", "stream", "stream: enough to start - handing to player (index still racing)", false);
         return true;
@@ -245,7 +246,7 @@ pub fn isReady(torrent_id: i32, file_idx: i32, file_name: []const u8, file_size:
     // Not there yet: keep the start range the most urgent thing in the swarm.
     const now_ms = @import("../core/io_global.zig").monotonicMilliTimestamp();
     if (cp.repinDue(now_ms, g.last_pin_ms)) {
-        pin(torrent_id, file_idx, 0, start_len);
+        pin(torrent_id, file_idx, 0, start_len, 0);
         g.last_pin_ms = now_ms;
     }
     return false;

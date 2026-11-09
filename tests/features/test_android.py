@@ -107,7 +107,7 @@ def test_android_release_workflow():
         "PR builds never upload": "if: env.OPAL_RELEASE_TAG != ''" in apk,
         "NDK pinned": "27.1.12297006" in apk,
         "native prefix artifact": "android-native-prefix" in apk,
-        "cache keyed on pins": "hashFiles('mobile/android/dependencies.json', 'scripts/android-deps.py')" in apk,
+        "cache keyed on pins": "hashFiles('mobile/android/dependencies.json', 'scripts/android-deps.py'" in apk,
     }
     bad = [k for k, ok in checks.items() if not ok]
     return _fail(bad, "APK built post-publish, attached, and checksummed")
@@ -380,6 +380,94 @@ def test_android_bundles_plugin_manifest():
     return ("fail", f"missing: {missing}") if missing else ("pass", "APK ships the real source catalog")
 
 
+@test("Android installs SIGIO/SIGPIPE handlers via raw rt_sigaction", "Android")
+def test_android_sigio_handler():
+    # Regression (OnePlus 12, Android 16): killed by signal 29 ~2 s after launch.
+    # Zig's std.c.Sigaction for aarch64 Android is glibc-shaped (handler first);
+    # bionic LP64 starts with sa_flags, so std.posix.sigaction installed SIG_DFL and
+    # Io.Threaded's cancel SIGIO killed the process. /proc SigCgt confirmed it.
+    a = _src("src/android.zig")
+    body = a[a.index("fn installSignalHandlers()"):]
+    body = body[:body.index("\n}\n")]
+    checks = {
+        "raw syscall for SIGIO": "linux.sigaction(.IO, &act, null)" in body,
+        "raw syscall for SIGPIPE": "linux.sigaction(.PIPE, &act, null)" in body,
+        "not the libc path": "std.posix.sigaction" not in body,
+        "Io initialised first": body.index('io_global.zig").io()') < body.index("linux.sigaction(.IO"),
+        "installed at start and after core init": a.count("installSignalHandlers();") >= 2,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    return ("fail", f"missing: {missing}") if missing else ("pass", "SIGIO/SIGPIPE caught; Io cancellation no longer kills the app")
+
+
+@test("Android: immersive fullscreen window and mediacodec-copy hwdec", "Android")
+def test_android_fullscreen_and_hwdec():
+    # On device: SDLActivity.setWindowStyle(false) re-showed the bars (windowed SDL
+    # window), and hwdec=auto picked direct mediacodec -> "Both surface and
+    # native_window are NULL", nothing played.
+    a = _src("src/android.zig")
+    pl = _src("src/player/player.zig")
+    st = _src("src/ui/settings.zig")
+    pure = _src("src/player/hwdec_feedback_pure.zig")
+    checks = {
+        "fullscreen SDL window": "SDL_SetWindowFullscreen(@ptrCast(win.backend.impl.window), true)" in a,
+        "android hwdec is copy-back": 'if (android) return "mediacodec-copy";' in pure,
+        "player init routes through it": "optionValue(state.app.hwdec_enabled, @import(\"builtin\").abi.isAndroid(), true)" in pl,
+        "settings toggle routes through it": "optionValue(state.app.hwdec_enabled, @import(\"builtin\").abi.isAndroid(), false)" in st,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    return ("fail", f"missing: {missing}") if missing else ("pass", "bars hidden by SDL fullscreen; Android decodes via mediacodec-copy")
+
+
+@test("Android ships subtitle/OSD fonts for libass", "Android")
+def test_android_libass_fonts():
+    # On device: "osd: Failed rendering OSD." every frame and no subtitles —
+    # fontconfig has no fonts on Android.
+    b = _src("scripts/android-build.py"); c = _src("mobile/android/jni/opal_android.c"); p = _src("src/player/player.zig")
+    checks = {
+        "APK bundles the fonts": "NotoSans-Regular.ttf" in b and "assets / 'fonts'" in b,
+        "host extracts them": 'extract_asset("fonts/NotoSans-Regular.ttf", g_resource_dir)' in c,
+        "mpv uses the dir, not fontconfig": '"sub-fonts-dir"' in p and '"osd-fonts-dir"' in p and '"sub-font-provider", "none"' in p,
+        "fonts exist": all(os.path.exists(os.path.join(PROJECT_DIR, "src/assets/fonts", f)) for f in ("NotoSans-Regular.ttf", "NotoSans-Bold.ttf")),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    return ("fail", f"missing: {missing}") if missing else ("pass", "libass gets bundled Noto Sans on Android")
+
+
+@test("Android native cache rebuilds when the torrent wrapper changes", "Android")
+def test_android_cache_key_covers_wrapper():
+    # libopal_torrent.a lives in the cached prefix; a key without the wrapper
+    # sources would ship a stale wrapper (e.g. the new prioritize_range step_ms).
+    apk = _src(".github/workflows/android-apk.yml")
+    key = [l for l in apk.splitlines() if "key: android-native-" in l]
+    ok = key and all(f in key[0] for f in ("src/torrent_wrapper.cpp", "src/torrent_wrapper.h", "scripts/android-deps.py"))
+    return ("pass", "prefix cache keyed on the wrapper sources") if ok else ("fail", f"cache key: {key}")
+
+
+@test("Android renders mpv into opaque bgr0 (OSD/subtitles draw)", "Android")
+def test_android_sw_format():
+    # On device: "osd: Failed rendering OSD." every frame with sw_format=bgra;
+    # 0 failures with bgr0, colours correct.
+    g = _src("src/ui/grid.zig"); p = _src("src/core/platform_pure.zig")
+    ok = "mobileSwFormat(@import(\"builtin\").abi.isAndroid())" in g and 'return if (android) "bgr0" else "bgra";' in p
+    return ("pass", "Android uses bgr0; iOS keeps bgra") if ok else ("fail", "Android sw format not routed through mobileSwFormat")
+
+
+@test("Android player locks landscape for landscape video", "Android")
+def test_android_player_landscape():
+    a = _src("src/android.zig"); h = _src("src/mobile/host.zig"); c = _src("mobile/android/jni/opal_android.c")
+    j = _src("mobile/android/app/src/main/java/com/debpalash/opal/OpalActivity.java")
+    checks = {
+        "decision is pure + routed": "playerLandscape(st.app.router.current == .player, w, h)" in a,
+        "only on change": "if (want == landscape_locked) return;" in a,
+        "host -> C": "opal_android_set_landscape(on)" in h and "void opal_android_set_landscape(bool on)" in c,
+        "C -> Java": '"setPlayerLandscape", "(Z)V"' in c and "public void setPlayerLandscape(final boolean on)" in j,
+        "sensor landscape / free": "SCREEN_ORIENTATION_SENSOR_LANDSCAPE" in j and "SCREEN_ORIENTATION_FULL_USER" in j,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    return ("fail", f"missing: {missing}") if missing else ("pass", "landscape video rotates the player to landscape")
+
+
 @test("Android native compile gate (opt-in OPAL_ANDROID_CHECK=1)", "Android")
 def test_android_zig_check():
     if os.environ.get("OPAL_ANDROID_CHECK") != "1":
@@ -416,3 +504,21 @@ def test_android_reliable_fetch_no_curl():
     if "std.process.Child" in std_be or "bounded_process" in std_be:
         bad.append("http_std spawns a process")
     return _fail(bad, "request/download/stream route Android to http_std (no curl)")
+
+
+@test("Android has no curl binary: scrape/comics fetch only via reliable_fetch", "Android")
+def test_android_no_curl_spawn_scrape_comics():
+    bad = []
+    for f in ("src/services/scrape_fetch.zig", "src/services/comics.zig"):
+        s = _src(f)
+        # Only curl-shaped fetching is the bug; comics.zig legitimately runs
+        # plugin scripts through their interpreter (fails gracefully if absent).
+        for needle in ("reliable_fetch.backend(", ".backend().bin", '"curl"'):
+            if needle in s:
+                bad.append(f + " uses " + needle)
+    rf = _src("src/services/reliable_fetch.zig")
+    for fn in ("pub fn request(", "pub fn download("):
+        body = rf[rf.index(fn):rf.index(fn) + 600]
+        if "isAndroid()" not in body or "http_std.zig" not in body:
+            bad.append("reliable_fetch " + fn + " lacks Android http_std gate")
+    return _fail(bad, "scrape/comics reach no curl spawn; reliable_fetch routes Android to http_std")

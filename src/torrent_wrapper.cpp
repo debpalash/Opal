@@ -1743,7 +1743,7 @@ extern "C" int torrent_range_progress(TorrentSession session, int torrent_id, in
 }
 
 extern "C" void torrent_prioritize_range(TorrentSession session, int torrent_id, int file_idx,
-                                         long long offset, long long len, int deadline_ms) {
+                                         long long offset, long long len, int deadline_ms, int step_ms) {
     if (!session) return;
     SessionContext* ctx = static_cast<SessionContext*>(session);
     auto node = get_node(ctx, torrent_id);
@@ -1781,8 +1781,11 @@ extern "C" void torrent_prioritize_range(TorrentSession session, int torrent_id,
         // non-critical requests, so dripping these in from separate calls would
         // thrash the request pipeline.
         const int dl = deadline_ms < 0 ? 0 : deadline_ms;
+        // Graduated: later pieces in the range are due later, so the first
+        // bytes (probe / playhead) are not starved by a big range pinned beside them.
+        const int step = step_ms < 0 ? 0 : step_ms;
         for (int p = first_piece; p <= last_piece; ++p) {
-            node->handle.set_piece_deadline(lt::piece_index_t(p), dl);
+            node->handle.set_piece_deadline(lt::piece_index_t(p), dl + (p - first_piece) * step);
         }
     } catch (...) {}
 }

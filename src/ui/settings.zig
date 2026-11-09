@@ -1510,7 +1510,7 @@ fn renderPlaybackTab() void {
         components.toggleRow(@src(), "Hardware Decoding", "GPU video decode (auto)", &state.app.hwdec_enabled);
         if (state.app.hwdec_enabled != before) {
             for (state.app.players.items) |p| {
-                _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "hwdec", if (state.app.hwdec_enabled) "auto" else "no");
+                _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "hwdec", @import("../player/hwdec_feedback_pure.zig").optionValue(state.app.hwdec_enabled, @import("builtin").abi.isAndroid(), false));
             }
             state.markConfigDirty();
         }
