@@ -324,6 +324,24 @@ def test_android_libcxx_matches_mpv():
     return ("fail", f"missing: {missing}") if missing else ("pass", "newest libc++ bundled; all bundled libs must resolve")
 
 
+@test("Android build fails on an SDL Java/C version mismatch", "Android")
+def test_android_sdl_version_gate():
+    # SDLActivity shows "SDL Error ... version mismatch" and exits unless the Java
+    # sources and libSDL3 agree; the build must catch that, not the user.
+    spec = importlib.util.spec_from_file_location("android_build", os.path.join(PROJECT_DIR, "scripts/android-build.py"))
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    java = "private static final int SDL_MAJOR_VERSION = 3;\n private static final int SDL_MINOR_VERSION = 4;\n private static final int SDL_MICRO_VERSION = 18;"
+    h_ok = "#define SDL_MAJOR_VERSION   3\n#define SDL_MINOR_VERSION   4\n#define SDL_MICRO_VERSION   18"
+    h_bad = h_ok.replace("18", "2")
+    checks = {
+        "parses matching versions": mod.sdl_versions(java, h_ok) == ("3.4.18", "3.4.18"),
+        "detects mismatch": mod.sdl_versions(java, h_bad) == ("3.4.18", "3.4.2"),
+        "gate runs before gradle": "verify_sdl_versions(prefix)" in _src("scripts/android-build.py"),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    return ("fail", f"missing: {missing}") if missing else ("pass", "SDL Java/C version mismatch fails the build")
+
+
 @test("Android native compile gate (opt-in OPAL_ANDROID_CHECK=1)", "Android")
 def test_android_zig_check():
     if os.environ.get("OPAL_ANDROID_CHECK") != "1":

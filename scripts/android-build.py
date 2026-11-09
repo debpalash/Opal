@@ -127,6 +127,28 @@ def verify_libmain(ndk):
         raise SystemExit('unresolved symbols (dlopen would fail):\n  ' + '\n  '.join(failures))
     print(f'{len(bundled)} bundled libraries: all imports resolved', flush=True)
 
+def sdl_versions(java_src, version_h):
+    """(java, c) SDL versions. SDLActivity refuses to start ("SDL Error: SDL C/Java
+    version mismatch") unless SDL_{MAJOR,MINOR,MICRO}_VERSION in the Java
+    sources equal the native library's."""
+    def grab(text, pattern):
+        return '.'.join(re.search(pattern % part, text).group(1) for part in ('MAJOR', 'MINOR', 'MICRO'))
+    java = grab(java_src, r'SDL_%s_VERSION\s*=\s*(\d+)')
+    c = grab(version_h, r'#define\s+SDL_%s_VERSION\s+(\d+)')
+    return java, c
+
+
+def verify_sdl_versions(prefix):
+    java_file = next((OUT / 'sdl-java').rglob('SDLActivity.java'), None)
+    header = Path(prefix) / 'include/SDL3/SDL_version.h'
+    if java_file is None or not header.exists():
+        raise SystemExit('cannot verify SDL versions: missing SDLActivity.java or SDL_version.h')
+    java, c = sdl_versions(java_file.read_text(), header.read_text())
+    if java != c:
+        raise SystemExit(f'SDL Java {java} != native SDL {c}: the app would show "SDL Error" at launch')
+    print(f'SDL Java/C versions match: {java}', flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--deps-prefix', help='prebuilt native prefix; skips building dependencies')
@@ -164,6 +186,7 @@ def main():
             shutil.copytree(java, OUT / 'sdl-java')
     if not a.stub_libs and not a.skip_zig:
         verify_libmain(ndk)
+        verify_sdl_versions(prefix)
     jdk = find_jdk()
     genv = dict(env, JAVA_HOME=jdk)
     sdk = os.environ.get('ANDROID_HOME') or str(ndk.parents[1])
