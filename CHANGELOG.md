@@ -10,7 +10,7 @@ Add a section and a fresh feature visual BEFORE tagging. See [the release checkl
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
-## v0.10.0 — 2026-11-09
+## v0.10.0 — 2026-11-10
 
 - **Opal on Android (preview).** The Android app runs the same code as the desktop: home, movie and TV catalogs, search, torrent streaming, subtitles, downloads and settings. Playback is immersive — the app owns the status-bar area, landscape videos rotate the player to landscape and fill the screen edge to edge, and the compact control bar hides while you watch and returns with a tap. Back leaves the player, then steps back through pages. Downloads keep running in the background with a "Transfers" notification (seeding alone does not keep the phone awake). Install `Opal-0.10.0-android.apk` (arm64, Android 8.0+) by allowing installs from unknown sources. Not yet on Android: the built-in web browser (links open in your browser), the phone web UI, voice features, Jackett and Python search engines.
 - **Faster torrent start.** Streams now ask for the piece that locates the video index first, then about five seconds of video, then the rest — instead of requesting 16 MB at once — so playback can begin sooner on slower swarms. This applies on every platform.
