@@ -89,6 +89,80 @@ pub fn pictureValues(p: PicturePreset) PictureValues {
     };
 }
 
+/// Preset values plus the user's manual slider offsets, each clamped to
+/// -100..100. Presets and sliders COMBINE (they used to overwrite each other).
+pub fn combineGrade(preset: PictureValues, manual: PictureValues) PictureValues {
+    return .{
+        .brightness = clampVideoFilter(preset.brightness + manual.brightness),
+        .contrast = clampVideoFilter(preset.contrast + manual.contrast),
+        .saturation = clampVideoFilter(preset.saturation + manual.saturation),
+        .gamma = clampVideoFilter(preset.gamma + manual.gamma),
+    };
+}
+
+/// Label of the single mpv video filter that carries the grade.
+pub const grade_filter_label = "@opal-eq";
+
+/// ffmpeg `eq` filter spec for a combined grade, or "" when every value is
+/// zero (no filter at all). Uses mpv's own csputils mapping so the -100..100
+/// scale means what mpv's equalizer meant: brightness b/100, contrast
+/// (c+100)/100, saturation (s+100)/100, gamma 8^(g/100). Fixed 3 decimals.
+///
+/// Why a filter: Opal renders with MPV_RENDER_API_TYPE_SW, where mpv's
+/// brightness/contrast/saturation/gamma properties have no visible effect
+/// (the SW renderer never applies the video equalizer). A `vf` runs on the
+/// decoded frames regardless of the render API.
+pub fn gradeFilterSpec(buf: []u8, v: PictureValues) []const u8 {
+    if (v.brightness == 0 and v.contrast == 0 and v.saturation == 0 and v.gamma == 0) return "";
+    const b: f64 = @as(f64, @floatFromInt(clampVideoFilter(v.brightness))) / 100.0;
+    const c: f64 = (@as(f64, @floatFromInt(clampVideoFilter(v.contrast))) + 100.0) / 100.0;
+    const s: f64 = (@as(f64, @floatFromInt(clampVideoFilter(v.saturation))) + 100.0) / 100.0;
+    const g: f64 = @exp(@log(8.0) * @as(f64, @floatFromInt(clampVideoFilter(v.gamma))) / 100.0);
+    return std.fmt.bufPrint(buf, "eq=brightness={d:.3}:contrast={d:.3}:saturation={d:.3}:gamma={d:.3}", .{ b, c, s, g }) catch "";
+}
+
+test "combineGrade adds and clamps" {
+    const r = combineGrade(.{ .contrast = 16, .saturation = 24 }, .{ .contrast = 90, .saturation = -30, .gamma = -150 });
+    try std.testing.expectEqual(@as(i32, 100), r.contrast);
+    try std.testing.expectEqual(@as(i32, -6), r.saturation);
+    try std.testing.expectEqual(@as(i32, -100), r.gamma);
+}
+
+test "gradeFilterSpec: all zero is no filter" {
+    var buf: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("", gradeFilterSpec(&buf, .{}));
+    try std.testing.expectEqualStrings("", gradeFilterSpec(&buf, pictureValues(.standard)));
+}
+
+test "gradeFilterSpec uses mpv csputils mapping" {
+    var buf: [128]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "eq=brightness=0.020:contrast=1.160:saturation=1.240:gamma=1.000",
+        gradeFilterSpec(&buf, pictureValues(.vivid)),
+    );
+    try std.testing.expectEqualStrings(
+        "eq=brightness=0.000:contrast=1.000:saturation=0.000:gamma=1.000",
+        gradeFilterSpec(&buf, .{ .saturation = -100 }),
+    );
+    try std.testing.expectEqualStrings(
+        "eq=brightness=0.000:contrast=1.000:saturation=1.000:gamma=8.000",
+        gradeFilterSpec(&buf, .{ .gamma = 100 }),
+    );
+}
+
+test "regression: SW render ignored mpv eq props - presets must yield a real filter" {
+    // Every non-standard preset and a manual saturation=-100 must produce a
+    // non-empty `vf` spec; before the fix they only set mpv properties, which
+    // the SW render API never applies (pixels identical to Standard).
+    var buf: [128]u8 = undefined;
+    for ([_]PicturePreset{ .hdr, .cinema, .tv_show, .vivid }) |p| {
+        try std.testing.expect(gradeFilterSpec(&buf, combineGrade(pictureValues(p), .{})).len > 0);
+    }
+    try std.testing.expect(gradeFilterSpec(&buf, combineGrade(pictureValues(.standard), .{ .saturation = -100 })).len > 0);
+    // Preset + manual that cancel out → no filter.
+    try std.testing.expectEqualStrings("", gradeFilterSpec(&buf, combineGrade(pictureValues(.vivid), .{ .brightness = -2, .contrast = -16, .saturation = -24 })));
+}
+
 /// Human label for the preset switch in the player controls.
 pub fn pictureLabel(p: PicturePreset) []const u8 {
     return switch (p) {
