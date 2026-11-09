@@ -10,6 +10,10 @@ Add a section and a fresh feature visual BEFORE tagging. See [the release checkl
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
+## Unreleased
+
+- **Picture presets work on iPhone/iPad too.** The grade now uses a filter every platform ships (iOS lacks `eq`), with the same look.
+
 ## v0.9.5 — 2026-11-10
 
 - **Picture presets and video sliders now work.** Vivid, Cinema, HDR, TV Show and the Brightness/Contrast/Saturation/Gamma sliders previously had no visible effect; they now change the picture, and a preset combines with your slider offsets instead of overwriting them.

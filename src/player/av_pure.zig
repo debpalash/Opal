@@ -103,22 +103,51 @@ pub fn combineGrade(preset: PictureValues, manual: PictureValues) PictureValues 
 /// Label of the single mpv video filter that carries the grade.
 pub const grade_filter_label = "@opal-eq";
 
-/// ffmpeg `eq` filter spec for a combined grade, or "" when every value is
-/// zero (no filter at all). Uses mpv's own csputils mapping so the -100..100
-/// scale means what mpv's equalizer meant: brightness b/100, contrast
-/// (c+100)/100, saturation (s+100)/100, gamma 8^(g/100). Fixed 3 decimals.
+/// Video filters the grade spec may name. Every one must exist on EVERY
+/// platform's libavfilter. iOS is the constraint: MPVKit 1.0.0
+/// (Libavfilter-GPL, mobile/ios/dependencies.json) ships no `eq`, only
+/// `lut`/`lutrgb`/`lutyuv`/`lut2`/`lut1d`/`lut3d` among the colour filters.
+pub const grade_allowed_filters = [_][]const u8{"lutyuv"};
+
+/// ffmpeg `lutyuv` spec for a combined grade, or "" when every value is zero
+/// (no filter at all). Reproduces mpv/ffmpeg-eq semantics: brightness b/100,
+/// contrast (c+100)/100, saturation (s+100)/100, gamma 8^(g/100).
+///   luma   y = maxval*pow(clip((val/maxval-0.5)*C+0.5+B,0,1),1/G)
+///   chroma u,v = clip((val-mid)*S+mid,minval,maxval), mid=(maxval+1)/2
+/// `maxval`/`minval` are lut constants, so 10-bit sources work. Each
+/// expression is single-quoted so its commas do not split the filter graph.
+/// y is omitted when B=0,C=1,G=1; u/v when S=1. Fixed 3 decimals.
 ///
 /// Why a filter: Opal renders with MPV_RENDER_API_TYPE_SW, where mpv's
 /// brightness/contrast/saturation/gamma properties have no visible effect
 /// (the SW renderer never applies the video equalizer). A `vf` runs on the
-/// decoded frames regardless of the render API.
+/// decoded frames regardless of the render API. Why lutyuv and not `eq`:
+/// see `grade_allowed_filters`.
 pub fn gradeFilterSpec(buf: []u8, v: PictureValues) []const u8 {
-    if (v.brightness == 0 and v.contrast == 0 and v.saturation == 0 and v.gamma == 0) return "";
-    const b: f64 = @as(f64, @floatFromInt(clampVideoFilter(v.brightness))) / 100.0;
-    const c: f64 = (@as(f64, @floatFromInt(clampVideoFilter(v.contrast))) + 100.0) / 100.0;
-    const s: f64 = (@as(f64, @floatFromInt(clampVideoFilter(v.saturation))) + 100.0) / 100.0;
-    const g: f64 = @exp(@log(8.0) * @as(f64, @floatFromInt(clampVideoFilter(v.gamma))) / 100.0);
-    return std.fmt.bufPrint(buf, "eq=brightness={d:.3}:contrast={d:.3}:saturation={d:.3}:gamma={d:.3}", .{ b, c, s, g }) catch "";
+    const bi = clampVideoFilter(v.brightness);
+    const ci = clampVideoFilter(v.contrast);
+    const si = clampVideoFilter(v.saturation);
+    const gi = clampVideoFilter(v.gamma);
+    if (bi == 0 and ci == 0 and si == 0 and gi == 0) return "";
+    const b: f64 = @as(f64, @floatFromInt(bi)) / 100.0;
+    const c: f64 = (@as(f64, @floatFromInt(ci)) + 100.0) / 100.0;
+    const s: f64 = (@as(f64, @floatFromInt(si)) + 100.0) / 100.0;
+    const g: f64 = @exp(@log(8.0) * @as(f64, @floatFromInt(gi)) / 100.0);
+    var w = std.Io.Writer.fixed(buf);
+    w.writeAll("lutyuv=") catch return "";
+    var first = true;
+    if (bi != 0 or ci != 0 or gi != 0) {
+        w.print("y='maxval*pow(clip((val/maxval-0.5)*{d:.3}+0.5+{d:.3},0,1),{d:.3})'", .{ c, b, 1.0 / g }) catch return "";
+        first = false;
+    }
+    if (si != 0) {
+        inline for (.{ "u", "v" }) |ch| {
+            if (!first) w.writeAll(":") catch return "";
+            w.print(ch ++ "='clip((val-(maxval+1)/2)*{d:.3}+(maxval+1)/2,minval,maxval)'", .{s}) catch return "";
+            first = false;
+        }
+    }
+    return w.buffered();
 }
 
 test "combineGrade adds and clamps" {
@@ -129,37 +158,80 @@ test "combineGrade adds and clamps" {
 }
 
 test "gradeFilterSpec: all zero is no filter" {
-    var buf: [128]u8 = undefined;
+    var buf: [512]u8 = undefined;
     try std.testing.expectEqualStrings("", gradeFilterSpec(&buf, .{}));
     try std.testing.expectEqualStrings("", gradeFilterSpec(&buf, pictureValues(.standard)));
 }
 
-test "gradeFilterSpec uses mpv csputils mapping" {
-    var buf: [128]u8 = undefined;
+test "gradeFilterSpec: lutyuv mapping" {
+    var buf: [512]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "eq=brightness=0.020:contrast=1.160:saturation=1.240:gamma=1.000",
+        "lutyuv=y='maxval*pow(clip((val/maxval-0.5)*1.160+0.5+0.020,0,1),1.000)':" ++
+            "u='clip((val-(maxval+1)/2)*1.240+(maxval+1)/2,minval,maxval)':" ++
+            "v='clip((val-(maxval+1)/2)*1.240+(maxval+1)/2,minval,maxval)'",
         gradeFilterSpec(&buf, pictureValues(.vivid)),
     );
+    // Saturation only: no y.
     try std.testing.expectEqualStrings(
-        "eq=brightness=0.000:contrast=1.000:saturation=0.000:gamma=1.000",
+        "lutyuv=u='clip((val-(maxval+1)/2)*0.000+(maxval+1)/2,minval,maxval)':" ++
+            "v='clip((val-(maxval+1)/2)*0.000+(maxval+1)/2,minval,maxval)'",
         gradeFilterSpec(&buf, .{ .saturation = -100 }),
     );
+    // Gamma only: no u/v. gamma=100 -> G=8 -> exponent 0.125.
     try std.testing.expectEqualStrings(
-        "eq=brightness=0.000:contrast=1.000:saturation=1.000:gamma=8.000",
+        "lutyuv=y='maxval*pow(clip((val/maxval-0.5)*1.000+0.5+0.000,0,1),0.125)'",
         gradeFilterSpec(&buf, .{ .gamma = 100 }),
     );
 }
 
-test "regression: SW render ignored mpv eq props - presets must yield a real filter" {
-    // Every non-standard preset and a manual saturation=-100 must produce a
-    // non-empty `vf` spec; before the fix they only set mpv properties, which
-    // the SW render API never applies (pixels identical to Standard).
-    var buf: [128]u8 = undefined;
+test "gradeFilterSpec: only allowed filters, quoted expressions, worst case fits" {
+    var buf: [512]u8 = undefined;
+    const spec = gradeFilterSpec(&buf, .{ .brightness = -100, .contrast = 100, .saturation = 100, .gamma = -100 });
+    try std.testing.expect(spec.len > 0 and spec.len < buf.len);
+    // Filter name = text before '='; there is exactly one filter in the chain.
+    const name = spec[0..std.mem.indexOfScalar(u8, spec, '=').?];
+    var ok = false;
+    for (grade_allowed_filters) |f| ok = ok or std.mem.eql(u8, f, name);
+    try std.testing.expect(ok);
+    // Every comma sits inside single quotes (else it splits the graph).
+    var inq = false;
+    for (spec) |ch| {
+        if (ch == '\'') inq = !inq;
+        if (ch == ',') try std.testing.expect(inq);
+    }
+    try std.testing.expect(!inq);
+}
+
+test "grade_allowed_filters is a subset of the MPVKit 1.0.0 arm64 video filters" {
+    // `_ff_vf_*` symbols in MPVKit 1.0.0 Libavfilter-GPL arm64 (nm). No `eq`.
+    const ios = [_][]const u8{
+        "setpts",         "trim",        "blend_vulkan", "bwdif",          "chromaber_vulkan", "delogo",
+        "estdif",         "flip_vulkan", "hflip_vulkan", "vflip_vulkan",   "format",           "fps",
+        "gblur_vulkan",   "hflip",       "hwdownload",   "hwmap",          "hwupload",         "idet",
+        "lenscorrection", "libplacebo",  "lut",          "lutrgb",         "lutyuv",           "lut2",
+        "lut1d",          "lut3d",       "negate",       "nlmeans_vulkan", "null",             "overlay",
+        "overlay_vulkan", "palettegen",  "paletteuse",   "rotate",         "scale",            "scale2ref",
+        "ass",            "subtitles",   "transpose",    "vflip",          "w3fdif",           "xfade_vulkan",
+        "yadif",
+    };
+    for (grade_allowed_filters) |f| {
+        var found = false;
+        for (ios) |i| found = found or std.mem.eql(u8, f, i);
+        try std.testing.expect(found);
+    }
+}
+
+test "regression: iOS libavfilter has no eq" {
+    // MPVKit 1.0.0 has no `eq`; the grade silently did nothing on iOS.
+    var buf: [512]u8 = undefined;
     for ([_]PicturePreset{ .hdr, .cinema, .tv_show, .vivid }) |p| {
-        try std.testing.expect(gradeFilterSpec(&buf, combineGrade(pictureValues(p), .{})).len > 0);
+        const spec = gradeFilterSpec(&buf, combineGrade(pictureValues(p), .{}));
+        try std.testing.expect(spec.len > 0);
+        try std.testing.expect(std.mem.indexOf(u8, spec, "eq=") == null);
+        try std.testing.expect(std.mem.startsWith(u8, spec, "lutyuv="));
     }
     try std.testing.expect(gradeFilterSpec(&buf, combineGrade(pictureValues(.standard), .{ .saturation = -100 })).len > 0);
-    // Preset + manual that cancel out → no filter.
+    // Preset + manual that cancel out -> no filter.
     try std.testing.expectEqualStrings("", gradeFilterSpec(&buf, combineGrade(pictureValues(.vivid), .{ .brightness = -2, .contrast = -16, .saturation = -24 })));
 }
 
@@ -321,7 +393,7 @@ test "picturePresetFromInt: corrupt config falls back to auto, not a fixed look"
     try std.testing.expectEqual(PicturePreset.auto, picturePresetFromInt(999));
     // Round-trips for every real preset.
     for ([_]PicturePreset{ .auto, .standard, .hdr, .cinema, .tv_show, .vivid }) |p| {
-        try std.testing.expectEqual(p, picturePresetFromInt(@intFromEnum(p)));
+        try std.testing.expectEqual(p, picturePresetFromInt(@backingInt(p)));
     }
 }
 
