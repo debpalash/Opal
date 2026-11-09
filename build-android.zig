@@ -38,7 +38,6 @@ pub fn build(b: *std.Build) void {
     , .{ inc_dir, arch_inc, sysroot, api, sysroot, api }));
 
     b.addSearchPrefix(prefix);
-    b.addSearchPrefix(b.fmt("{s}/usr/lib/aarch64-linux-android/{d}", .{ sysroot, api }));
     const prefix_include: std.Build.LazyPath = .{ .cwd_relative = b.fmt("{s}/include", .{prefix}) };
 
     const dep = b.dependency("dvui", .{ .target = target, .optimize = optimize, .backend = .sdl3, .android_include_path = @as(std.Build.LazyPath, .{ .cwd_relative = inc_dir }) });
@@ -69,6 +68,11 @@ pub fn build(b: *std.Build) void {
     // libmain.so for SDLActivity.
     const so = b.addLibrary(.{ .name = "main", .linkage = .dynamic, .root_module = mod });
     so.setLibCFile(libc_file);
+    // addSearchPrefix appends /lib, so the NDK's per-API dir (log, android, m,
+    // dl) and its unversioned dir (libc++_shared) need explicit library paths.
+    so.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{prefix}) });
+    so.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib/aarch64-linux-android/{d}", .{ sysroot, api }) });
+    so.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib/aarch64-linux-android", .{sysroot}) });
     inline for (.{ "SDL3", "mpv", "avcodec", "sqlite3", "webp", "opal_torrent", "torrent-rasterbar", "ssl", "crypto", "c++_shared", "log", "android", "m", "dl" }) |name| {
         so.root_module.linkSystemLibrary(name, .{ .use_pkg_config = .no });
     }

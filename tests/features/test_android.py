@@ -202,6 +202,20 @@ def test_android_docs():
     return _fail(bad, "README and docs/android.md present")
 
 
+@test("Android libmain links NDK system libs from explicit library paths", "Android")
+def test_android_ndk_lib_paths():
+    # Regression: addSearchPrefix(<ndk>/usr/lib/aarch64-linux-android/<api>) looked in
+    # .../<api>/lib, so log/android/m/dl were "unable to find dynamic system library".
+    src = _src("build-android.zig")
+    checks = {
+        "per-API NDK lib dir": 'addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib/aarch64-linux-android/{d}", .{ sysroot, api }) })' in src,
+        "unversioned NDK lib dir (libc++_shared)": 'addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib/aarch64-linux-android", .{sysroot}) })' in src,
+        "no search prefix on the NDK lib dir": 'addSearchPrefix(b.fmt("{s}/usr/lib/aarch64-linux-android' not in src,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    return ("fail", f"missing: {missing}") if missing else ("pass", "libmain.so finds log/android/m/dl/c++_shared in the NDK sysroot")
+
+
 @test("Android native compile gate (opt-in OPAL_ANDROID_CHECK=1)", "Android")
 def test_android_zig_check():
     if os.environ.get("OPAL_ANDROID_CHECK") != "1":
