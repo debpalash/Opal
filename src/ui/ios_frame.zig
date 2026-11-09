@@ -37,7 +37,26 @@ pub fn frame() !dvui.App.Result {
     drainOpenRequest();
     @import("../app_services.zig").tickPlayers();
     for (dvui.events()) |event| {
-        if (event.evt == .mouse) state.app.last_mouse_move_ms = io.milliTimestamp();
+        if (event.evt != .mouse) continue;
+        const me = event.evt.mouse;
+        // dvui synthesizes a `.position` event every frame (and `.focus` from
+        // presses); counting them as activity kept the player chrome up forever
+        // on touch devices. Only real input (press/release/motion/wheel) counts.
+        if (me.action == .position or me.action == .focus) continue;
+        const now = io.milliTimestamp();
+        if (state.app.router.current == .player and me.button.pointer() and (me.action == .press or me.action == .release)) {
+            const in_chrome = @import("footer.zig").mouseInControlPanel(me.p) or @import("shell.zig").mouseInPlayerTopChrome(me.p);
+            // A tap on the video toggles the chrome (press decides; the
+            // matching release must not revive it). Taps on chrome keep it.
+            if (me.action == .press) {
+                const autohide = @import("chrome_autohide.zig");
+                state.app.last_mouse_move_ms = layout.tapActivity(now, state.app.last_mouse_move_ms, in_chrome, autohide.DEFAULT_THRESHOLD_MS, autohide.FADE_MS);
+            } else if (in_chrome) {
+                state.app.last_mouse_move_ms = now;
+            }
+            continue;
+        }
+        state.app.last_mouse_move_ms = now;
     }
     @import("../app_services.zig").tickPlayback();
     if (comptime host.ui_test_supported) if (host.uiTest()) @import("ios_uitest.zig").tick();
@@ -51,9 +70,11 @@ pub fn frame() !dvui.App.Result {
     const viewport = layout.fit(screen.w, screen.h, safe);
     // Edge to edge; only the cutout and keyboard reserve space.
     const edges = layout.fit(screen.w, screen.h, layout.immersive(safe, keyboard)).insets;
+    // Player: the video ignores the cutout insets; only its chrome honours them.
+    const video_insets = layout.fit(screen.w, screen.h, layout.playerVideoInsets(state.app.router.current == .player, edges)).insets;
 
     if (state.app.router.current == .player) {
-        try renderPlayer(viewport, edges);
+        try renderPlayer(viewport, video_insets, layout.playerChromeInsets(edges));
     } else {
         // The strip beside the Dynamic Island holds the shell's brand/menu
         // row (shell.cutout_band) instead of sitting empty.
@@ -87,6 +108,11 @@ pub fn frame() !dvui.App.Result {
 /// Android Back: same navigation as the on-screen back button, else background.
 fn handleBack() void {
     const r = &state.app.router;
+    // Back dismisses an open playback popover before navigating.
+    if (@import("footer.zig").pickerOpen()) {
+        @import("footer.zig").closePickers();
+        return;
+    }
     switch (@import("../mobile/android_pure.zig").backAction(r.current == .player, r.canGoBack())) {
         .leave_player => r.leavePlayer(),
         .go_back => r.goBack(),
@@ -115,13 +141,20 @@ pub var back_button_rect: dvui.Rect.Physical = .{};
 
 /// Full-bleed video. Transport sits on the bottom edge (the home indicator
 /// auto-hides) and Back sits beside the Dynamic Island.
-fn renderPlayer(viewport: layout.Viewport, edges: layout.Insets) !void {
+fn renderPlayer(viewport: layout.Viewport, video: layout.Insets, edges: layout.Insets) !void {
     var stage = dvui.overlay(@src(), .{ .expand = .both, .min_size_content = .{ .w = viewport.width, .h = viewport.height }, .max_size_content = .{ .w = viewport.width, .h = viewport.height }, .background = true, .color_fill = .{ .color = theme.colors.bg_app } });
     defer stage.deinit();
     // Desktop renderPage(.player) minus its full-bleed overlays.
-    try @import("grid.zig").renderGrid();
     {
-        var controls = dvui.overlay(@src(), .{ .expand = .both, .margin = .{ .x = edges.left, .y = 0, .w = edges.right, .h = edges.bottom } });
+        var video_layer = dvui.overlay(@src(), .{ .expand = .both, .margin = .{ .x = video.left, .y = video.top, .w = video.right, .h = video.bottom } });
+        defer video_layer.deinit();
+        try @import("grid.zig").renderGrid();
+    }
+    {
+        // Full-width layer: the bar paints edge to edge and pads its own
+        // content by the cutout insets (footer.mobile_side_inset).
+        @import("footer.zig").mobile_side_inset = .{ .left = edges.left, .right = edges.right };
+        var controls = dvui.overlay(@src(), .{ .expand = .both, .margin = .{ .x = 0, .y = 0, .w = 0, .h = edges.bottom } });
         defer controls.deinit();
         @import("footer.zig").renderLiquidGlassOverlay();
         @import("footer.zig").renderStatsOverlay();

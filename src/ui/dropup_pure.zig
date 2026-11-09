@@ -54,6 +54,14 @@ pub fn contains(r: Rect, x: f32, y: f32) bool {
     return x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h;
 }
 
+/// An outside press (mouse left OR touch) dismisses the popover. `pointer` is
+/// dvui's Button.pointer(): true for left mouse and every touch finger.
+/// Regression: touch0 presses never closed the Playback options menu because
+/// the check required `.left`.
+pub fn dismissesOnPress(is_press: bool, pointer: bool, panel: Rect, x: f32, y: f32) bool {
+    return is_press and pointer and panel.w > 0 and panel.h > 0 and !contains(panel, x, y);
+}
+
 // ── Tests ──
 
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
@@ -122,4 +130,13 @@ test "contains: click-outside dismissal boundary" {
     try std.testing.expect(contains(r, 60, 45));
     try std.testing.expect(!contains(r, 9.9, 45));
     try std.testing.expect(!contains(r, 60, 70.1));
+}
+
+test "outside press (touch or mouse) dismisses; inside or empty panel does not" {
+    const panel: Rect = .{ .x = 100, .y = 100, .w = 200, .h = 200 };
+    try std.testing.expect(dismissesOnPress(true, true, panel, 10, 10));
+    try std.testing.expect(!dismissesOnPress(true, true, panel, 150, 150));
+    try std.testing.expect(!dismissesOnPress(false, true, panel, 10, 10));
+    try std.testing.expect(!dismissesOnPress(true, false, panel, 10, 10));
+    try std.testing.expect(!dismissesOnPress(true, true, .{ .x = 0, .y = 0, .w = 0, .h = 0 }, 10, 10));
 }

@@ -1920,3 +1920,42 @@ def test_torrent_read_ahead_uses_cached_timing():
     saved = source.split('fn captureCurrentPosition(', 1)[1].split('/// Check for and apply saved resume', 1)[0]
     assert 'mpv_get_property' not in saved, 'periodic history saves must read the observed snapshot'
     return 'pass', 'UI read-ahead and position snapshots consume cached playback events'
+
+@test("Mobile player: edge-to-edge video, compact full-width bar, popover outside-tap", "Player")
+def test_mobile_player_chrome():
+    ml = _src("src/ui/mobile_layout_pure.zig")
+    frame = _src("src/ui/ios_frame.zig")
+    footer = _src("src/ui/footer.zig")
+    dropup = _src("src/ui/dropup_pure.zig")
+    pickers = _src("src/ui/pickers.zig")
+    checks = {
+        "zero video insets decision is pure + used": ("fn playerVideoInsets" in ml and "playerVideoInsets(" in frame
+                                                     and "video_layer" in frame),
+        "chrome keeps safe insets": "playerChromeInsets" in frame,
+        "bar full width (no side margin on controls layer)": ".margin = .{ .x = 0, .y = 0, .w = 0, .h = edges.bottom }" in frame,
+        "compact bar gated on mobile": ("renderMobileBar" in footer and "platform_pure.zig\").mobile" in footer
+                                         and "if (!compact)" in footer),
+        "bar buttons use touch target constants": "BAR_ICON_PAD" in footer and "MIN_TOUCH" in ml,
+        "tap on video toggles chrome": "tapActivity" in frame and "fn tapActivity" in ml,
+        "popover dismisses on outside press incl. touch": ("dismissesOnPress" in dropup and "dismissesOnPress(" in pickers
+                                                          and "button.pointer()" in pickers),
+        "popover closes on Esc": "ke.code == .escape" in pickers,
+        "Android Back closes popover first": "pickerOpen()" in frame,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "mobile player chrome wired"
+
+
+@test("Mobile player chrome auto-hides: synthetic dvui position events are not activity", "Player")
+def test_mobile_autohide_ignores_position():
+    # On device (OnePlus 12): the bar never hid — dvui emits a .position mouse
+    # event every frame and the mobile frame counted it as user activity.
+    f = _src("src/ui/ios_frame.zig")
+    loop = f[f.index("for (dvui.events()) |event|"):]
+    loop = loop[:loop.index("tickPlayback()")]
+    skip = "if (me.action == .position or me.action == .focus) continue;"
+    if skip not in loop or loop.index(skip) > loop.index("last_mouse_move_ms"):
+        return "fail", "position/focus events still reset the idle timer"
+    return "pass", "only real input resets the chrome idle timer"

@@ -244,13 +244,13 @@ pub fn handleDropUpInput() void {
                 }
             },
             .mouse => |me| {
-                if (me.action == .press and me.button == .left and
-                    panel_rect.w > 0 and panel_rect.h > 0 and
-                    !dropup.contains(
-                        .{ .x = panel_rect.x, .y = panel_rect.y, .w = panel_rect.w, .h = panel_rect.h },
-                        me.p.x,
-                        me.p.y,
-                    ))
+                if (dropup.dismissesOnPress(
+                    me.action == .press,
+                    me.button.pointer(),
+                    .{ .x = panel_rect.x, .y = panel_rect.y, .w = panel_rect.w, .h = panel_rect.h },
+                    me.p.x,
+                    me.p.y,
+                ))
                 {
                     footer.closePickers();
                 }
