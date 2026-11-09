@@ -186,16 +186,46 @@ def build_torrent(ndk):
     shutil.copy2(ROOT / 'src/torrent_wrapper.h', PREFIX / 'include/torrent_wrapper.h') if (ROOT / 'src/torrent_wrapper.h').exists() else None
 
 
+MESON_MIN = (1, 11)
+MPV_OUTPUTS = ('include/mpv/client.h', 'lib/libmpv.so')
+
+
+def meson_version_ok(text):
+    """mpv-android's fontconfig requires meson >= 1.11 (Ubuntu 24.04 apt ships 1.3.2)."""
+    parts = text.strip().split('.')
+    try:
+        return tuple(int(p) for p in parts[:2]) >= MESON_MIN
+    except ValueError:
+        return False
+
+
+def missing_mpv_outputs(prefix):
+    return [rel for rel in MPV_OUTPUTS if not (Path(prefix) / rel).is_file()]
+
+
 def build_mpv(ndk):
+    # mpv-android fetches/uses its own pinned SDK+NDK under buildscripts/sdk (the NDK arg is unused).
     _, src = source('mpv-android')
     scripts = src / 'buildscripts'
-    env = dict(os.environ, ANDROID_NDK_ROOT=str(ndk), ANDROID_HOME=os.environ.get('ANDROID_HOME', ''))
-    run(['bash', 'download.sh'], cwd=scripts, env=env)
-    run(['bash', 'buildall.sh', '--arch', 'arm64', 'mpv'], cwd=scripts, env=env)
+    out = subprocess.run(['meson', '--version'], capture_output=True, text=True)
+    if out.returncode != 0 or not meson_version_ok(out.stdout):
+        raise SystemExit('meson >= %d.%d required (found %r); pip install meson' % (*MESON_MIN, out.stdout.strip()))
+    # IN_CI=1: skip sudo package installs and shallow-clone the pinned ffmpeg.
+    env = dict(os.environ, IN_CI='1')
+    env.pop('ANDROID_NDK_ROOT', None)
+    # `bash -e`: the scripts' shebang `-e` is ignored when invoked as `bash script`, which let
+    # failed dependency builds (fontconfig) be silently skipped.
+    run(['bash', '-e', 'download.sh'], cwd=scripts, env=env)
+    run(['bash', '-e', 'buildall.sh', '--arch', 'arm64', 'mpv'], cwd=scripts, env=env)
     built = scripts / 'prefix/arm64'
+    missing = missing_mpv_outputs(built)
+    if missing:
+        raise SystemExit('mpv-android build produced no ' + ', '.join(missing) + ' in ' + str(built))
     for sub in ('include', 'lib'):
-        if (built / sub).is_dir():
-            shutil.copytree(built / sub, PREFIX / sub, dirs_exist_ok=True, symlinks=True)
+        shutil.copytree(built / sub, PREFIX / sub, dirs_exist_ok=True, symlinks=True)
+    missing = missing_mpv_outputs(PREFIX)
+    if missing:
+        raise SystemExit('prefix is missing ' + ', '.join(missing) + ' after mpv copy')
 
 
 def install_jnilibs(ndk):

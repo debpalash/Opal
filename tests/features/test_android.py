@@ -156,6 +156,37 @@ def test_android_scripts_and_pins():
     return _fail(bad, "version_code, safe extraction and 64-hex pins verified")
 
 
+@test("Android mpv build: fail-fast bash -e, meson gate, post-build asserts (fontconfig regression)", "Android")
+def test_android_mpv_build_failfast():
+    bad = []
+    deps = _load("scripts/android-deps.py", "android_deps_mpv")
+    src = _src("scripts/android-deps.py")
+    body = src[src.index("def build_mpv"):src.index("def install_jnilibs")]
+    # REGRESSION: `bash script` ignores the shebang's -e, so a failed fontconfig build was skipped.
+    for s_ in ("download.sh", "buildall.sh"):
+        if "'bash', '-e', '%s'" % s_ not in body:
+            bad.append(s_ + " not run with bash -e")
+    if "check=True" not in src[src.index("def run("):src.index("def ndk_root")]:
+        bad.append("run() not check=True")
+    if not (deps.meson_version_ok("1.11.0") and deps.meson_version_ok("1.12.1")):
+        bad.append("meson >=1.11 rejected")
+    if deps.meson_version_ok("1.3.2") or deps.meson_version_ok("garbage"):
+        bad.append("old/garbage meson accepted")
+    with tempfile.TemporaryDirectory() as tmp:
+        if len(deps.missing_mpv_outputs(tmp)) != 2:
+            bad.append("empty prefix not flagged")
+        os.makedirs(os.path.join(tmp, "include/mpv"))
+        os.makedirs(os.path.join(tmp, "lib"))
+        open(os.path.join(tmp, "include/mpv/client.h"), "w").close()
+        open(os.path.join(tmp, "lib/libmpv.so"), "w").close()
+        if deps.missing_mpv_outputs(tmp):
+            bad.append("complete prefix flagged")
+    wf = _src(".github/workflows/android-apk.yml")
+    if "meson>=1.11" not in wf:
+        bad.append("workflow lacks meson>=1.11")
+    return _fail(bad, "bash -e, meson gate and mpv output assertions verified")
+
+
 @test("Android docs and README advertise the preview", "Android")
 def test_android_docs():
     readme = _src("README.md")
