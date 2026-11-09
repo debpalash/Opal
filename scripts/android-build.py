@@ -58,13 +58,13 @@ def write_assets():
             break
     else:
         raise SystemExit('No CA bundle found for cacert.pem')
-    manifest = ROOT / 'plugins-manifest.json'
-    for candidate in (manifest, ROOT / 'plugins/plugins-manifest.json', ROOT / 'assets/plugins-manifest.json'):
-        if candidate.exists():
-            shutil.copy2(candidate, assets / 'plugins-manifest.json')
-            break
-    else:
-        (assets / 'plugins-manifest.json').write_text('[]\n')
+    # The bundled source catalog (same file iOS ships). Without it onboarding has
+    # no starter sources and searches come back empty; a placeholder `[]` made the
+    # app log "Catalog refresh failed: bad manifest".
+    manifest = ROOT / 'data/plugins-manifest.json'
+    if not manifest.exists():
+        raise SystemExit('missing ' + str(manifest))
+    shutil.copy2(manifest, assets / 'plugins-manifest.json')
     icon = OUT / 'res/mipmap-xxxhdpi'
     icon.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / 'assets/opal_logo.png', icon / 'ic_launcher.png')

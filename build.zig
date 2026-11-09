@@ -3026,6 +3026,14 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_reliable_fetch_pure).step);
+    const test_http_std_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/http_std_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_http_std_pure).step);
     const test_resolver_dedup_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/services/resolver_dedup_pure.zig"), .target = target, .optimize = optimize }),
     });

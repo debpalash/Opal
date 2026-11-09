@@ -47,13 +47,16 @@ pub const Workspace = struct {
             result.active = true;
 
             // Do not rely on the process umask for the final POSIX mode.
+            // fchmod on an O_NOFOLLOW handle, not the path-based chmod: Zig lowers
+            // the no-follow path form to fchmodat2 (syscall 452), which Android's
+            // seccomp filter kills with SIGSYS.
             if (builtin.os.tag != .windows) {
-                std.Io.Dir.cwd().setFilePermissions(
-                    io.io(),
-                    dir_path,
-                    dirPermissions(),
-                    .{ .follow_symlinks = false },
-                ) catch |err| {
+                var dir = std.Io.Dir.openDirAbsolute(io.io(), dir_path, .{ .follow_symlinks = false }) catch |err| {
+                    result.cleanup();
+                    return err;
+                };
+                defer dir.close(io.io());
+                dir.setPermissions(io.io(), dirPermissions()) catch |err| {
                     result.cleanup();
                     return err;
                 };
