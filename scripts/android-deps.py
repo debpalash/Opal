@@ -250,12 +250,24 @@ def build_mpv(ndk):
         raise SystemExit('prefix is missing ' + ', '.join(missing) + ' after mpv copy')
 
 
+def pick_libcxx(ndk):
+    """libc++_shared.so to bundle. libmpv and its deps are built by mpv-android
+    with its own (newer) NDK and import symbols our NDK's libc++ lacks
+    (std::__from_chars_floating_point<float> from r30), so dlopen("libmpv.so")
+    failed on device. libc++ is backward compatible: ship the newest one, i.e.
+    mpv-android's when present."""
+    mpv_ndk = sorted(CACHE.glob('sources/mpv-android/*/buildscripts/sdk/*/toolchains/llvm/prebuilt/*/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so'))
+    if mpv_ndk:
+        return mpv_ndk[-1]
+    return toolchain_dir(ndk) / 'sysroot/usr/lib/aarch64-linux-android/libc++_shared.so'
+
+
 def install_jnilibs(ndk):
     dest = OUT / 'jniLibs/arm64-v8a'
     dest.mkdir(parents=True, exist_ok=True)
     for so in (PREFIX / 'lib').glob('*.so'):
         shutil.copy2(so, dest / so.name)
-    stl = toolchain_dir(ndk) / 'sysroot/usr/lib/aarch64-linux-android/libc++_shared.so'
+    stl = pick_libcxx(ndk)
     shutil.copy2(stl, dest / stl.name)
     # Keep the prefix self-contained so a CI artifact works with --deps-prefix.
     shutil.copy2(stl, PREFIX / 'lib' / stl.name)

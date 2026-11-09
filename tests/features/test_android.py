@@ -307,6 +307,23 @@ def test_android_release_signing():
     return ("fail", f"missing: {missing}") if missing else ("pass", "stable release key wired from secrets; debug fallback")
 
 
+@test("Android bundles the libc++ that libmpv was built with; every bundled lib is symbol-checked", "Android")
+def test_android_libcxx_matches_mpv():
+    # Regression (on device, OnePlus 12 / Android 16): dlopen("libmpv.so") failed with
+    # cannot locate symbol std::__from_chars_floating_point<float> — mpv-android builds
+    # with NDK r30, we bundled NDK 27's libc++_shared.so, and the CI check only looked
+    # at libmain.so.
+    deps = _src("scripts/android-deps.py")
+    build = _src("scripts/android-build.py")
+    checks = {
+        "libc++ chosen from mpv-android's NDK": "def pick_libcxx(ndk)" in deps and "stl = pick_libcxx(ndk)" in deps
+            and "sources/mpv-android/*/buildscripts/sdk/" in deps,
+        "every bundled .so is checked": "for lib in bundled:" in build and "bundled = sorted(jni.glob('*.so'))" in build,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    return ("fail", f"missing: {missing}") if missing else ("pass", "newest libc++ bundled; all bundled libs must resolve")
+
+
 @test("Android native compile gate (opt-in OPAL_ANDROID_CHECK=1)", "Android")
 def test_android_zig_check():
     if os.environ.get("OPAL_ANDROID_CHECK") != "1":

@@ -100,26 +100,32 @@ def unresolved_symbols(undefined, provided):
 
 
 def verify_libmain(ndk):
-    """Fail the build if libmain.so would not dlopen: every strong undefined
-    symbol must come from a bundled .so or the API-level NDK system libs."""
+    """Fail the build if any bundled library would not dlopen: every strong
+    undefined symbol of each bundled .so must come from another bundled .so or
+    the API-level NDK system libs. (Checking only libmain.so missed libmpv.so
+    needing a newer libc++ than the one bundled.)"""
     nm = ndk_bin(ndk) / 'llvm-nm'
     jni = OUT / 'jniLibs/arm64-v8a'
-    def syms(path, *flags):
-        out = subprocess.run([str(nm), '-D', *flags, str(path)], capture_output=True, text=True, check=True).stdout
-        return [line.split()[-1] for line in out.splitlines() if line.strip()]
-    undefined = [l for l in subprocess.run([str(nm), '-D', '-u', str(jni / 'libmain.so')], capture_output=True, text=True, check=True).stdout.splitlines() if l.strip().startswith('U ')]
-    undefined = [l.split()[-1] for l in undefined]
-    provided = []
+    def nm_lines(path, *flags):
+        return subprocess.run([str(nm), '-D', *flags, str(path)], capture_output=True, text=True, check=True).stdout.splitlines()
     sysroot_api = next((ndk / 'toolchains/llvm/prebuilt').glob('*/sysroot')) / 'usr/lib/aarch64-linux-android' / API
-    for lib in list(jni.glob('*.so')) + list(sysroot_api.glob('*.so')):
-        # Some NDK .so files (libc++.so) are linker scripts, not ELF.
-        if lib.name != 'libmain.so' and lib.open('rb').read(4) == b'\x7fELF':
-            provided += syms(lib, '--defined-only')
-    missing = unresolved_symbols(undefined, provided)
-    if missing:
-        raise SystemExit('libmain.so has unresolved symbols (dlopen would fail): ' + ', '.join(missing[:40]))
-    print(f'libmain.so: {len(undefined)} imports, all resolved', flush=True)
-
+    bundled = sorted(jni.glob('*.so'))
+    provided = []
+    # Some NDK .so files (libc++.so) are linker scripts, not ELF.
+    for lib in bundled + sorted(sysroot_api.glob('*.so')):
+        if lib.open('rb').read(4) == b'\x7fELF':
+            provided += [l.split()[-1] for l in nm_lines(lib, '--defined-only') if l.strip()]
+    failures = []
+    for lib in bundled:
+        undefined = [l.split()[-1] for l in nm_lines(lib, '-u') if l.strip().startswith('U ')]
+        missing = unresolved_symbols(undefined, provided)
+        if missing:
+            failures.append(f'{lib.name}: ' + ', '.join(missing[:20]))
+        elif lib.name == 'libmain.so':
+            print(f'libmain.so: {len(undefined)} imports, all resolved', flush=True)
+    if failures:
+        raise SystemExit('unresolved symbols (dlopen would fail):\n  ' + '\n  '.join(failures))
+    print(f'{len(bundled)} bundled libraries: all imports resolved', flush=True)
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
