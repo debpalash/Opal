@@ -342,6 +342,44 @@ def test_android_sdl_version_gate():
     return ("fail", f"missing: {missing}") if missing else ("pass", "SDL Java/C version mismatch fails the build")
 
 
+@test("No path-based chmod (fchmodat2 is seccomp-killed on Android)", "Android")
+def test_android_no_fchmodat2():
+    # Regression (OnePlus 12, Android 16): SIGSYS "seccomp prevented call to
+    # disallowed arm64 system call 452" in secure_temp.Workspace.create — Zig lowers
+    # Dir.setFilePermissions(.., .{ .follow_symlinks = false }) to fchmodat2.
+    hits = []
+    for root, _, files in os.walk(os.path.join(PROJECT_DIR, "src")):
+        for f in files:
+            if f.endswith(".zig"):
+                path = os.path.join(root, f)
+                if "setFilePermissions(" in open(path, encoding="utf-8", errors="replace").read():
+                    hits.append(os.path.relpath(path, PROJECT_DIR))
+    st = _src("src/core/secure_temp.zig")
+    if hits:
+        return "fail", f"path-based chmod in: {hits}"
+    if "dir.setPermissions(io.io(), dirPermissions())" not in st:
+        return "fail", "secure_temp no longer fchmods the opened workspace dir"
+    return "pass", "permissions set via fchmod on an opened handle only"
+
+
+@test("Android APK bundles the real source catalog (data/plugins-manifest.json)", "Android")
+def test_android_bundles_plugin_manifest():
+    # Regression (on device): the build looked in the wrong places, shipped `[]`,
+    # and the app logged "Catalog refresh failed: bad manifest".
+    b = _src("scripts/android-build.py")
+    ios = _src("scripts/ios-device.py")
+    m = json.loads(_src("data/plugins-manifest.json"))
+    checks = {
+        "copies data/plugins-manifest.json": "ROOT / 'data/plugins-manifest.json'" in b,
+        "no empty-list placeholder": "write_text('[]" not in b,
+        "missing manifest fails the build": "raise SystemExit('missing ' + str(manifest))" in b,
+        "same file iOS bundles": "plugins-manifest.json" in ios,
+        "catalog is an object": isinstance(m, dict),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    return ("fail", f"missing: {missing}") if missing else ("pass", "APK ships the real source catalog")
+
+
 @test("Android native compile gate (opt-in OPAL_ANDROID_CHECK=1)", "Android")
 def test_android_zig_check():
     if os.environ.get("OPAL_ANDROID_CHECK") != "1":
@@ -350,3 +388,31 @@ def test_android_zig_check():
     r = subprocess.run(["zig", "build", "--build-file", "build-android.zig", "check", "-Dndk=" + ndk, "-fsys=sdl3"],
                        cwd=PROJECT_DIR, capture_output=True, text=True, timeout=900)
     return ("pass", "check ok") if r.returncode == 0 else ("fail", r.stderr[-400:])
+
+
+@test("Android reliable_fetch routes every curl-spawn entry point to the std.http backend", "Android")
+def test_android_reliable_fetch_no_curl():
+    # REGRESSION: "Android has no curl binary" - every TMDB/Cinemeta/catalog
+    # fetch failed because request/download/stream spawned curl.
+    rf = _src("src/services/reliable_fetch.zig")
+    std_be = _src("src/core/http_std.zig")
+    if not (rf and std_be):
+        return "fail", "missing reliable_fetch.zig / http_std.zig"
+    gate = 'comptime @import("builtin").abi.isAndroid()) return @import("../core/http_std.zig").'
+    bad = []
+    for fn, call in (("pub fn request(", "request("), ("pub fn download(", "download("), ("pub fn stream(", "stream(")):
+        i = rf.find(fn)
+        if i < 0:
+            bad.append(fn + " missing")
+            continue
+        body = rf[i:]
+        spawn = body.find("bounded.StreamProcess.init")
+        g = body.find(gate + call)
+        if g < 0 or (spawn >= 0 and g > spawn):
+            bad.append(fn + " not routed to http_std before spawning curl")
+    for sym in ("pub fn request(", "pub fn download(", "pub fn stream("):
+        if sym not in std_be:
+            bad.append("http_std lacks " + sym)
+    if "std.process.Child" in std_be or "bounded_process" in std_be:
+        bad.append("http_std spawns a process")
+    return _fail(bad, "request/download/stream route Android to http_std (no curl)")

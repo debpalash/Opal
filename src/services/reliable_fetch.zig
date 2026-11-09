@@ -155,6 +155,7 @@ const write_out = "\\n" ++ meta_marker ++ "%{http_code}:%{time_total}";
 /// them and remain valid until the next caller mutation.
 pub fn request(url: []const u8, body_out: []u8, headers_out: []u8, opts: Opts) FetchResult {
     if (comptime @import("builtin").os.tag == .ios) return @import("../core/http_apple.zig").request(url, body_out, headers_out, opts);
+    if (comptime @import("builtin").abi.isAndroid()) return @import("../core/http_std.zig").request(url, body_out, headers_out, opts);
     if (@import("../core/workers.zig").isQuitting()) return .{ .failure = .cancelled };
     if (url.len == 0 or body_out.len == 0) return .{ .failure = .invalid_input };
     detect();
@@ -321,6 +322,7 @@ pub const DownloadResult = struct {
 /// `opts.timeout_secs` bounds the whole transfer (set it high for big files).
 pub fn download(url: []const u8, dest_path: []const u8, opts: Opts) DownloadResult {
     if (comptime @import("builtin").os.tag == .ios) return @import("../core/http_apple.zig").download(url, dest_path, opts);
+    if (comptime @import("builtin").abi.isAndroid()) return @import("../core/http_std.zig").download(url, dest_path, opts);
     if (@import("../core/workers.zig").isQuitting()) return .{ .failure = .cancelled };
     var tmp_buf: [1100]u8 = undefined;
     if (url.len == 0) return .{ .failure = .invalid_input };
@@ -426,6 +428,7 @@ pub const StreamResult = struct {
 /// `opts.max_line_bytes`. Secrets go through secret_headers / secret_post_body
 /// exactly as for request().
 pub fn stream(url: []const u8, opts: Opts, ctx: anytype, comptime onLine: fn (@TypeOf(ctx), []const u8) bool) StreamResult {
+    if (comptime @import("builtin").abi.isAndroid()) return @import("../core/http_std.zig").stream(url, opts, ctx, onLine);
     const workers = @import("../core/workers.zig");
     if (workers.isQuitting()) return .{ .failure = .cancelled };
     if (url.len == 0 or opts.max_line_bytes == 0) return .{ .failure = .invalid_input };
