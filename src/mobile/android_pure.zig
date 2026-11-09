@@ -27,6 +27,39 @@ pub fn externalUrl(raw: []const u8) ?[]const u8 {
     return value;
 }
 
+/// Set by the SDL key watch when Android's Back key (SDLK_AC_BACK) goes down;
+/// consumed once per frame by the shared shell.
+pub var back_pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+pub const BackAction = enum { leave_player, go_back, background };
+
+/// Back leaves the player first, then pops navigation history; at the root
+/// the app goes to the background instead of closing.
+pub fn backAction(in_player: bool, can_go_back: bool) BackAction {
+    if (in_player) return .leave_player;
+    if (can_go_back) return .go_back;
+    return .background;
+}
+
+/// The transfer foreground service is wanted while anything is moving or queued.
+pub fn hasActiveTransfers(live_unpaused_torrents: usize, http_active: usize, http_queued: usize) bool {
+    return live_unpaused_torrents + http_active + http_queued > 0;
+}
+
+test "backAction: player, history, then background" {
+    try std.testing.expectEqual(BackAction.leave_player, backAction(true, true));
+    try std.testing.expectEqual(BackAction.leave_player, backAction(true, false));
+    try std.testing.expectEqual(BackAction.go_back, backAction(false, true));
+    try std.testing.expectEqual(BackAction.background, backAction(false, false));
+}
+
+test "hasActiveTransfers counts torrents, active and queued http" {
+    try std.testing.expect(!hasActiveTransfers(0, 0, 0));
+    try std.testing.expect(hasActiveTransfers(1, 0, 0));
+    try std.testing.expect(hasActiveTransfers(0, 1, 0));
+    try std.testing.expect(hasActiveTransfers(0, 0, 2));
+}
+
 test "toLogical scales physical pixels and clamps bad input" {
     const r = toLogical(.{ .top = 100, .bottom = 50, .left = 0, .right = 20 }, 400, 540, 1080);
     try std.testing.expectEqual(@as(f32, 50), r.insets.top);

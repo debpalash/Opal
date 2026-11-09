@@ -1,6 +1,8 @@
 package com.debpalash.opal;
 
+import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Insets;
 import android.net.Uri;
@@ -26,6 +28,11 @@ public class OpalActivity extends SDLActivity {
 
     static native void nativeSetInsets(float top, float bottom, float left, float right, float ime);
     static native boolean nativeOpenMedia(String pathOrUrl);
+    static native boolean nativeHasActiveTransfers();
+
+    private static final int REQUEST_NOTIFICATIONS = 0x0a12;
+    private boolean serviceRunning;
+    private boolean askedNotifications;
 
     @Override
     protected String[] getLibraries() {
@@ -71,6 +78,48 @@ public class OpalActivity extends SDLActivity {
         });
         decor.requestApplyInsets();
         handleIntent(getIntent());
+    }
+
+    /** Keep downloads/streams alive in the background via a foreground service. */
+    @Override
+    protected void onPause() {
+        super.onPause();
+        boolean active = false;
+        try {
+            active = nativeHasActiveTransfers();
+        } catch (UnsatisfiedLinkError ignored) {
+        }
+        if (active) {
+            requestNotificationPermissionOnce();
+            try {
+                Intent svc = new Intent(this, OpalTorrentService.class);
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(svc); else startService(svc);
+                serviceRunning = true;
+            } catch (RuntimeException ignored) {
+            }
+        } else {
+            stopTransferService();
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        stopTransferService();
+    }
+
+    private void stopTransferService() {
+        if (!serviceRunning) return;
+        serviceRunning = false;
+        stopService(new Intent(this, OpalTorrentService.class));
+    }
+
+    /** Asked once, the first time a transfer needs the ongoing notification (API 33+). */
+    private void requestNotificationPermissionOnce() {
+        if (Build.VERSION.SDK_INT < 33 || askedNotifications) return;
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return;
+        askedNotifications = true;
+        requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, REQUEST_NOTIFICATIONS);
     }
 
     @Override

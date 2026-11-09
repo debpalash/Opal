@@ -17,6 +17,7 @@
 extern bool opal_android_open_media(const char *path_or_url);
 extern bool opal_android_valid_media_url(const char *raw);
 extern bool opal_android_player_probe(double *time, bool *video);
+extern bool opal_android_active_transfers(void);
 
 #define LOG_TAG "Opal"
 
@@ -65,6 +66,13 @@ JNIEXPORT void JNICALL Java_com_debpalash_opal_OpalActivity_nativeSetInsets(
     wake_ui();
 }
 
+JNIEXPORT jboolean JNICALL Java_com_debpalash_opal_OpalActivity_nativeHasActiveTransfers(
+    JNIEnv *env, jclass cls) {
+    (void)env;
+    (void)cls;
+    return opal_android_active_transfers() ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jboolean JNICALL Java_com_debpalash_opal_OpalActivity_nativeOpenMedia(
     JNIEnv *env, jclass cls, jstring location) {
     (void)cls;
@@ -103,7 +111,7 @@ void opal_android_prepare_environment(void) {
         mkdir_p(downloads);
     }
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "Portrait LandscapeLeft LandscapeRight PortraitUpsideDown");
-    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "0");
+    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
 
     snprintf(g_resource_dir, sizeof(g_resource_dir), "%s/resources", internal);
     mkdir_p(g_resource_dir);
@@ -137,6 +145,21 @@ void opal_android_pick_file(void) {
     jclass cls = (*env)->GetObjectClass(env, activity);
     jmethodID method = cls ? (*env)->GetMethodID(env, cls, "pickFile", "()V") : NULL;
     if (method) (*env)->CallVoidMethod(env, activity, method);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+    }
+    if (cls) (*env)->DeleteLocalRef(env, cls);
+    (*env)->DeleteLocalRef(env, activity);
+}
+
+void opal_android_move_task_to_back(void) {
+    JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
+    jobject activity = (jobject)SDL_GetAndroidActivity();
+    if (!env || !activity) return;
+    jclass cls = (*env)->GetObjectClass(env, activity);
+    jmethodID method = cls ? (*env)->GetMethodID(env, cls, "moveTaskToBack", "(Z)Z") : NULL;
+    if (method) (*env)->CallBooleanMethod(env, activity, method, JNI_TRUE);
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionDescribe(env);
         (*env)->ExceptionClear(env);

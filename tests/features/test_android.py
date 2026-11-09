@@ -255,6 +255,39 @@ def test_android_merge_tree_cached_prefix():
     return ("pass", "re-merging over a cached prefix keeps symlinks") if ok else ("fail", "symlink not preserved")
 
 
+@test("Android Back trap, background service, notification permission, CI SDK cache", "Android")
+def test_android_back_and_background():
+    bad = []
+    c = _src("mobile/android/jni/opal_android.c") or ""
+    java = _src("mobile/android/app/src/main/java/com/debpalash/opal/OpalActivity.java") or ""
+    svc = _src("mobile/android/app/src/main/java/com/debpalash/opal/OpalTorrentService.java") or ""
+    man = _src("mobile/android/app/src/main/AndroidManifest.xml") or ""
+    zig = _src("src/android.zig") or ""
+    wf = _src(".github/workflows/android-apk.yml") or ""
+    if not re.search(r'SDL_HINT_ANDROID_TRAP_BACK_BUTTON,\s*"1"', c):
+        bad.append("back button not trapped")
+    if not re.search(r"^[^\n;]*opal_android_move_task_to_back\s*\([^;]*\)\s*\{", c, re.M) or "moveTaskToBack" not in c:
+        bad.append("C lacks move_task_to_back")
+    if "SDLK_AC_BACK" not in zig:
+        bad.append("android.zig ignores SDLK_AC_BACK")
+    if not re.search(r"native\s+boolean\s+nativeHasActiveTransfers\s*\(", java) or "Java_com_debpalash_opal_OpalActivity_nativeHasActiveTransfers" not in c:
+        bad.append("nativeHasActiveTransfers Java/C mismatch")
+    if not re.search(r"export\s+fn\s+opal_android_active_transfers", zig) or "opal_android_active_transfers()" not in c:
+        bad.append("active_transfers Zig export/C call missing")
+    for perm in ("FOREGROUND_SERVICE", "FOREGROUND_SERVICE_DATA_SYNC", "POST_NOTIFICATIONS", "WAKE_LOCK"):
+        if 'android.permission.%s"' % perm not in man:
+            bad.append("manifest lacks " + perm)
+    if not re.search(r'<service[^>]*\.OpalTorrentService[^>]*foregroundServiceType="dataSync"', man, re.S):
+        bad.append("service decl missing dataSync")
+    if "extends Service" not in svc or "PARTIAL_WAKE_LOCK" not in svc or "Opal is transferring" not in svc or '"Transfers"' not in svc:
+        bad.append("service lacks wake lock/notification/channel")
+    if "onPause" not in java or "onResume" not in java or "POST_NOTIFICATIONS" not in java:
+        bad.append("activity lifecycle/permission wiring missing")
+    if "android-mpv-sdk-" not in wf or "buildscripts/sdk" not in wf or "steps.mpvpin.outputs.pin" not in wf or "android-native-${{ hashFiles" not in wf:
+        bad.append("workflow SDK cache / prefix cache missing")
+    return _fail(bad, "Back, background service, permissions, CI cache wired")
+
+
 @test("Android native compile gate (opt-in OPAL_ANDROID_CHECK=1)", "Android")
 def test_android_zig_check():
     if os.environ.get("OPAL_ANDROID_CHECK") != "1":

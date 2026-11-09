@@ -14,6 +14,15 @@ Android-only pieces:
   routed into the desktop universal open (`browser.loadContent`)
 - bionic DNS resolution (`getaddrinfo`) for `std.http`
 - config/session save when the app goes to the background
+- Back button: trapped (not closing the app). It leaves the player, then pops
+  navigation history; at the home root the app moves to the background.
+- Background transfers: when torrents or HTTP downloads are active as the app
+  is paused, `OpalTorrentService` (foreground service, `dataSync`, partial
+  wake lock) shows an ongoing low-importance "Opal is transferring"
+  notification in the "Transfers" channel. It stops on resume or when nothing
+  is active. `POST_NOTIFICATIONS` is requested once (API 33+) the first time a
+  transfer is backgrounded; if denied, the service still runs without a
+  visible notification entry.
 - libmpv from the pinned mpv-android build scripts, libtorrent from source
 
 Compiled out on mobile: managed helper processes (yt-dlp bootstrap, Python
@@ -59,3 +68,12 @@ Other flags: `--skip-zig`, `--stub-libs` (empty libs, packaging check only),
 - `OPAL_ANDROID_UI_READY` in the log marks the first rendered frame.
 - No network content: check that `cacert.pem` was extracted to the app's
   `resources` directory on launch.
+
+## CI build cache
+
+mpv-android's build script downloads its own SDK and NDK (NDK r30) under
+`sources/mpv-android/<pin>/buildscripts/sdk`. That download dominates a cold
+first build (many minutes), so CI caches it separately, keyed only on the
+mpv-android pin in `mobile/android/dependencies.json`; edits to
+`scripts/android-deps.py` do not invalidate it. The prefix cache
+(`.zig-cache/android-native`) is kept as well.

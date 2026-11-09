@@ -12,6 +12,7 @@ extern fn opal_android_resource_dir() [*:0]const u8;
 extern fn opal_android_safe_area(top: *f32, bottom: *f32, left: *f32, right: *f32, keyboard: *f32) void;
 extern fn opal_android_ready() void;
 extern fn opal_android_pick_file() void;
+extern fn opal_android_move_task_to_back() void;
 
 /// No UI walkthrough hook exists on Android.
 pub const ui_test_supported = !android;
@@ -27,6 +28,15 @@ pub fn uiTest() bool {
 }
 pub fn pickFile() void {
     if (comptime android) opal_android_pick_file();
+}
+
+/// Android Back key: consume the pending press (always false elsewhere).
+pub fn takeBack() bool {
+    if (comptime !android) return false;
+    return @import("android_pure.zig").back_pending.swap(false, .acq_rel);
+}
+pub fn moveTaskToBack() void {
+    if (comptime android) opal_android_move_task_to_back();
 }
 
 /// Safe area in dvui logical units, plus the on-screen keyboard height.

@@ -55,6 +55,24 @@ export fn opal_android_player_probe(time: *f64, video: *bool) callconv(.c) bool 
     return p.last_seen_pos >= 1 and p.texture != null;
 }
 
+/// Polled from Java (onPause/onResume): true while a torrent is live and
+/// unpaused or an HTTP download is active/queued. Both sources lock internally.
+export fn opal_android_active_transfers() callconv(.c) bool {
+    const state = @import("core/state.zig");
+    const c = @import("core/c.zig");
+    var live: usize = 0;
+    const ses = state.torrentSession();
+    if (ses != null) {
+        const n = c.mpv.torrent_count(ses);
+        var id: c_int = 0;
+        while (id < n) : (id += 1) {
+            if (c.mpv.torrent_is_alive(ses, id) != 0 and c.mpv.torrent_is_paused(ses, id) == 0) live += 1;
+        }
+    }
+    const agg = @import("services/download_engine.zig").activeAndQueued();
+    return @import("mobile/android_pure.zig").hasActiveTransfers(live, agg.active, agg.queued);
+}
+
 extern "c" var environ: ?[*:null]?[*:0]u8;
 
 fn runDvuiMain(argc: c_int, argv: [*][*:0]u8) !u8 {
@@ -106,6 +124,10 @@ const sdl = @import("core/c.zig").sdl;
 fn lifecycleWatch(_: ?*anyopaque, event: [*c]sdl.SDL_Event) callconv(.c) bool {
     switch (event.*.type) {
         sdl.SDL_EVENT_WILL_ENTER_BACKGROUND, sdl.SDL_EVENT_TERMINATING => persist(),
+        sdl.SDL_EVENT_KEY_DOWN => if (event.*.key.key == sdl.SDLK_AC_BACK and !event.*.key.repeat) {
+            @import("mobile/android_pure.zig").back_pending.store(true, .release);
+            @import("core/state.zig").wakeUi();
+        },
         else => {},
     }
     return true;

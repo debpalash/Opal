@@ -42,6 +42,7 @@ pub fn frame() !dvui.App.Result {
     @import("../app_services.zig").tickPlayback();
     if (comptime host.ui_test_supported) if (host.uiTest()) @import("ios_uitest.zig").tick();
     @import("../core/config.zig").saveIfDirty();
+    if (host.takeBack()) handleBack();
 
     var safe: layout.Insets = .{};
     var keyboard: f32 = 0;
@@ -83,6 +84,16 @@ pub fn frame() !dvui.App.Result {
 /// UIKit picker/link callbacks only publish a bounded path. The owner frame
 /// runs the same universal open as a desktop drop (files, URLs, magnets,
 /// .torrent, comics, playlists); it creates the player on demand.
+/// Android Back: same navigation as the on-screen back button, else background.
+fn handleBack() void {
+    const r = &state.app.router;
+    switch (@import("../mobile/android_pure.zig").backAction(r.current == .player, r.canGoBack())) {
+        .leave_player => r.leavePlayer(),
+        .go_back => r.goBack(),
+        .background => host.moveTaskToBack(),
+    }
+}
+
 fn drainOpenRequest() void {
     var buf: [2048]u8 = undefined;
     var len: usize = 0;

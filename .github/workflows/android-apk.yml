@@ -65,6 +65,17 @@ jobs:
           # mpv-android's fontconfig needs meson >= 1.11; apt's is 1.3.2.
           python3 -m venv "$HOME/meson-venv" && "$HOME/meson-venv/bin/pip" install 'meson>=1.11'
           echo "$HOME/meson-venv/bin" >> "$GITHUB_PATH"
+      # mpv-android downloads its own SDK/NDK (~GBs); key on its pin only so
+      # android-deps.py edits do not re-download it.
+      - name: mpv-android pin
+        id: mpvpin
+        run: |
+          pin=$(python3 -c "import json;print([s['version'] for s in json.load(open('mobile/android/dependencies.json'))['sources'] if s['name']=='mpv-android'][0])")
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: .zig-cache/android-native/sources/mpv-android/*/buildscripts/sdk
+          key: android-mpv-sdk-${{ steps.mpvpin.outputs.pin }}
       - uses: actions/cache@v4
         with:
           path: .zig-cache/android-native
