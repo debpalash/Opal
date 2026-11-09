@@ -203,6 +203,28 @@ def missing_mpv_outputs(prefix):
     return [rel for rel in MPV_OUTPUTS if not (Path(prefix) / rel).is_file()]
 
 
+def merge_tree(src, dst):
+    """Copy src into dst, replacing existing files and symlinks. A cached prefix
+    already holds mpv-android's symlinks (liblinebreak.a -> libunibreak.a);
+    copytree(dirs_exist_ok=True, symlinks=True) raises FileExistsError on them."""
+    src, dst = Path(src), Path(dst)
+    for path in sorted(src.rglob('*')):
+        target = dst / path.relative_to(src)
+        if path.is_dir() and not path.is_symlink():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_symlink() or target.exists():
+            if target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        if path.is_symlink():
+            os.symlink(os.readlink(path), target)
+        else:
+            shutil.copy2(path, target)
+
+
 def build_mpv(ndk):
     # mpv-android fetches/uses its own pinned SDK+NDK under buildscripts/sdk (the NDK arg is unused).
     _, src = source('mpv-android')
@@ -222,7 +244,7 @@ def build_mpv(ndk):
     if missing:
         raise SystemExit('mpv-android build produced no ' + ', '.join(missing) + ' in ' + str(built))
     for sub in ('include', 'lib'):
-        shutil.copytree(built / sub, PREFIX / sub, dirs_exist_ok=True, symlinks=True)
+        merge_tree(built / sub, PREFIX / sub)
     missing = missing_mpv_outputs(PREFIX)
     if missing:
         raise SystemExit('prefix is missing ' + ', '.join(missing) + ' after mpv copy')
@@ -238,7 +260,7 @@ def install_jnilibs(ndk):
     # Keep the prefix self-contained so a CI artifact works with --deps-prefix.
     shutil.copy2(stl, PREFIX / 'lib' / stl.name)
     if (OUT / 'sdl-java').is_dir():
-        shutil.copytree(OUT / 'sdl-java', PREFIX / 'sdl-java', dirs_exist_ok=True)
+        merge_tree(OUT / 'sdl-java', PREFIX / 'sdl-java')
 
 
 def prepare():

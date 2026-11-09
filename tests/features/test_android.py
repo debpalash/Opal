@@ -234,6 +234,27 @@ def test_android_libmain_resolves():
     return ("fail", f"missing: {missing}") if missing else ("pass", "libunwind linked; unresolved imports fail the build")
 
 
+@test("Android deps merge into a cached prefix with existing symlinks", "Android")
+def test_android_merge_tree_cached_prefix():
+    # Regression: a cache-restored prefix already held liblinebreak.a -> libunibreak.a;
+    # copytree(symlinks=True, dirs_exist_ok=True) raised FileExistsError.
+    spec = importlib.util.spec_from_file_location("android_deps", os.path.join(PROJECT_DIR, "scripts/android-deps.py"))
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    with tempfile.TemporaryDirectory() as d:
+        src, dst = os.path.join(d, "src"), os.path.join(d, "dst")
+        os.makedirs(os.path.join(src, "lib"))
+        open(os.path.join(src, "lib", "libunibreak.a"), "w").write("v2")
+        os.symlink("libunibreak.a", os.path.join(src, "lib", "liblinebreak.a"))
+        mod.merge_tree(src, dst)
+        try:
+            mod.merge_tree(src, dst)
+        except FileExistsError as e:
+            return "fail", f"second merge raised: {e}"
+        link = os.path.join(dst, "lib", "liblinebreak.a")
+        ok = os.path.islink(link) and os.readlink(link) == "libunibreak.a" and open(link).read() == "v2"
+    return ("pass", "re-merging over a cached prefix keeps symlinks") if ok else ("fail", "symlink not preserved")
+
+
 @test("Android native compile gate (opt-in OPAL_ANDROID_CHECK=1)", "Android")
 def test_android_zig_check():
     if os.environ.get("OPAL_ANDROID_CHECK") != "1":
