@@ -49,9 +49,12 @@ pub const Workspace = struct {
             // Do not rely on the process umask for the final POSIX mode.
             // fchmod on an O_NOFOLLOW handle, not the path-based chmod: Zig lowers
             // the no-follow path form to fchmodat2 (syscall 452), which Android's
-            // seccomp filter kills with SIGSYS.
+            // seccomp filter kills with SIGSYS. `.iterate = true` is required:
+            // without it Zig opens the directory O_PATH on Linux/Android, and
+            // fchmod on an O_PATH descriptor fails with EBADF (a panic in Debug,
+            // a silently failed workspace in release builds).
             if (builtin.os.tag != .windows) {
-                var dir = std.Io.Dir.openDirAbsolute(io.io(), dir_path, .{ .follow_symlinks = false }) catch |err| {
+                var dir = std.Io.Dir.openDirAbsolute(io.io(), dir_path, .{ .follow_symlinks = false, .iterate = true }) catch |err| {
                     result.cleanup();
                     return err;
                 };
@@ -146,6 +149,8 @@ fn filePermissions() std.Io.File.Permissions {
         std.Io.File.Permissions.fromMode(0o600);
 }
 
+// Regression (v0.9.5 CI): on Linux this crashed with EBADF when the dir was
+// opened O_PATH before fchmod; Linux CI runs it.
 test "workspace is random, private, exclusive, and cleaned" {
     var first = try Workspace.create("unit");
     defer first.cleanup();
