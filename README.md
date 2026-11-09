@@ -4,11 +4,13 @@
 
 # Opal
 
-### The open-source Netflix, Plex & Jellyfin alternative — in one native binary.
+### The Open-source Netflix, Spotify, Crunchyroll, Plex/Jellyfin alternative — in one native binary.
 
-Web browser · Torrent streamer · Movie & TV hub · Anime player · YouTube client · Live TV<br>
+#### Movies, shows, comics, manga, TV, torrents, streaming, music, podcasts, radio, wallpapers and local ai
+
+`Web browser · Torrent streamer · Movie & TV hub · Anime player · YouTube client · Live TV<br>
 Manga & comic reader · Jellyfin & Plex client · Casting · Watch parties · Subtitles · Translation<br>
-Downloads · RSS · Plugins · Local AI · Voice control · Agent automation
+Downloads · RSS · Plugins · Local AI · Voice control · Agent `
 
 [![Latest release](https://img.shields.io/github/v/release/debpalash/Opal?label=release&color=8b5cf6)](https://github.com/debpalash/Opal/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/debpalash/Opal/total?color=8b5cf6)](https://github.com/debpalash/Opal/releases)
