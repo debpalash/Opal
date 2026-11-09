@@ -139,7 +139,7 @@ int torrent_range_ready(TorrentSession session, int torrent_id, int file_idx, lo
 // libtorrent fetches it from the FASTEST peers. Batched in one call on purpose:
 // the first deadline cancels outstanding non-critical requests, so dripping them
 // in one at a time from Zig would thrash the request pipeline.
-void torrent_prioritize_range(TorrentSession session, int torrent_id, int file_idx, long long offset, long long len, int deadline_ms);
+void torrent_prioritize_range(TorrentSession session, int torrent_id, int file_idx, long long offset, long long len, int deadline_ms, int step_ms);
 
 // Percent (0-100) of [offset, offset+len) that is downloaded. Drives a real
 // buffering bar, instead of the whole-torrent progress that says 11% while the

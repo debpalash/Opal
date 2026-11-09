@@ -1126,6 +1126,24 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "audio-file-auto", "fuzzy");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "sub-auto", "fuzzy");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "sub-font-size", "40");
+        // Android: libass is built with fontconfig, which has no config or font
+        // dirs there, so every OSD/subtitle render failed ("Failed rendering
+        // OSD" each frame, no subtitles). Use the bundled Noto Sans the host
+        // extracts to <resources>/fonts and skip the font provider.
+        if (comptime @import("builtin").abi.isAndroid()) {
+            if (state.resourceRoot()) |root| {
+                var fonts_buf: [1100]u8 = undefined;
+                if (std.fmt.bufPrint(fonts_buf[0 .. fonts_buf.len - 1], "{s}/fonts", .{root})) |fonts| {
+                    fonts_buf[fonts.len] = 0;
+                    const dir: [*:0]const u8 = @ptrCast(&fonts_buf);
+                    _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "sub-fonts-dir", dir);
+                    _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "osd-fonts-dir", dir);
+                    _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "sub-font-provider", "none");
+                    _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "sub-font", "Noto Sans");
+                    _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "osd-font", "Noto Sans");
+                } else |_| {}
+            }
+        }
         // Opal owns resume identity and persistence. mpv watch-later state is a
         // second filename-keyed authority and adds avoidable disk work.
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "save-position-on-quit", "no");

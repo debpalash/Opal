@@ -107,7 +107,7 @@ def test_android_release_workflow():
         "PR builds never upload": "if: env.OPAL_RELEASE_TAG != ''" in apk,
         "NDK pinned": "27.1.12297006" in apk,
         "native prefix artifact": "android-native-prefix" in apk,
-        "cache keyed on pins": "hashFiles('mobile/android/dependencies.json', 'scripts/android-deps.py')" in apk,
+        "cache keyed on pins": "hashFiles('mobile/android/dependencies.json', 'scripts/android-deps.py'" in apk,
     }
     bad = [k for k, ok in checks.items() if not ok]
     return _fail(bad, "APK built post-publish, attached, and checksummed")
@@ -417,6 +417,31 @@ def test_android_fullscreen_and_hwdec():
     }
     missing = [k for k, v in checks.items() if not v]
     return ("fail", f"missing: {missing}") if missing else ("pass", "bars hidden by SDL fullscreen; Android decodes via mediacodec-copy")
+
+
+@test("Android ships subtitle/OSD fonts for libass", "Android")
+def test_android_libass_fonts():
+    # On device: "osd: Failed rendering OSD." every frame and no subtitles —
+    # fontconfig has no fonts on Android.
+    b = _src("scripts/android-build.py"); c = _src("mobile/android/jni/opal_android.c"); p = _src("src/player/player.zig")
+    checks = {
+        "APK bundles the fonts": "NotoSans-Regular.ttf" in b and "assets / 'fonts'" in b,
+        "host extracts them": 'extract_asset("fonts/NotoSans-Regular.ttf", g_resource_dir)' in c,
+        "mpv uses the dir, not fontconfig": '"sub-fonts-dir"' in p and '"osd-fonts-dir"' in p and '"sub-font-provider", "none"' in p,
+        "fonts exist": all(os.path.exists(os.path.join(PROJECT_DIR, "src/assets/fonts", f)) for f in ("NotoSans-Regular.ttf", "NotoSans-Bold.ttf")),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    return ("fail", f"missing: {missing}") if missing else ("pass", "libass gets bundled Noto Sans on Android")
+
+
+@test("Android native cache rebuilds when the torrent wrapper changes", "Android")
+def test_android_cache_key_covers_wrapper():
+    # libopal_torrent.a lives in the cached prefix; a key without the wrapper
+    # sources would ship a stale wrapper (e.g. the new prioritize_range step_ms).
+    apk = _src(".github/workflows/android-apk.yml")
+    key = [l for l in apk.splitlines() if "key: android-native-" in l]
+    ok = key and all(f in key[0] for f in ("src/torrent_wrapper.cpp", "src/torrent_wrapper.h", "scripts/android-deps.py"))
+    return ("pass", "prefix cache keyed on the wrapper sources") if ok else ("fail", f"cache key: {key}")
 
 
 @test("Android native compile gate (opt-in OPAL_ANDROID_CHECK=1)", "Android")
