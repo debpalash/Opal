@@ -96,6 +96,8 @@ def test_android_release_workflow():
     apk = _src(".github/workflows/android-apk.yml")
     checks = {
         "release calls the APK workflow": "uses: ./.github/workflows/android-apk.yml" in release,
+        # setup-android@v3 defaults to the removed legacy `tools` package (sdkmanager exit 1).
+        "SDK setup skips the legacy tools package": "android-actions/setup-android@v3\n        with:\n" in apk and "packages: ''" in apk,
         "android job waits for publish and ios": "needs: [publish, ios]" in release,
         "android job guards on publish success": "needs.publish.result == 'success'" in release,
         "APK built by the tested packager": "scripts/android-build.py --apk" in apk,

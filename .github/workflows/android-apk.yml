@@ -51,8 +51,11 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@v3
+        with:
+          # The default 'tools' package no longer exists; install what we need below.
+          packages: ''
       - name: Install Android SDK packages
-        run: sdkmanager "ndk;${NDK_VERSION}" "platforms;android-36" "build-tools;36.0.0"
+        run: yes | sdkmanager --licenses >/dev/null; sdkmanager "platform-tools" "ndk;${NDK_VERSION}" "platforms;android-36" "build-tools;36.0.0"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 9.8.1
