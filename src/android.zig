@@ -188,6 +188,26 @@ fn persist() void {
     config.captureCloseSession();
     config.save();
 }
+var landscape_locked: bool = false;
+
 pub fn appFrame() !dvui.App.Result {
+    syncPlayerOrientation();
     return shell.frame();
+}
+
+/// Rotate into landscape for a landscape video on the player, back to free
+/// rotation elsewhere. Only calls into Java when the decision changes.
+fn syncPlayerOrientation() void {
+    const st = @import("core/state.zig");
+    var w: i64 = 0;
+    var h: i64 = 0;
+    if (st.app.active_player_idx < st.app.players.items.len) {
+        const p = st.app.players.items[st.app.active_player_idx];
+        w = p.cached_video_width;
+        h = p.cached_video_height;
+    }
+    const want = @import("mobile/android_pure.zig").playerLandscape(st.app.router.current == .player, w, h);
+    if (want == landscape_locked) return;
+    landscape_locked = want;
+    @import("mobile/host.zig").setLandscape(want);
 }

@@ -7,6 +7,7 @@ import android.database.Cursor;
 import android.graphics.Insets;
 import android.net.Uri;
 import android.os.Build;
+import android.content.pm.ActivityInfo;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.view.DisplayCutout;
@@ -179,6 +180,19 @@ public class OpalActivity extends SDLActivity {
     }
 
     /** Called from native code (JNI instance call) to show the system file picker. */
+    /** Called from native: lock to landscape for a landscape video on the player. */
+    public void setPlayerLandscape(final boolean on) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                setRequestedOrientation(on
+                    ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                    : ActivityInfo.SCREEN_ORIENTATION_FULL_USER);
+                hideBars();
+            }
+        });
+    }
+
     public void pickFile() {
         runOnUiThread(new Runnable() {
             @Override

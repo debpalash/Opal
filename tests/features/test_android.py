@@ -453,6 +453,21 @@ def test_android_sw_format():
     return ("pass", "Android uses bgr0; iOS keeps bgra") if ok else ("fail", "Android sw format not routed through mobileSwFormat")
 
 
+@test("Android player locks landscape for landscape video", "Android")
+def test_android_player_landscape():
+    a = _src("src/android.zig"); h = _src("src/mobile/host.zig"); c = _src("mobile/android/jni/opal_android.c")
+    j = _src("mobile/android/app/src/main/java/com/debpalash/opal/OpalActivity.java")
+    checks = {
+        "decision is pure + routed": "playerLandscape(st.app.router.current == .player, w, h)" in a,
+        "only on change": "if (want == landscape_locked) return;" in a,
+        "host -> C": "opal_android_set_landscape(on)" in h and "void opal_android_set_landscape(bool on)" in c,
+        "C -> Java": '"setPlayerLandscape", "(Z)V"' in c and "public void setPlayerLandscape(final boolean on)" in j,
+        "sensor landscape / free": "SCREEN_ORIENTATION_SENSOR_LANDSCAPE" in j and "SCREEN_ORIENTATION_FULL_USER" in j,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    return ("fail", f"missing: {missing}") if missing else ("pass", "landscape video rotates the player to landscape")
+
+
 @test("Android native compile gate (opt-in OPAL_ANDROID_CHECK=1)", "Android")
 def test_android_zig_check():
     if os.environ.get("OPAL_ANDROID_CHECK") != "1":
