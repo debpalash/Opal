@@ -2597,8 +2597,8 @@ pub fn applyPicturePreset(p: anytype) void {
 /// manual sliders (combined, clamped). mpv's brightness/contrast/saturation/
 /// gamma properties do nothing under the SW render API, so the grade is a `vf`.
 /// Safe with hwdec: frames of `*-copy` decoders (auto/auto-safe on desktop,
-/// mediacodec-copy on Android) are in system memory; mpv auto-inserts a
-/// download for any non-copy hwdec. No filter at all when everything is zero.
+/// mediacodec-copy on Android) are in system memory (verified on macOS
+/// videotoolbox-copy); non-copy hwdec is unverified. No filter when all zero.
 pub fn applyVideoGrade(p: anytype) void {
     const av_pure = @import("av_pure.zig");
     var gamma_buf: [32]u8 = undefined;
