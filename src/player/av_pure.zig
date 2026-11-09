@@ -112,8 +112,11 @@ pub const grade_allowed_filters = [_][]const u8{"lutyuv"};
 /// ffmpeg `lutyuv` spec for a combined grade, or "" when every value is zero
 /// (no filter at all). Reproduces mpv/ffmpeg-eq semantics: brightness b/100,
 /// contrast (c+100)/100, saturation (s+100)/100, gamma 8^(g/100).
-///   luma   y = maxval*pow(clip((val/maxval-0.5)*C+0.5+B,0,1),1/G)
-///   chroma u,v = clip((val-mid)*S+mid,minval,maxval), mid=(maxval+1)/2
+///   luma   y = minval+(maxval-minval)*pow(clip((n-0.5)*C+0.5+B,0,1),1/G),
+///          n = (val-minval)/(maxval-minval)  (limited range: 16..235)
+///   chroma u,v = clip((val-mid)*S+mid,minval,maxval), mid=pow(2,ceil(log(maxval)/log(2))-1)
+///   — NOT (maxval+1)/2: limited-range chroma maxval is 240, so that put
+///   neutral at 120 and tinted the picture (regression test below)
 /// `maxval`/`minval` are lut constants, so 10-bit sources work. Each
 /// expression is single-quoted so its commas do not split the filter graph.
 /// y is omitted when B=0,C=1,G=1; u/v when S=1. Fixed 3 decimals.
@@ -137,13 +140,13 @@ pub fn gradeFilterSpec(buf: []u8, v: PictureValues) []const u8 {
     w.writeAll("lutyuv=") catch return "";
     var first = true;
     if (bi != 0 or ci != 0 or gi != 0) {
-        w.print("y='maxval*pow(clip((val/maxval-0.5)*{d:.3}+0.5+{d:.3},0,1),{d:.3})'", .{ c, b, 1.0 / g }) catch return "";
+        w.print("y='minval+(maxval-minval)*pow(clip(((val-minval)/(maxval-minval)-0.5)*{d:.3}+0.5+{d:.3},0,1),{d:.3})'", .{ c, b, 1.0 / g }) catch return "";
         first = false;
     }
     if (si != 0) {
         inline for (.{ "u", "v" }) |ch| {
             if (!first) w.writeAll(":") catch return "";
-            w.print(ch ++ "='clip((val-(maxval+1)/2)*{d:.3}+(maxval+1)/2,minval,maxval)'", .{s}) catch return "";
+            w.print(ch ++ "='clip((val-pow(2,ceil(log(maxval)/log(2))-1))*{d:.3}+pow(2,ceil(log(maxval)/log(2))-1),minval,maxval)'", .{s}) catch return "";
             first = false;
         }
     }
@@ -166,20 +169,20 @@ test "gradeFilterSpec: all zero is no filter" {
 test "gradeFilterSpec: lutyuv mapping" {
     var buf: [512]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "lutyuv=y='maxval*pow(clip((val/maxval-0.5)*1.160+0.5+0.020,0,1),1.000)':" ++
-            "u='clip((val-(maxval+1)/2)*1.240+(maxval+1)/2,minval,maxval)':" ++
-            "v='clip((val-(maxval+1)/2)*1.240+(maxval+1)/2,minval,maxval)'",
+        "lutyuv=y='minval+(maxval-minval)*pow(clip(((val-minval)/(maxval-minval)-0.5)*1.160+0.5+0.020,0,1),1.000)':" ++
+            "u='clip((val-pow(2,ceil(log(maxval)/log(2))-1))*1.240+pow(2,ceil(log(maxval)/log(2))-1),minval,maxval)':" ++
+            "v='clip((val-pow(2,ceil(log(maxval)/log(2))-1))*1.240+pow(2,ceil(log(maxval)/log(2))-1),minval,maxval)'",
         gradeFilterSpec(&buf, pictureValues(.vivid)),
     );
     // Saturation only: no y.
     try std.testing.expectEqualStrings(
-        "lutyuv=u='clip((val-(maxval+1)/2)*0.000+(maxval+1)/2,minval,maxval)':" ++
-            "v='clip((val-(maxval+1)/2)*0.000+(maxval+1)/2,minval,maxval)'",
+        "lutyuv=u='clip((val-pow(2,ceil(log(maxval)/log(2))-1))*0.000+pow(2,ceil(log(maxval)/log(2))-1),minval,maxval)':" ++
+            "v='clip((val-pow(2,ceil(log(maxval)/log(2))-1))*0.000+pow(2,ceil(log(maxval)/log(2))-1),minval,maxval)'",
         gradeFilterSpec(&buf, .{ .saturation = -100 }),
     );
     // Gamma only: no u/v. gamma=100 -> G=8 -> exponent 0.125.
     try std.testing.expectEqualStrings(
-        "lutyuv=y='maxval*pow(clip((val/maxval-0.5)*1.000+0.5+0.000,0,1),0.125)'",
+        "lutyuv=y='minval+(maxval-minval)*pow(clip(((val-minval)/(maxval-minval)-0.5)*1.000+0.5+0.000,0,1),0.125)'",
         gradeFilterSpec(&buf, .{ .gamma = 100 }),
     );
 }
@@ -411,4 +414,22 @@ test "hdr preset lifts the picture without greying the blacks" {
     try std.testing.expect(v.contrast > 0);
     try std.testing.expect(v.saturation > 0);
     try std.testing.expectEqual(@as(i32, 0), v.brightness);
+}
+
+test "lutyuv chroma neutral is 128, not 120 (limited-range maxval is 240)" {
+    // Mirrors the `mid` expression in gradeFilterSpec. (maxval+1)/2 put
+    // limited-range 8-bit neutral at 120, tinting every graded frame.
+    const mid = struct {
+        fn f(maxval: f64) f64 {
+            return std.math.pow(f64, 2, @ceil(@log(maxval) / @log(2.0)) - 1);
+        }
+    }.f;
+    try std.testing.expectEqual(@as(f64, 128), mid(240)); // 8-bit limited
+    try std.testing.expectEqual(@as(f64, 128), mid(255)); // 8-bit full
+    try std.testing.expectEqual(@as(f64, 512), mid(960)); // 10-bit limited
+    try std.testing.expectEqual(@as(f64, 512), mid(1023)); // 10-bit full
+    var buf: [512]u8 = undefined;
+    const spec = gradeFilterSpec(&buf, .{ .saturation = -100 });
+    try std.testing.expect(std.mem.indexOf(u8, spec, "(maxval+1)/2") == null);
+    try std.testing.expect(std.mem.indexOf(u8, spec, "pow(2,ceil(log(maxval)/log(2))-1)") != null);
 }
