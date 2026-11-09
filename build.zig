@@ -2524,6 +2524,8 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_torznab_pure).step);
     const test_ios_media = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/services/ios_media_pure.zig"), .target = target, .optimize = optimize }) });
     test_step.dependOn(&b.addRunArtifact(test_ios_media).step);
+    const test_android = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/android_pure_tests.zig"), .target = target, .optimize = optimize }) });
+    test_step.dependOn(&b.addRunArtifact(test_android).step);
     const test_mobile_layout = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/ui/mobile_layout_pure.zig"), .target = target, .optimize = optimize }) });
     test_step.dependOn(&b.addRunArtifact(test_mobile_layout).step);
     const test_apibay = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/services/apibay_pure.zig"), .target = target, .optimize = optimize }) });

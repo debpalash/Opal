@@ -357,7 +357,7 @@ fn chooseSwFormat() void {
     if (sw_format_chosen) return;
     sw_format_chosen = true;
     if (player.sw_format_forced) return;
-    if (comptime @import("builtin").os.tag == .ios) {
+    if (comptime @import("../core/platform_pure.zig").sdl3) {
         // SDL3's Metal renderer accepts BGRA32 directly.
         player.sw_format = "bgra";
         return;
@@ -392,12 +392,12 @@ fn chooseSwFormat() void {
 fn createStreamingTexture(w: u32, h: u32, fmt: dvui.enums.TexturePixelFormat) !dvui.Texture {
     if (comptime @import("build_options").headless) return error.TextureCreate;
     const renderer: *c.sdl.SDL_Renderer = @ptrCast(@alignCast(dvui.currentWindow().backend.impl.renderer));
-    if (comptime @import("builtin").os.tag != .ios) _ = c.sdl.SDL_SetHint(c.sdl.SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+    if (comptime !@import("../core/platform_pure.zig").sdl3) _ = c.sdl.SDL_SetHint(c.sdl.SDL_HINT_RENDER_SCALE_QUALITY, "linear");
     const tex = c.sdl.SDL_CreateTexture(renderer, sdlPixelFormat(fmt), c.sdl.SDL_TEXTUREACCESS_STREAMING, @intCast(w), @intCast(h)) orelse {
         logs.pushLog("error", "player", "video texture creation failed — SDL_CreateTexture", true);
         return error.TextureCreate;
     };
-    _ = c.sdl.SDL_SetTextureScaleMode(tex, if (@import("builtin").os.tag == .ios) c.sdl.SDL_SCALEMODE_LINEAR else c.sdl.SDL_ScaleModeLinear);
+    _ = c.sdl.SDL_SetTextureScaleMode(tex, if (@import("../core/platform_pure.zig").sdl3) c.sdl.SDL_SCALEMODE_LINEAR else c.sdl.SDL_ScaleModeLinear);
     const pma_blend = c.sdl.SDL_ComposeCustomBlendMode(
         c.sdl.SDL_BLENDFACTOR_ONE,
         c.sdl.SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,

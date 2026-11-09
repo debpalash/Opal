@@ -117,6 +117,7 @@ const FileOpenState = struct {
 pub fn triggerFileOpen() void {
     // UIKit document picker; the import copies the file and hands it to the
     // shared player through the dropped-file mailbox (mobile/ios/bridge.m).
+    if (comptime builtin.abi.isAndroid()) return @import("../mobile/host.zig").pickFile();
     if (comptime builtin.os.tag == .ios) return @extern(*const fn () callconv(.c) void, .{ .name = "opal_ios_import" })();
     if (comptime builtin.os.tag == .macos) {
         if (comptime !build_options.headless) @import("../macos/open_panel.zig").show();

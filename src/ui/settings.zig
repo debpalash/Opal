@@ -861,6 +861,15 @@ pub fn beginFrame() void {
 /// elsewhere `xdg-open`). Public so other UI modules (e.g. the top-nav Donate
 /// button in header.zig) reuse this one launcher instead of re-rolling it.
 pub fn openExternal(url: []const u8) void {
+    if (comptime @import("builtin").abi.isAndroid()) {
+        // ACTION_VIEW via SDL; http(s) only, NUL-terminated copy.
+        const link = @import("../mobile/android_pure.zig").externalUrl(url) orelse return;
+        var z: [2100]u8 = undefined;
+        @memcpy(z[0..link.len], link);
+        z[link.len] = 0;
+        _ = c.sdl.SDL_OpenURL(@ptrCast(&z));
+        return;
+    }
     const io = @import("../core/io_global.zig");
     // Named locals (not prong temporaries): Child.init stores the slice and
     // spawn() reads it later, so argv must outlive the switch expression.

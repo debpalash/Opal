@@ -366,7 +366,7 @@ pub fn tip(src: std.builtin.SourceLocation, wd: dvui.WidgetData, text: []const u
 /// id. Without this they all hash to the same FloatingTooltip id and dvui logs
 /// "duplicate widget id" every frame a tooltip is shown.
 pub fn tipId(src: std.builtin.SourceLocation, wd: dvui.WidgetData, text: []const u8, id_extra: usize) void {
-    if (comptime builtin.os.tag == .ios) return; // Touch has no hover cursor.
+    if (comptime @import("../core/platform_pure.zig").mobile) return; // Touch has no hover cursor.
     // FloatingTooltipWidget derives its widget id from the source location
     // alone — it builds its WidgetData from a fixed Options and ignores any
     // caller-supplied .id_extra. So a tooltip that reuses its owner widget's
@@ -1044,7 +1044,7 @@ pub fn actionButton(
     var button: dvui.ButtonWidget = undefined;
     const options: dvui.Options = .{
         .id_extra = id_extra,
-        .min_size_content = .{ .h = if (builtin.os.tag == .ios) 36 else 0 },
+        .min_size_content = .{ .h = if (@import("../core/platform_pure.zig").mobile) 36 else 0 },
         .color_fill = @import("color_compat.zig").wrap(fills[0]),
         .color_fill_hover = @import("color_compat.zig").wrap(fills[1]),
         .color_fill_press = @import("color_compat.zig").wrap(fills[2]),

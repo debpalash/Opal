@@ -21,7 +21,7 @@ const io = @import("io_global.zig");
 const pure = @import("sysmon_pure.zig");
 
 const is_macos = builtin.os.tag == .macos;
-const is_linux = builtin.os.tag == .linux;
+const is_linux = builtin.os.tag == .linux and !builtin.abi.isAndroid();
 pub const supported = is_macos or is_linux;
 /// macOS exposes wakeup counters through TASK_POWER_INFO. Linux /proc does not,
 /// so presenting its CPU-only fallback as a separate energy reading is

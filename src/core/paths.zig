@@ -113,7 +113,7 @@ pub fn defaultSavePath(buf: []u8) []const u8 {
     const home = getHome();
     // iOS: the container root is read-only; Documents is writable and shown
     // in the Files app (UIFileSharingEnabled).
-    if (comptime @import("builtin").os.tag == .ios) return std.fmt.bufPrint(buf, "{s}/Documents/Downloads", .{home}) catch "/tmp/opal_downloads";
+    if (comptime @import("platform_pure.zig").mobileSaveSubdir(@import("builtin").os.tag, @import("builtin").abi)) |sub| return std.fmt.bufPrint(buf, "{s}/{s}", .{ home, sub }) catch "/tmp/opal_downloads";
     return std.fmt.bufPrint(buf, "{s}/Downloads/opal", .{home}) catch "/tmp/opal_downloads";
 }
 

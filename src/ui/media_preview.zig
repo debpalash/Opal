@@ -122,7 +122,7 @@ pub const Player = struct {
                     const renderer: *sdl.SDL_Renderer = @ptrCast(@alignCast(dvui.currentWindow().backend.impl.renderer));
                     if (sdl.SDL_CreateTexture(renderer, sdl.SDL_PIXELFORMAT_RGBX32, sdl.SDL_TEXTUREACCESS_STREAMING, width, height)) |tex| {
                         _ = sdl.SDL_SetTextureBlendMode(tex, sdl.SDL_BLENDMODE_NONE);
-                        _ = sdl.SDL_SetTextureScaleMode(tex, if (@import("builtin").os.tag == .ios) sdl.SDL_SCALEMODE_LINEAR else sdl.SDL_ScaleModeLinear);
+                        _ = sdl.SDL_SetTextureScaleMode(tex, if (@import("../core/platform_pure.zig").sdl3) sdl.SDL_SCALEMODE_LINEAR else sdl.SDL_ScaleModeLinear);
                         self.texture = .{ .ptr = tex, .width = width, .height = height, .format = .rgbx_32, .interpolation = .linear, .wrap_u = .clamp, .wrap_v = .clamp };
                     }
                 }

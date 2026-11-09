@@ -9,10 +9,7 @@ const components = @import("components.zig");
 const icons = @import("icons").tvg.lucide;
 const io = @import("../core/io_global.zig");
 const layout = @import("mobile_layout_pure.zig");
-extern fn opal_ios_resource_dir() [*:0]const u8;
-extern fn opal_ios_safe_area(top: *f32, bottom: *f32, left: *f32, right: *f32, keyboard: *f32) void;
-extern fn opal_ios_ready() void;
-extern fn opal_ios_ui_test() bool;
+const host = @import("../mobile/host.zig");
 var first_frame = true;
 
 pub fn init() void {
@@ -23,7 +20,7 @@ pub fn init() void {
     // catalog warmup. Desktop-only helpers are gated inside coreInit.
     // Bundled resources (source catalog, CA roots) live in the app bundle;
     // desktop's detectResourceRoot probes do not apply on iOS.
-    const res = std.mem.span(opal_ios_resource_dir());
+    const res = std.mem.span(host.resourceDir());
     const n = @min(res.len, state.app.resource_root.len);
     @memcpy(state.app.resource_root[0..n], res[0..n]);
     state.app.resource_root_len = n;
@@ -43,12 +40,13 @@ pub fn frame() !dvui.App.Result {
         if (event.evt == .mouse) state.app.last_mouse_move_ms = io.milliTimestamp();
     }
     @import("../app_services.zig").tickPlayback();
-    if (opal_ios_ui_test()) @import("ios_uitest.zig").tick();
+    if (comptime host.ui_test_supported) if (host.uiTest()) @import("ios_uitest.zig").tick();
     @import("../core/config.zig").saveIfDirty();
+    if (host.takeBack()) handleBack();
 
     var safe: layout.Insets = .{};
     var keyboard: f32 = 0;
-    opal_ios_safe_area(&safe.top, &safe.bottom, &safe.left, &safe.right, &keyboard);
+    host.safeArea(&safe.top, &safe.bottom, &safe.left, &safe.right, &keyboard);
     const screen = dvui.windowRect();
     const viewport = layout.fit(screen.w, screen.h, safe);
     // Edge to edge; only the cutout and keyboard reserve space.
@@ -78,7 +76,7 @@ pub fn frame() !dvui.App.Result {
 
     if (first_frame) {
         first_frame = false;
-        opal_ios_ready();
+        host.ready();
     }
     return .ok;
 }
@@ -86,6 +84,16 @@ pub fn frame() !dvui.App.Result {
 /// UIKit picker/link callbacks only publish a bounded path. The owner frame
 /// runs the same universal open as a desktop drop (files, URLs, magnets,
 /// .torrent, comics, playlists); it creates the player on demand.
+/// Android Back: same navigation as the on-screen back button, else background.
+fn handleBack() void {
+    const r = &state.app.router;
+    switch (@import("../mobile/android_pure.zig").backAction(r.current == .player, r.canGoBack())) {
+        .leave_player => r.leavePlayer(),
+        .go_back => r.goBack(),
+        .background => host.moveTaskToBack(),
+    }
+}
+
 fn drainOpenRequest() void {
     var buf: [2048]u8 = undefined;
     var len: usize = 0;

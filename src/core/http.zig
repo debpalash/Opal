@@ -83,17 +83,19 @@ fn prewarmTls(client: *std.http.Client) void {
     const io = io_global.io();
     var bundle: std.crypto.Certificate.Bundle = .empty;
     const now = std.Io.Clock.real.now(io);
-    bundle.rescan(alloc.allocator, io, now) catch {
+    // Android has no system PEM file std can scan; only the bundled one is used.
+    if (comptime !@import("builtin").abi.isAndroid()) bundle.rescan(alloc.allocator, io, now) catch {
         // No bundle → leave `now` null so std retries the rescan on the next
         // request rather than latching a permanently empty bundle.
         bundle.deinit(alloc.allocator);
         return;
     };
-    // iOS exposes no system CA file to std; the app bundles the build host's
-    // PEM roots (scripts/ios-device.py) and SDL reports the bundle directory.
-    if (comptime @import("builtin").os.tag == .ios) {
+    // Mobile exposes no system CA file to std; the app bundles the build host's
+    // PEM roots (scripts/ios-device.py, android-build.py) and the host reports
+    // the resource directory.
+    if (comptime @import("../core/platform_pure.zig").mobile) {
         var path_buf: [1024]u8 = undefined;
-        const base = std.mem.span(@extern(*const fn () callconv(.c) ?[*:0]const u8, .{ .name = "opal_ios_resource_dir" })() orelse "");
+        const base = std.mem.span(@extern(*const fn () callconv(.c) ?[*:0]const u8, .{ .name = if (@import("builtin").abi.isAndroid()) "opal_android_resource_dir" else "opal_ios_resource_dir" })() orelse "");
         const path = std.fmt.bufPrint(&path_buf, "{s}/cacert.pem", .{std.mem.trimEnd(u8, base, "/")}) catch "";
         if (base.len == 0 or path.len == 0) {
             bundle.deinit(alloc.allocator);
