@@ -80,6 +80,21 @@ jobs:
         with:
           path: .zig-cache/android-native
           key: android-native-${{ hashFiles('mobile/android/dependencies.json', 'scripts/android-deps.py') }}
+      - name: Release signing key
+        # Stable key so updates install over older APKs; without the secrets the
+        # APK is debug-signed (uninstall before upgrading).
+        env:
+          KS_B64: ${{ secrets.OPAL_ANDROID_KEYSTORE_B64 }}
+          KS_PASSWORD: ${{ secrets.OPAL_ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.OPAL_ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -z "$KS_B64" ]; then echo "No signing secrets: debug-signed APK"; exit 0; fi
+          printf '%s' "$KS_B64" | base64 -d > "$RUNNER_TEMP/opal-release.jks"
+          {
+            echo "OPAL_ANDROID_KEYSTORE=$RUNNER_TEMP/opal-release.jks"
+            echo "OPAL_ANDROID_KEYSTORE_PASSWORD=$KS_PASSWORD"
+            echo "OPAL_ANDROID_KEY_ALIAS=${KS_ALIAS:-opal}"
+          } >> "$GITHUB_ENV"
       - name: Build APK
         run: |
           VERSION=$(python3 -c 'import re; print(re.search(r"\.version\s*=\s*\"([^\"]+)\"", open("build.zig.zon").read())[1])')

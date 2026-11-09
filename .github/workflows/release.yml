@@ -839,6 +839,7 @@ jobs:
     uses: ./.github/workflows/android-apk.yml
     with:
       tag: ${{ inputs.version || github.ref_name }}
+    secrets: inherit
 
   # ── AUR publish ─────────────────────────────────────────────────────────
   # Auto-updates the uniquely named `opal-media-player` source package and its

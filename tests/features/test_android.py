@@ -288,6 +288,25 @@ def test_android_back_and_background():
     return _fail(bad, "Back, background service, permissions, CI cache wired")
 
 
+@test("Android release APK is signed with the stable key when secrets exist", "Android")
+def test_android_release_signing():
+    apk = _src(".github/workflows/android-apk.yml")
+    release = _src(".github/workflows/release.yml")
+    gradle = _src("mobile/android/app/build.gradle.kts")
+    andro = release[release.index("  android:"):]
+    andro = andro[:andro.index("\n\n")]
+    checks = {
+        "secrets decoded to a keystore": "secrets.OPAL_ANDROID_KEYSTORE_B64" in apk and 'base64 -d > "$RUNNER_TEMP/opal-release.jks"' in apk,
+        "keystore exported before the build": apk.index("name: Release signing key") < apk.index("name: Build APK")
+            and "OPAL_ANDROID_KEYSTORE=$RUNNER_TEMP/opal-release.jks" in apk,
+        "missing secrets fall back to debug": 'if [ -z "$KS_B64" ]' in apk,
+        "release passes secrets to the APK job": "secrets: inherit" in andro,
+        "gradle reads the same env": all(v in gradle for v in ("OPAL_ANDROID_KEYSTORE", "OPAL_ANDROID_KEYSTORE_PASSWORD", "OPAL_ANDROID_KEY_ALIAS")),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    return ("fail", f"missing: {missing}") if missing else ("pass", "stable release key wired from secrets; debug fallback")
+
+
 @test("Android native compile gate (opt-in OPAL_ANDROID_CHECK=1)", "Android")
 def test_android_zig_check():
     if os.environ.get("OPAL_ANDROID_CHECK") != "1":
