@@ -65,6 +65,10 @@ def write_assets():
     if not manifest.exists():
         raise SystemExit('missing ' + str(manifest))
     shutil.copy2(manifest, assets / 'plugins-manifest.json')
+    # libass fonts for subtitles/OSD (Android has no fontconfig font dirs).
+    (assets / 'fonts').mkdir(exist_ok=True)
+    for font in ('NotoSans-Regular.ttf', 'NotoSans-Bold.ttf'):
+        shutil.copy2(ROOT / 'src/assets/fonts' / font, assets / 'fonts' / font)
     icon = OUT / 'res/mipmap-xxxhdpi'
     icon.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / 'assets/opal_logo.png', icon / 'ic_launcher.png')

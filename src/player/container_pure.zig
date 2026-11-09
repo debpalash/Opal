@@ -59,14 +59,14 @@ pub const START_BYTES: u64 = 4 * 1024 * 1024;
 /// very low-bitrate file still gives the demuxer a usable runway; eight
 /// megabytes is a ceiling so a high-bitrate 4K file never makes playback wait
 /// for the whole head window.
-pub const MIN_START_BYTES: u64 = 1 * 1024 * 1024;
-pub const MAX_START_BYTES: u64 = 8 * 1024 * 1024;
+pub const MIN_START_BYTES: u64 = 2 * 1024 * 1024;
+pub const MAX_START_BYTES: u64 = 12 * 1024 * 1024;
 
 /// How many seconds of media the start threshold should cover. Two seconds is
 /// enough to satisfy mpv's initial cache gate (0.5s for loopback streams) with
 /// headroom for a piece-boundary stall, without making a slow swarm wait for
 /// data it does not need yet.
-pub const START_SECONDS: f64 = 2.0;
+pub const START_SECONDS: f64 = 5.0;
 
 /// Tail buffer when the index offset can't be parsed. MKV Cues run 50 KB-1 MB and
 /// MP4 moov 1-5 MB for a 2h 1080p file, so 8 MB is comfortable headroom.
@@ -144,9 +144,9 @@ pub const Plan = struct {
 /// unparseable container (or a non-faststart MP4, whose moov is at EOF) gets.
 /// A plain `file_size / 256` would be far too eager: it implies an eight-minute
 /// runtime and asks an 8 GB film for 32 MB of runway.
-fn fallbackStartBytes(file_size: u64) u64 {
-    // 7200 s runtime / START_SECONDS (2 s) == one byte in 3600.
-    const scaled = file_size / 3600;
+pub fn fallbackStartBytes(file_size: u64) u64 {
+    // 7200 s runtime / START_SECONDS == one byte in 1440.
+    const scaled = file_size / @as(u64, @intFromFloat(7200.0 / START_SECONDS));
     return @max(MIN_START_BYTES, @min(MAX_START_BYTES, scaled));
 }
 
@@ -155,7 +155,7 @@ fn fallbackStartBytes(file_size: u64) u64 {
 /// A 700 MB two-hour film (0.78 Mbps) needs ~0.2 MB for two seconds; a 20 GB
 /// 4K film (25 Mbps) needs ~6 MB. Using the file's own duration avoids both
 /// the fixed-4 MB over-wait on low-bitrate files and the under-wait on 4K.
-fn startBytesFor(file_size: u64, duration_secs: ?f64) u64 {
+pub fn startBytesFor(file_size: u64, duration_secs: ?f64) u64 {
     const fallback = fallbackStartBytes(file_size);
     const d = duration_secs orelse return fallback;
     if (!(d > 0.0) or !std.math.isFinite(d)) return fallback;
@@ -679,6 +679,101 @@ fn aviHeaderDuration(hdrl: []const u8) ?f64 {
 
 const t = std.testing;
 
+// ── Staged pins: who gets downloaded FIRST ──────────────────────────────────
+//
+// The old gate pinned head(16MB)+tail(8MB)+probe ALL at deadline 0, so every
+// piece was equally "due" and the 256 KB probe (which the exact-index refine
+// waits on) was starved behind 24 MB: ~27 s on a 0.6 MB/s swarm. Now each range
+// has a base deadline and the wrapper adds PIECE_STEP_MS per piece inside it,
+// so order is: probe/start head -> index tail -> rest of head.
+
+/// Added per piece within one pinned range by torrent_prioritize_range.
+pub const PIECE_STEP_MS: i32 = 20;
+/// Index tail comes right after the start bytes; the rest of the head after that.
+pub const TAIL_DEADLINE_MS: i32 = 300;
+pub const HEAD_REST_DEADLINE_MS: i32 = 2500;
+
+pub const Pin = struct { off: u64 = 0, len: u64 = 0, deadline_ms: i32 = 0 };
+pub const PinSet = struct {
+    pins: [3]Pin = .{ .{}, .{}, .{} },
+    n: usize = 0,
+    fn add(self: *PinSet, off: u64, len: u64, dl: i32) void {
+        if (len == 0) return;
+        self.pins[self.n] = .{ .off = off, .len = len, .deadline_ms = dl };
+        self.n += 1;
+    }
+};
+
+/// Phase 1 (nothing downloaded): start bytes (includes the probe) first, then
+/// the tail. The rest of the head is NOT requested yet.
+pub fn planPins(plan: Plan) PinSet {
+    var s = PinSet{};
+    s.add(0, @min(@max(PROBE_BYTES, plan.start_bytes), plan.file_size), 0);
+    s.add(plan.tail_start, plan.tailLen(), TAIL_DEADLINE_MS);
+    return s;
+}
+
+/// After the exact index is known (or the start gate opened): tail first, then
+/// head bytes beyond the start window.
+pub fn backgroundPins(plan: Plan) PinSet {
+    var s = PinSet{};
+    s.add(plan.tail_start, plan.tailLen(), 0);
+    const head = @min(plan.head_end, plan.file_size);
+    if (head > plan.start_bytes) s.add(plan.start_bytes, head - plan.start_bytes, HEAD_REST_DEADLINE_MS);
+    return s;
+}
+
+/// Readiness predicate: the start window is fully present. The index tail is
+/// deliberately NOT required (it keeps racing; mpv blocks on it briefly).
+pub fn startReady(start_pct: u32) bool {
+    return start_pct >= 100;
+}
+
+/// Bytes to keep ahead of the playhead: `seconds` of the file's bitrate, with
+/// a floor, so the deadline window follows playback time rather than a piece count.
+pub fn readAheadBytes(file_size: u64, duration_secs: ?f64, seconds: f64) u64 {
+    const d = duration_secs orelse return fallbackStartBytes(file_size);
+    if (!(d > 0.0) or !std.math.isFinite(d)) return fallbackStartBytes(file_size);
+    const want = @as(f64, @floatFromInt(file_size)) / d * seconds;
+    return @max(MIN_START_BYTES, @as(u64, @intFromFloat(@min(want, @as(f64, @floatFromInt(file_size))))));
+}
+
+test "regression: 263MB/10:34 mp4 with moov at EOF is ready after ~5s of head, not 16MB" {
+    const size: u64 = 263 * 1024 * 1024;
+    const p = initialPlan(.mp4, size);
+    // moov at EOF => probe has no mvhd => size fallback; must be far below HEAD_BYTES
+    const r = refine(p, &(@as([64]u8, @splat(0))));
+    try t.expect(r.start_bytes < HEAD_BYTES);
+    // at the file's real bitrate (263MB/634s ~ 435KB/s) that's 4-6 seconds
+    const secs = @as(f64, @floatFromInt(r.start_bytes)) / (@as(f64, @floatFromInt(size)) / 634.0);
+    try t.expect(secs >= 4.0 and secs <= 6.5);
+    // tail (index) must be required as a separate pin, not folded into the head
+    try t.expect(p.needsTail());
+}
+
+test "regression: probe is pinned first and the 16MB head is not requested up front" {
+    const p = initialPlan(.mp4, 263 * 1024 * 1024);
+    const s = planPins(p);
+    try t.expectEqual(@as(usize, 2), s.n);
+    try t.expectEqual(@as(u64, 0), s.pins[0].off);
+    try t.expectEqual(@as(i32, 0), s.pins[0].deadline_ms);
+    try t.expect(s.pins[0].len >= PROBE_BYTES and s.pins[0].len < HEAD_BYTES);
+    try t.expect(s.pins[1].deadline_ms > s.pins[0].deadline_ms); // tail after start
+    const b = backgroundPins(p);
+    try t.expectEqual(@as(usize, 2), b.n);
+    try t.expect(b.pins[1].deadline_ms > b.pins[0].deadline_ms); // rest of head last
+    try t.expectEqual(p.start_bytes, b.pins[1].off);
+}
+
+test "startReady and readAheadBytes" {
+    try t.expect(!startReady(99));
+    try t.expect(startReady(100));
+    const sz: u64 = 263 * 1024 * 1024;
+    const a = readAheadBytes(sz, 634.0, 30.0);
+    try t.expect(a > 10 * 1024 * 1024 and a < 14 * 1024 * 1024);
+    try t.expectEqual(MIN_START_BYTES, readAheadBytes(sz, 100000.0, 1.0));
+}
+
 test "formatOf + which containers keep an index at the end" {
     try t.expectEqual(Format.mkv, formatOf("House.of.the.Dragon.S03E04.1080p.HEVC.x265-MeGusta.mkv"));
     try t.expectEqual(Format.mkv, formatOf("clip.WEBM"));
@@ -909,9 +1004,9 @@ test "START_BYTES is a small fraction of the head — playback must not wait for
 test "start threshold follows the file's bitrate, not a fixed 4 MB" {
     // 700 MB / 2 h = ~0.78 Mbps → ~0.2 MB for two seconds, floored at 1 MB.
     try t.expectEqual(MIN_START_BYTES, startBytesFor(700 * 1024 * 1024, 7200.0));
-    // 20 GB / 2 h = ~23.8 Mbps → ~5.7 MB for two seconds.
-    const hd = startBytesFor(20 * 1024 * 1024 * 1024, 7200.0);
-    try t.expect(hd > 5 * 1024 * 1024);
+    // 10 GB / 2 h = ~11.9 Mbps → ~7.1 MB for five seconds.
+    const hd = startBytesFor(10 * 1024 * 1024 * 1024, 7200.0);
+    try t.expect(hd > 6 * 1024 * 1024);
     try t.expect(hd < MAX_START_BYTES);
     // 200 GB / 2 h would exceed the ceiling; clamp it.
     try t.expectEqual(MAX_START_BYTES, startBytesFor(200 * 1024 * 1024 * 1024, 7200.0));
@@ -927,10 +1022,10 @@ test "start threshold follows the file's bitrate, not a fixed 4 MB" {
 test "size-only fallback assumes a two-hour runtime, not a fixed fraction" {
     // 700 MB → ~0.2 MB for two seconds; the 1 MB floor keeps a runway.
     try t.expectEqual(MIN_START_BYTES, fallbackStartBytes(700 * 1024 * 1024));
-    // 8 GB → ~2.3 MB. A 1/256th heuristic would ask for 32 MB.
+    // 8 GB → ~5.7 MB. A 1/256th heuristic would ask for 32 MB.
     const movie = fallbackStartBytes(8 * 1024 * 1024 * 1024);
-    try t.expect(movie > 2 * 1024 * 1024);
-    try t.expect(movie < 3 * 1024 * 1024);
+    try t.expect(movie > 5 * 1024 * 1024);
+    try t.expect(movie < 7 * 1024 * 1024);
     // 50 GB → ~14 MB uncapped; the ceiling keeps the wait bounded.
     try t.expectEqual(MAX_START_BYTES, fallbackStartBytes(50 * 1024 * 1024 * 1024));
     // Tiny files never ask for more than they are.

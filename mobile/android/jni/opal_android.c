@@ -117,6 +117,12 @@ void opal_android_prepare_environment(void) {
     mkdir_p(g_resource_dir);
     extract_asset("cacert.pem", g_resource_dir);
     extract_asset("plugins-manifest.json", g_resource_dir);
+    // Subtitle/OSD fonts for libass (no fontconfig fonts on Android).
+    char fonts[1100];
+    snprintf(fonts, sizeof(fonts), "%s/fonts", g_resource_dir);
+    mkdir_p(fonts);
+    extract_asset("fonts/NotoSans-Regular.ttf", g_resource_dir);
+    extract_asset("fonts/NotoSans-Bold.ttf", g_resource_dir);
 }
 
 const char *opal_android_resource_dir(void) {
