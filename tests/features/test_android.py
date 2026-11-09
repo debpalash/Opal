@@ -444,6 +444,15 @@ def test_android_cache_key_covers_wrapper():
     return ("pass", "prefix cache keyed on the wrapper sources") if ok else ("fail", f"cache key: {key}")
 
 
+@test("Android renders mpv into opaque bgr0 (OSD/subtitles draw)", "Android")
+def test_android_sw_format():
+    # On device: "osd: Failed rendering OSD." every frame with sw_format=bgra;
+    # 0 failures with bgr0, colours correct.
+    g = _src("src/ui/grid.zig"); p = _src("src/core/platform_pure.zig")
+    ok = "mobileSwFormat(@import(\"builtin\").abi.isAndroid())" in g and 'return if (android) "bgr0" else "bgra";' in p
+    return ("pass", "Android uses bgr0; iOS keeps bgra") if ok else ("fail", "Android sw format not routed through mobileSwFormat")
+
+
 @test("Android native compile gate (opt-in OPAL_ANDROID_CHECK=1)", "Android")
 def test_android_zig_check():
     if os.environ.get("OPAL_ANDROID_CHECK") != "1":
