@@ -4694,8 +4694,10 @@ fn setTrack(ap: *player.MediaPlayer, name: [*:0]const u8, selection: player_api.
 }
 
 fn setPersistedVideoFilter(ap: *player.MediaPlayer, name: [*:0]const u8, field: *i32, value: i32) void {
-    field.* = value;
-    setPlayerInt(ap, name, value);
+    _ = ap;
+    _ = name;
+    field.* = @import("../player/av_pure.zig").clampVideoFilter(value);
+    for (state.app.players.items) |p| player.applyVideoGrade(p);
     state.markConfigDirty();
 }
 

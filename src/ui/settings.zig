@@ -1851,12 +1851,7 @@ fn renderPlaybackTab() void {
             })) {
                 const fld = VF.field(f.idx);
                 fld.* = av_pure.clampVideoFilter(fld.* - 5);
-                var cmd_buf: [64]u8 = undefined;
-                if (@import("opal-fmt").bufPrintZ(&cmd_buf, "set {s} {d}", .{ f.prop, fld.* })) |cmd| {
-                    if (state.app.active_player_idx < state.app.players.items.len) {
-                        _ = c.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, cmd.ptr);
-                    }
-                } else |_| {}
+                for (state.app.players.items) |pl| @import("../player/player.zig").applyVideoGrade(pl);
                 state.markConfigDirty();
             }
 
@@ -1865,21 +1860,9 @@ fn renderPlaybackTab() void {
             // frame-time jitter to active playback. Refresh at most ~4×/s
             // (clicks read fresh next tick anyway).
             {
-                const FilterCache = struct {
-                    var vals: [4]i64 = .{ 0, 0, 0, 0 };
-                    var last_ms: i64 = 0;
-                };
-                if (state.app.active_player_idx < state.app.players.items.len) {
-                    const now_ms = @import("../core/io_global.zig").milliTimestamp();
-                    if (f.idx == 0 and now_ms - FilterCache.last_ms > 250) {
-                        FilterCache.last_ms = now_ms;
-                        const ctx = state.app.players.items[state.app.active_player_idx].mpv_ctx;
-                        inline for (filters, 0..) |ff, fi| {
-                            _ = c.mpv.mpv_get_property(ctx, @ptrCast(ff.prop.ptr), c.mpv.MPV_FORMAT_INT64, &FilterCache.vals[fi]);
-                        }
-                    }
-                }
-                const val = FilterCache.vals[f.idx];
+                // The manual offset lives in state (mpv's eq props are no-ops
+                // under SW render), so read it directly — no mpv IPC.
+                const val: i32 = VF.field(f.idx).*;
                 var val_buf: [12]u8 = undefined;
                 const val_str = @import("opal-fmt").bufPrintZ(&val_buf, "{d}", .{val}) catch "0";
                 _ = dvui.label(@src(), "{s}", .{val_str}, .{
@@ -1903,12 +1886,7 @@ fn renderPlaybackTab() void {
             })) {
                 const fld = VF.field(f.idx);
                 fld.* = av_pure.clampVideoFilter(fld.* + 5);
-                var cmd_buf: [64]u8 = undefined;
-                if (@import("opal-fmt").bufPrintZ(&cmd_buf, "set {s} {d}", .{ f.prop, fld.* })) |cmd| {
-                    if (state.app.active_player_idx < state.app.players.items.len) {
-                        _ = c.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, cmd.ptr);
-                    }
-                } else |_| {}
+                for (state.app.players.items) |pl| @import("../player/player.zig").applyVideoGrade(pl);
                 state.markConfigDirty();
             }
         }
@@ -1927,13 +1905,7 @@ fn renderPlaybackTab() void {
             state.app.vf_contrast = 0;
             state.app.vf_saturation = 0;
             state.app.vf_gamma = 0;
-            if (state.app.active_player_idx < state.app.players.items.len) {
-                const p = state.app.players.items[state.app.active_player_idx];
-                _ = c.mpv.mpv_command_string(p.mpv_ctx, "set brightness 0");
-                _ = c.mpv.mpv_command_string(p.mpv_ctx, "set contrast 0");
-                _ = c.mpv.mpv_command_string(p.mpv_ctx, "set saturation 0");
-                _ = c.mpv.mpv_command_string(p.mpv_ctx, "set gamma 0");
-            }
+            for (state.app.players.items) |pl| @import("../player/player.zig").applyVideoGrade(pl);
             state.markConfigDirty();
         }
     }

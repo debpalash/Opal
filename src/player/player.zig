@@ -1161,18 +1161,8 @@ pub const MediaPlayer = struct {
         {
             const av_pure = @import("av_pure.zig");
             _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "af", av_pure.eqFilterSpec(state.app.eq_preset).ptr);
-            const vfs = [_]struct { prop: [*:0]const u8, val: i32 }{
-                .{ .prop = "brightness", .val = state.app.vf_brightness },
-                .{ .prop = "contrast", .val = state.app.vf_contrast },
-                .{ .prop = "saturation", .val = state.app.vf_saturation },
-                .{ .prop = "gamma", .val = state.app.vf_gamma },
-            };
-            var vf_buf: [16]u8 = undefined;
-            for (vfs) |vf| {
-                if (@import("opal-fmt").bufPrintZ(&vf_buf, "{d}", .{av_pure.clampVideoFilter(vf.val)})) |s| {
-                    _ = c.mpv.mpv_set_option_string(self.mpv_ctx, vf.prop, s.ptr);
-                } else |_| {}
-            }
+            // Video grade (picture preset + sliders) is a `vf`, applied on
+            // FILE_LOADED by applyVideoGrade; mpv's eq props are no-ops under SW render.
         }
 
         // ── Escape hatch: OPAL_MPV_OPTS="name=value;name=value" ──
@@ -2600,24 +2590,42 @@ pub fn applyPicturePreset(p: anytype) void {
         if (av_pure.isHdrVideo(gamma, primaries)) "1" else "auto",
     );
 
+    applyVideoGrade(p);
+}
+
+/// Sets the single labelled `@opal-eq` ffmpeg eq filter from picture preset +
+/// manual sliders (combined, clamped). mpv's brightness/contrast/saturation/
+/// gamma properties do nothing under the SW render API, so the grade is a `vf`.
+/// Safe with hwdec: frames of `*-copy` decoders (auto/auto-safe on desktop,
+/// mediacodec-copy on Android) are in system memory; mpv auto-inserts a
+/// download for any non-copy hwdec. No filter at all when everything is zero.
+pub fn applyVideoGrade(p: anytype) void {
+    const av_pure = @import("av_pure.zig");
+    var gamma_buf: [32]u8 = undefined;
+    var prim_buf: [32]u8 = undefined;
+    const gamma = getPropStringInto(p.mpv_ctx, "video-params/gamma", &gamma_buf);
+    const primaries = getPropStringInto(p.mpv_ctx, "video-params/primaries", &prim_buf);
     const chosen = av_pure.resolveAuto(
         av_pure.picturePresetFromInt(state.app.picture_preset),
         gamma,
         primaries,
     );
-    const v = av_pure.pictureValues(chosen);
+    const v = av_pure.combineGrade(av_pure.pictureValues(chosen), .{
+        .brightness = state.app.vf_brightness,
+        .contrast = state.app.vf_contrast,
+        .saturation = state.app.vf_saturation,
+        .gamma = state.app.vf_gamma,
+    });
+    var spec_buf: [160]u8 = undefined;
+    const spec = av_pure.gradeFilterSpec(&spec_buf, v);
 
-    const props = [_]struct { prop: [*:0]const u8, val: i32 }{
-        .{ .prop = "brightness", .val = v.brightness },
-        .{ .prop = "contrast", .val = v.contrast },
-        .{ .prop = "saturation", .val = v.saturation },
-        .{ .prop = "gamma", .val = v.gamma },
-    };
-    var buf: [16]u8 = undefined;
-    for (props) |pr| {
-        const s = @import("opal-fmt").bufPrintZ(&buf, "{d}", .{av_pure.clampVideoFilter(pr.val)}) catch continue;
-        _ = c.mpv.mpv_set_property_string(p.mpv_ctx, pr.prop, s.ptr);
-    }
+    var rm = [_]?[*:0]const u8{ "vf", "remove", av_pure.grade_filter_label, null };
+    _ = c.mpv.mpv_command(p.mpv_ctx, @ptrCast(&rm));
+    if (spec.len == 0) return;
+    var arg_buf: [256]u8 = undefined;
+    const arg = @import("opal-fmt").bufPrintZ(&arg_buf, "{s}:lavfi=[{s}]", .{ av_pure.grade_filter_label, spec }) catch return;
+    var add = [_]?[*:0]const u8{ "vf", "add", arg.ptr, null };
+    _ = c.mpv.mpv_command(p.mpv_ctx, @ptrCast(&add));
 }
 
 /// The loaded video's transfer function (`pq`, `hlg`, `bt.1886`, …), or empty

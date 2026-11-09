@@ -1500,7 +1500,7 @@ def test_picture_presets():
                                 and "MPV_EVENT_FILE_LOADED" in ply,
         "reads video-params": '"video-params/gamma"' in ply,
         "routes through pure": "av_pure.resolveAuto(" in ply,
-        "clamps before setting": "av_pure.clampVideoFilter(" in ply,
+        "clamps before setting": "av_pure.combineGrade(" in ply and "clampVideoFilter(" in avp,
         # Reachable from the transport bar, not buried in Settings.
         "control on the player bar": "picture_preset" in ftr,
         "applies to every player": "players.items) |p| player.applyPicturePreset" in ftr,
@@ -1959,3 +1959,50 @@ def test_mobile_autohide_ignores_position():
     if skip not in loop or loop.index(skip) > loop.index("last_mouse_move_ms"):
         return "fail", "position/focus events still reset the idle timer"
     return "pass", "only real input resets the chrome idle timer"
+
+
+@test("Picture presets/sliders change rendered pixels under SW render (vf eq)", "Player")
+def test_picture_grade_changes_pixels():
+    import shutil, tempfile, re
+    zig = shutil.which("zig")
+    if not (shutil.which("cc") and shutil.which("ffmpeg") and zig):
+        return "skip", "cc/ffmpeg/zig not available"
+    inc = lib = None
+    for pre in (os.environ.get("HOMEBREW_PREFIX", ""), "/opt/homebrew", "/usr/local", "/usr"):
+        if pre and os.path.exists(os.path.join(pre, "include", "mpv", "render.h")):
+            inc, lib = os.path.join(pre, "include"), os.path.join(pre, "lib")
+            break
+    if not inc:
+        return "skip", "libmpv headers not found"
+    src = _src("src/player/player.zig")
+    if "applyVideoGrade" not in src or "mpv_set_property_string(p.mpv_ctx, pr.prop" in src:
+        return "fail", "player must route grades through applyVideoGrade, not mpv eq props"
+    with tempfile.TemporaryDirectory() as td:
+        clip, exe = os.path.join(td, "t.mp4"), os.path.join(td, "probe")
+        r = subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=10:duration=2",
+                            "-pix_fmt", "yuv420p", "-y", clip], capture_output=True, text=True, timeout=60)
+        if r.returncode:
+            return "skip", "ffmpeg cannot generate clip: " + r.stderr[-200:]
+        r = subprocess.run(["cc", "-o", exe, os.path.join(PROJECT_DIR, "tests/tools/mpv_eq_probe.c"),
+                            "-I" + inc, "-L" + lib, "-Wl,-rpath," + lib, "-lmpv"], capture_output=True, text=True, timeout=120)
+        if r.returncode:
+            return "skip", "cannot link libmpv: " + r.stderr[-200:]
+
+        def spec(*a):
+            r = subprocess.run([zig, "run", "--dep", "av", "-Mroot=tests/tools/eq_spec.zig",
+                                "-Mav=src/player/av_pure.zig", "--", *map(str, a)],
+                               cwd=PROJECT_DIR, capture_output=True, text=True, timeout=180)
+            return r.stdout.strip() if r.returncode == 0 else None
+        std, vivid, desat = spec(1), spec(5), spec(1, 0, 0, -100, 0)
+        if std != "" or not vivid or not desat:
+            return "fail", "eq_spec produced std=%r vivid=%r desat=%r" % (std, vivid, desat)
+        r = subprocess.run([exe, clip, "auto-safe", std, vivid, desat], capture_output=True, text=True, timeout=60)
+        rows = re.findall(r"^(\d) mean=([\d.]+) chroma=([\d.]+)", r.stdout, re.M)
+        if len(rows) != 3:
+            return "skip", "probe could not render: " + (r.stdout + r.stderr)[-300:]
+        (_, m0, c0), (_, m1, c1), (_, m2, c2) = [(a, float(b), float(c)) for a, b, c in rows]
+        if abs(c1 - c0) < 0.5 and abs(m1 - m0) < 0.05:
+            return "fail", "Vivid did not change pixels (chroma %.2f vs %.2f)" % (c1, c0)
+        if c0 - c2 < 100:
+            return "fail", "saturation=-100 did not desaturate (chroma %.2f -> %.2f)" % (c0, c2)
+    return "pass", "std chroma %.2f, vivid %.2f, sat-100 %.2f" % (c0, c1, c2)
