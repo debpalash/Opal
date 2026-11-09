@@ -358,8 +358,7 @@ fn chooseSwFormat() void {
     sw_format_chosen = true;
     if (player.sw_format_forced) return;
     if (comptime @import("../core/platform_pure.zig").sdl3) {
-        // SDL3's Metal renderer accepts BGRA32 directly.
-        player.sw_format = "bgra";
+        player.sw_format = @import("../core/platform_pure.zig").mobileSwFormat(@import("builtin").abi.isAndroid());
         return;
     }
     const renderer: *c.sdl.SDL_Renderer = @ptrCast(@alignCast(dvui.currentWindow().backend.impl.renderer));

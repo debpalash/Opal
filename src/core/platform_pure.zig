@@ -61,3 +61,16 @@ test "regression: a save path from a previous iOS container is not reused" {
     try std.testing.expect(!storedPathUsable(home ++ "X/Documents", home, true));
     try std.testing.expect(storedPathUsable("/Volumes/Media/opal", "/Users/me", false));
 }
+
+/// mpv software-render target format on the SDL3 (mobile) hosts. iOS: SDL3's
+/// Metal renderer takes BGRA32 directly. Android: mpv's OSD/subtitle blender
+/// failed on "bgra" every frame ("Failed rendering OSD", no subtitles), so use
+/// the opaque fast-path "bgr0" (SDL XRGB8888, supported by the GLES2 renderer).
+pub fn mobileSwFormat(android: bool) [*:0]const u8 {
+    return if (android) "bgr0" else "bgra";
+}
+
+test "mobileSwFormat: opaque bgr0 on Android, bgra on iOS" {
+    try std.testing.expectEqualStrings("bgr0", std.mem.span(mobileSwFormat(true)));
+    try std.testing.expectEqualStrings("bgra", std.mem.span(mobileSwFormat(false)));
+}
