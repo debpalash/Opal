@@ -233,6 +233,7 @@ function renderMusic(songs, loading = false){
 let raWatch = null;
 // Parity-tier-2 poll handles. `cxPages` is separate from `cxWatch`: the reader
 // keeps polling page progress while the search listing sits idle behind it.
+let comicPageSlots = new Map();
 let comicGeneration = 0, comicSearchGeneration = 0, radioGeneration = 0, novelGeneration = 0;
 let cxWatch = null, cxPages = null, nvWatch = null, drWatch = null, vnWatch = null;
 let absWatch = null, opWatch = null, plWatch = null;
@@ -346,6 +347,7 @@ async function openComic(url){
   const generation = ++comicGeneration;
   clearInterval(cxPages);
   $('cx-pages').innerHTML = '';
+  comicPageSlots.clear();
   if ($('cx-chapter-controls')) { $('cx-chapter-controls').innerHTML = ''; delete $('cx-chapter-controls').dataset.signature; }
   try { await api('/comics/load?url=' + encodeURIComponent(url)); }
   catch { if (generation === comicGeneration) $('cx-progress').textContent = 'Could not open comic. Try again.'; return; }
@@ -370,25 +372,76 @@ async function openComic(url){
       if (d.pages && !d.loading) {
         // Preserve already loaded image nodes while later pages arrive.
         const pages = $('cx-pages');
+        const count = Math.max(0, Math.min(128, Number(d.pages) || 0));
+        for (let i = 0; i < count; i++) {
+          if (comicPageSlots.has(i)) continue;
+          const slot = document.createElement('div');
+          slot.className = 'cx-page-slot cx-page-pending';
+          slot.textContent = `Page ${i + 1} — waiting for download…`;
+          slot.dataset.page = i;
+          pages.appendChild(slot);
+          comicPageSlots.set(i, slot);
+        }
         const ready = d.ready_pages || Array.from({length:d.downloaded}, (_, i) => i);
         for (const i of ready) {
-          if (pages.querySelector(`[data-page="${i}"]`)) continue;
+          const slot = comicPageSlots.get(i);
+          if (!slot || slot.dataset.loaded) continue;
+          slot.dataset.loaded = 'true';
           const image = document.createElement('img');
           image.className = 'cx-page';
           image.dataset.page = i;
           image.loading = 'lazy';
           image.alt = `Page ${i + 1}`;
-          image.src = `${BASE}/api/comics/page?i=${i}&reader=${generation}`;
-          const following = [...pages.querySelectorAll('.cx-page')].find(node => Number(node.dataset.page) > i);
-          pages.insertBefore(image, following || null);
+          const pageURL = `${BASE}/api/comics/page?i=${i}&reader=${generation}`;
+          let attempts = 0;
+          image.onerror = () => {
+            if (generation !== comicGeneration) return;
+            image.alt = `Page ${i + 1} could not load — click to retry`;
+            image.classList.add('cx-page-error');
+            image.setAttribute('role', 'button');
+            image.setAttribute('tabindex', '0');
+            image.setAttribute('aria-label', `Retry page ${i + 1}`);
+            image.onkeydown = event => {
+              if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); image.onclick(); }
+            };
+            image.onclick = () => {
+              if (generation !== comicGeneration) return;
+              image.src = `${pageURL}&retry=${++attempts}`;
+            };
+          };
+          image.onload = () => {
+            image.alt = `Page ${i + 1}`;
+            image.classList.remove('cx-page-error');
+            slot.classList.remove('cx-page-pending');
+            image.removeAttribute('role');
+            image.removeAttribute('tabindex');
+            image.removeAttribute('aria-label');
+            image.onkeydown = null;
+            image.onclick = null;
+          };
+          image.src = pageURL;
+          slot.textContent = '';
+          slot.appendChild(image);
         }
       }
       if ((d.pages && !d.loading && d.downloaded >= d.pages) || (!d.loading && !d.pages) || ticks > 90) {
         clearInterval(cxPages);
         if (!d.pages) $('cx-progress').textContent = 'No readable pages found. Try another source or issue.';
-        else if (d.downloaded < d.pages) $('cx-progress').textContent = `${d.title || 'Reading'} — ${d.downloaded}/${d.pages} pages loaded. Some pages could not load; try reopening this chapter.`;
+        else if (d.downloaded < d.pages) {
+          for (const [i, slot] of comicPageSlots) {
+            if (!slot.dataset.loaded) slot.textContent = `Page ${i + 1} could not download. Reopen this chapter to retry.`;
+          }
+          $('cx-progress').textContent = `${d.title || 'Reading'} — ${d.downloaded}/${d.pages} pages loaded. Some pages could not load; try reopening this chapter.`;
+        }
       }
-    } catch { clearInterval(cxPages); }
+    } catch {
+      if (generation !== comicGeneration) return;
+      $('cx-progress').textContent = 'Connection interrupted. Retrying…';
+      if (ticks > 90) {
+        clearInterval(cxPages);
+        $('cx-progress').textContent = 'Could not load the chapter. Reopen it to retry.';
+      }
+    }
   }, 1200);
 }
 function closeComic(){
@@ -396,6 +449,7 @@ function closeComic(){
   clearInterval(cxPages);
   api('/comics/close').catch(()=>{});
   $('cx-pages').innerHTML = '';
+  comicPageSlots.clear();
   $('cx-reader').style.display = 'none';
   $('cx-results').style.display = '';
   refreshComics().catch(()=>{});
