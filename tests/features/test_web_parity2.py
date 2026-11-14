@@ -118,10 +118,11 @@ def test_reader_tabs():
         "reader uses cookie-authenticated URL": "/api/comics/page?i=${i}" in ui
             and "encodeURIComponent(TOKEN)" not in ui,
         # Completion count is not a contiguous prefix. Actual ready indices
-        # avoid 404 images and insertBefore preserves reading order without
-        # replacing already loaded nodes on every poll.
+        # avoid 404 images; stable numbered slots preserve reading order and
+        # keep missing pages visible without replacing loaded images.
         "renders actual ready pages in order": "d.ready_pages" in ui
-            and "pages.insertBefore(image, following || null)" in ui
+            and "comicPageSlots.get(i)" in ui and "slot.appendChild(image)" in ui
+            and "pages.appendChild(slot)" in ui
             and "ready_pages" in rm and "comics_svc.pageReady(idx)" in rm,
         "reader closes server-side": "api('/comics/close')" in ui,
         # The drama page is keyless (TVmaze) and has a title search + episode list.

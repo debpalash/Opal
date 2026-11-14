@@ -192,3 +192,13 @@ def test_western_publisher_sources():
     assert 'openSources(.comics)' in comics and '"Add sources"' in comics
     assert 'western_publishers_pure' in (PROJECT_DIR / 'build.zig').read_text()
     return 'pass', 'Two publisher catalogs, complete free-issue guards, and direct Comics source installation route'
+
+
+@test("Comic downloads wake the idle reader for later pages and chapters", "Sources")
+def test_comic_reader_worker_wake():
+    source = (PROJECT_DIR / 'src/services/comics.zig').read_text()
+    fetch = source.split('fn fetchComicThread(gen: u32) void {', 1)[1].split('/// curl a URL', 1)[0]
+    download = source.split('fn downloadSinglePage(i: usize, gen: u32) void {', 1)[1].split('// Search readallcomics.com', 1)[0]
+    assert 'defer if (!workers.isQuitting()' in fetch and 'state.wakeUi();' in fetch
+    assert download.index('state.wakeUi();') > download.index('dl_progress.fetchAdd')
+    return 'pass', 'Owner-loop wake after page publication and chapter worker completion (GUI boundary)'

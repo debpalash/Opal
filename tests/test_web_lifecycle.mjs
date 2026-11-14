@@ -147,6 +147,7 @@ function fixture(...files){
     removeAttribute(name){ this.attributes.delete(name); }
     replaceChildren(...children){ this.children = children; this.replaceCount++; }
     toggleAttribute(name, value){ value ? this.setAttribute(name, '') : this.removeAttribute(name); }
+    appendChild(child){ (this.children ||= []).push(child); return child; }
     focus(){}
     insertAdjacentHTML(){}
   }
@@ -1444,4 +1445,78 @@ test('source details expose an accessible per-title provider preference', async 
   f.take('/unified_search/clear_preference?generation=17&key=abc').resolve({ok:true});
   await clear;
   assert.equal(button.attributes.get('aria-pressed'),'false');
+});
+
+
+test('comic page image failures can be retried without reopening the chapter', async () => {
+  const f = fixture('media.js');
+  f.run('let poll; settledInterval = callback => { poll = callback; return 1; };');
+  const pages = f.$('cx-pages');
+  const opening = f.run("openComic('fixture')");
+  f.take('/comics/load?url=fixture').resolve({ok:true}); await opening;
+  const polling = f.run('poll()');
+  f.take('/comics').resolve({title:'Book',pages:1,downloaded:1,ready_pages:[0],loading:false});
+  await polling;
+  assert.equal(pages.children.length, 1);
+  const image = pages.children[0].children[0];
+  assert.equal(typeof image.onerror, 'function');
+  image.onerror();
+  assert.match(image.alt, /retry/i);
+  assert.equal(image.attributes.get('tabindex'), '0');
+  const previous = image.src;
+  image.onkeydown({key:'Enter', preventDefault(){}});
+  assert.notEqual(image.src, previous);
+  image.onload();
+  assert.equal(image.alt, 'Page 1');
+});
+
+
+test('comic reader keeps missing pages visible and late downloads in reading order', async () => {
+  const f = fixture('media.js');
+  f.run('let poll; settledInterval = callback => { poll = callback; return 1; };');
+  const opening = f.run("openComic('fixture')");
+  f.take('/comics/load?url=fixture').resolve({ok:true}); await opening;
+  let polling = f.run('poll()');
+  f.take('/comics').resolve({title:'Book',pages:3,downloaded:1,ready_pages:[2],loading:false});
+  await polling;
+  const slots = f.$('cx-pages').children;
+  assert.equal(slots.length, 3);
+  assert.match(slots[0].textContent, /Page 1.*waiting/);
+  assert.equal(slots[2].children[0].alt, 'Page 3');
+  polling = f.run('poll()');
+  f.take('/comics').resolve({title:'Book',pages:3,downloaded:3,ready_pages:[2,0,1],loading:false});
+  await polling;
+  assert.deepEqual(slots.map(slot => slot.children[0].alt), ['Page 1','Page 2','Page 3']);
+  assert.equal(f.$('cx-pages').children.length, 3);
+});
+
+test('comic reader recovers polling after a transient connection failure', async () => {
+  const f = fixture('media.js');
+  f.run('let poll; settledInterval = callback => { poll = callback; return 1; };');
+  const opening = f.run("openComic('fixture')");
+  f.take('/comics/load?url=fixture').resolve({ok:true}); await opening;
+  let polling = f.run('poll()');
+  f.take('/comics').reject(new Error('offline')); await polling;
+  assert.match(f.$('cx-progress').textContent, /Retrying/);
+  polling = f.run('poll()');
+  f.take('/comics').resolve({title:'Recovered',pages:1,downloaded:1,ready_pages:[0],loading:false});
+  await polling;
+  assert.match(f.$('cx-progress').textContent, /Recovered/);
+  assert.equal(f.$('cx-pages').children[0].children[0].alt, 'Page 1');
+});
+
+test('comic chapter changes reset page slots and reject previous chapter responses', async () => {
+  const f = fixture('media.js');
+  f.run('let poll; settledInterval = callback => { poll = callback; return 1; };');
+  const first = f.run("openComic('chapter-1')");
+  f.take('/comics/load?url=chapter-1').resolve({ok:true}); await first;
+  const stale = f.run('poll()'); const old = f.take('/comics');
+  const next = f.run("openComic('chapter-2')");
+  f.take('/comics/load?url=chapter-2').resolve({ok:true}); await next;
+  old.resolve({title:'Old',pages:20,downloaded:20,loading:false}); await stale;
+  assert.equal(f.run('comicPageSlots.size'), 0);
+  const current = f.run('poll()');
+  f.take('/comics').resolve({title:'New',pages:1,downloaded:1,ready_pages:[0],loading:false}); await current;
+  assert.equal(f.run('comicPageSlots.size'), 1);
+  assert.match(f.$('cx-progress').textContent, /New/);
 });

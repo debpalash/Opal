@@ -546,6 +546,8 @@ pub fn freeComicPages() void {
             if (dvui.current_window != null) dvui.textureDestroyLater(tex);
         }
         state.app.comic.page_textures[i] = null;
+        state.app.comic.page_widths[i] = 0;
+        state.app.comic.page_heights[i] = 0;
         if (state.app.comic.page_pixels[i]) |px| {
             alloc.free(px);
             state.app.comic.page_pixels[i] = null;
@@ -584,6 +586,7 @@ pub fn closeComic() void {
 fn fetchComicThread(gen: u32) void {
     workers.enter();
     defer workers.leave();
+    defer if (!workers.isQuitting() and state.app.comic.dl_gen.load(.acquire) == gen) state.wakeUi();
     const url = state.app.comic.url_buf[0..state.app.comic.url_len];
 
     inline for (.{ @import("webcomic_sources.zig").Provider.xkcd, @import("webcomic_sources.zig").Provider.smbc, @import("webcomic_sources.zig").Provider.poorlydrawnlines }) |provider| {
@@ -1654,6 +1657,8 @@ fn downloadSinglePage(i: usize, gen: u32) void {
         }
         state.app.comic.page_pixels[i] = pixels;
         _ = state.app.comic.dl_progress.fetchAdd(1, .acq_rel);
+        // The idle owner loop must render to schedule this page's decode.
+        state.wakeUi();
     }
 }
 
@@ -3951,6 +3956,16 @@ test "Native Browse comic reader toolbar stays on one row and keeps navigation r
             root.deinit();
             _ = try window.end(.{});
         }
+        fn readerFrame(window: *dvui.Window, index: usize) !void {
+            try window.begin(@as(i128, @intCast(index + 1)) * 16_666_667);
+            errdefer _ = window.end(.{}) catch null;
+            components.beginFrame();
+            theme.setTheme();
+            var root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+            renderPaneContent(0);
+            root.deinit();
+            _ = try window.end(.{});
+        }
     };
     theme.markUiThread();
     const title = "The Mighty Thor (2015) #1 — A very long chapter title with 日本語 and extra words that must never force the controls into another row";
@@ -3990,6 +4005,13 @@ test "Native Browse comic reader toolbar stays on one row and keeps navigation r
         try std.testing.expect(comic.view_mode == .single_page);
         try Fixture.frame(&window, 10, reader_toolbar_for_test.chapter);
         try std.testing.expect(md_chapter_picker);
+        md_chapter_picker = false;
+        comic.view_mode = .scroll;
+        comic.current_page = 20;
+        comic.scroll_to_page = true;
+        for (11..19) |i| try Fixture.readerFrame(&window, i);
+        try std.testing.expectEqual(.scroll, comic.view_mode);
+        try std.testing.expectEqual(@as(usize, 20), comic.current_page);
     }
 }
 fn readerButton(src: std.builtin.SourceLocation, icon: []const u8, label: []const u8, enabled: bool, active: bool, danger: bool, bounds: *dvui.Rect.Physical) bool {
@@ -4110,13 +4132,13 @@ pub fn renderPaneContent(pane_idx: usize) void {
     }
     // ── Reader keyboard navigation (handled in-scope; input.zig untouched) ──
     // Left / J → previous page · Right / K → next page. Works in both view
-    // modes (in scroll mode it nudges current_page + flags scroll_to_page, which
-    // the block below converts into single-page for a clean jump). Issue nav
+    // modes, preserving continuous reading while revealing the target page. Issue nav
     // stays on the «/» buttons.
     for (dvui.events()) |*e| {
-        if (e.evt != .key) continue;
+        if (e.handled or e.evt != .key) continue;
         const ke = e.evt.key;
         if (ke.action != .down and ke.action != .repeat) continue;
+        if (ke.mod.control() or ke.mod.command() or ke.mod.alt()) continue;
         const prev = ke.code == .left or ke.code == .j;
         const next = ke.code == .right or ke.code == .k;
         if (!prev and !next) continue;
@@ -4131,23 +4153,19 @@ pub fn renderPaneContent(pane_idx: usize) void {
         }
     }
 
-    // Content area
-    // When narrating, force single page mode for reliable page advancement
-    if (state.app.comic.scroll_to_page) {
-        state.app.comic.scroll_to_page = false;
-        if (state.app.comic.view_mode == .scroll) {
-            state.app.comic.view_mode = .single_page;
-        }
-    }
+    const jump_to_page = state.app.comic.scroll_to_page;
+    state.app.comic.scroll_to_page = false;
 
     if (state.app.comic.view_mode == .single_page) {
         // Single page mode
         var sp_scroll = dvui.scrollArea(@src(), .{}, .{
             .expand = .both,
             .background = true,
-            .color_fill = .{ .color = dvui.Color{ .r = 8, .g = 8, .b = 10, .a = 255 } },
+            .color_fill = .{ .color = theme.colors.bg_surface },
         });
         defer sp_scroll.deinit();
+
+        if (jump_to_page) sp_scroll.si.scrollToOffset(.vertical, 0);
 
         // Get available width from scroll area for proper image scaling
         const avail_w = sp_scroll.data().contentRect().w;
@@ -4177,18 +4195,27 @@ pub fn renderPaneContent(pane_idx: usize) void {
         var scroll = dvui.scrollArea(@src(), .{}, .{
             .expand = .both,
             .background = true,
-            .color_fill = .{ .color = dvui.Color{ .r = 8, .g = 8, .b = 10, .a = 255 } },
+            .color_fill = .{ .color = theme.colors.bg_surface },
         });
-        defer scroll.deinit();
+        var jump_offset: ?f32 = null;
 
         // Get available width from scroll area
         const avail_w = scroll.data().contentRect().w;
 
-        // Only render pages near current page to avoid GPU memory exhaustion
-        const render_start = if (state.app.comic.current_page > 2) state.app.comic.current_page - 2 else 0;
-        const render_end = @min(state.app.comic.current_page + 5, state.app.comic.page_count);
-
+        // Use actual scroll geometry, not current_page, to admit decode work.
+        // Keep offscreen pages at their full aspect ratio so the entire issue
+        // remains reachable and the scrollbar does not collapse behind us.
+        var page_top: f32 = 0;
+        const selected_page = state.app.comic.current_page;
         for (0..state.app.comic.page_count) |pg| {
+            const width = @max(avail_w - 4, 10);
+            const source_width = state.app.comic.page_widths[pg];
+            const source_height = state.app.comic.page_heights[pg];
+            const height = if (source_width > 0 and source_height > 0) width * @as(f32, @floatFromInt(source_height)) / @as(f32, @floatFromInt(source_width)) else width * 1.5;
+            const top = page_top;
+            page_top += height + 2;
+            if (jump_to_page and pg == selected_page) jump_offset = top;
+            if (!jump_to_page and scroll.si.viewport.y >= top and scroll.si.viewport.y < page_top) state.app.comic.current_page = pg;
             var page_box = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = pg,
                 .gravity_x = 0.5,
@@ -4196,17 +4223,12 @@ pub fn renderPaneContent(pane_idx: usize) void {
             });
             defer page_box.deinit();
 
-            // Only decode/render pages in the visible window
-            if (pg < render_start or pg >= render_end) {
-                // Placeholder for off-screen pages — keep layout space
-                var h_buf: [48]u8 = undefined;
-                const h_lbl = @import("opal-fmt").bufPrintZ(&h_buf, "Page {d}", .{pg + 1}) catch "...";
-                _ = dvui.label(@src(), "{s}", .{h_lbl}, .{
-                    .id_extra = pg + 12000,
-                    .color_text = .{ .color = theme.colors.text_secondary },
-                    .gravity_x = 0.5,
-                    .min_size_content = .{ .w = 100, .h = 200 },
-                });
+            if (!pure.readerPageVisible(top, height, scroll.si.viewport.y, scroll.si.viewport.h)) {
+                if (state.app.comic.page_textures[pg]) |texture| {
+                    dvui.textureDestroyLater(texture);
+                    state.app.comic.page_textures[pg] = null;
+                }
+                _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = width, .h = height } });
                 continue;
             }
 
@@ -4228,6 +4250,10 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 renderPagePlaceholder(pg, avail_w);
             }
         }
+        // Scroll bounds are only final after layout is committed.
+        const scroll_info = scroll.si;
+        scroll.deinit();
+        if (jump_offset) |offset| scroll_info.scrollToOffset(.vertical, offset);
     }
 
     // ═══════════════════════════════════════════════════════

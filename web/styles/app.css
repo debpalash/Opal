@@ -493,7 +493,8 @@ button:disabled{cursor:not-allowed}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-word;white-space:pre-wrap}
 .reader{white-space:pre-wrap;line-height:1.65;font-size:15px;padding:4px 2px 40px;color:var(--text-1)}
 /* Comic pages are tall scans — full width, never wider than the viewport. */
-.cx-page{display:block;width:100%;max-width:820px;margin:0 auto 6px;border-radius:var(--rad)}
+.cx-page{display:block;width:100%;height:auto;max-width:1200px;margin:0 auto 2px;border-radius:0}
+.cx-page-error{min-height:160px;cursor:pointer;background:var(--bg-surface);padding:16px;object-fit:contain}
 #cx-reader,#nv-text{margin-bottom:32px}
 .tor{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--rad);
   padding:10px 12px;margin-bottom:6px}
@@ -879,3 +880,6 @@ body.inline-player-open{overflow:hidden}
 
 .search-source-option>div:last-child{flex-wrap:wrap}
 .search-source-option button{min-height:40px}
+
+.cx-page-slot{max-width:1200px;margin:0 auto}
+.cx-page-pending{min-height:240px;display:flex;align-items:center;justify-content:center;padding:24px;color:var(--text-2)}

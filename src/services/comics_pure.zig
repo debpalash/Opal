@@ -1193,3 +1193,14 @@ test "parseMangaEntry finds cover despite tags carrying empty relationships (iOS
     const e = parseMangaEntry(obj).?;
     try std.testing.expectEqualStrings("abc.jpg", e.cover_file);
 }
+
+test "continuous reader decodes later pages reached by scrolling" {
+    try std.testing.expect(readerPageVisible(9000, 1200, 9200, 800));
+    try std.testing.expect(!readerPageVisible(0, 1200, 9200, 800));
+    try std.testing.expect(!readerPageVisible(16000, 1200, 9200, 800));
+}
+
+/// Decode the viewport plus one screen on each side, regardless of selection.
+pub fn readerPageVisible(top: f32, height: f32, viewport_top: f32, viewport_height: f32) bool {
+    return top + height >= viewport_top - viewport_height and top <= viewport_top + viewport_height * 2;
+}
