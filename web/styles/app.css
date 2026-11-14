@@ -666,6 +666,16 @@ button:disabled{cursor:not-allowed}
   background:var(--bg-surface)}
 #player .bar .t{flex:1;font-size:13px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #player .bar button{color:var(--accent);font-weight:600}
+#player .player-copy{flex:1;min-width:0}
+#player-status{font-size:12px;color:var(--text-3);min-height:18px}
+#player .player-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+#player .bar button,#player-speed{min-height:40px;min-width:44px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--rad-sm)}
+#player .bar button:hover{background:var(--bg-hover)}
+body.inline-player-open{overflow:hidden}
+#profile-form{flex-wrap:wrap}
+#profile-choice{min-width:120px;flex:1}
+#profile-pin{flex:1;min-width:120px}
+@media(max-width:600px){#player .bar{flex-wrap:wrap}#player .player-copy{flex-basis:100%}#player .player-actions{width:100%}#player-close{margin-left:auto}}
 
 /* Browser zoom reduces the CSS viewport. Keep controls readable and operable
    at 200% without horizontal scrolling or clipped actions. This lives last so

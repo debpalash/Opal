@@ -119,9 +119,10 @@ const nativeInsertAdjacentHTML = Element.prototype.insertAdjacentHTML;
 const renderedMarkup = new WeakMap();
 const blockedElements = new Set(['SCRIPT','IFRAME','OBJECT','EMBED','BASE','META','LINK','FORM']);
 const urlAttributes = new Set(['href','src','action','formaction','xlink:href']);
-function safeDomFragment(markup){
+function safeDomFragment(markup, replacing){
   const template = document.createElement('template');
   nativeInnerHTML.set.call(template, String(markup ?? ''));
+  const ids = new Set();
   template.content.querySelectorAll('*').forEach(node => {
     if (blockedElements.has(node.tagName)) { node.remove(); return; }
     [...node.attributes].forEach(attribute => {
@@ -129,8 +130,14 @@ function safeDomFragment(markup){
       if (name.startsWith('on') || name === 'srcdoc' || name === 'nonce') {
         node.removeAttribute(attribute.name); return;
       }
-      if (name === 'id' && document.getElementById(value)) {
-        node.removeAttribute(attribute.name); return;
+      if (name === 'id') {
+        const existing = document.getElementById(value);
+        // Descendants being replaced leave the document in the same write.
+        // Their IDs belong to the new view; IDs elsewhere still collide.
+        if (ids.has(value) || (existing && !(existing !== replacing && replacing?.contains(existing)))) {
+          node.removeAttribute(attribute.name); return;
+        }
+        ids.add(value);
       }
       if (name === 'style' && /(?:url\s*\(|expression\s*\(|@import)/i.test(value)) {
         node.removeAttribute(attribute.name); return;
@@ -156,7 +163,7 @@ Object.defineProperty(Element.prototype, 'innerHTML', {
   get(){ return nativeInnerHTML.get.call(this); },
   set(markup){
     renderedMarkup.delete(this);
-    this.replaceChildren(safeDomFragment(markup));
+    this.replaceChildren(safeDomFragment(markup, this));
   },
 });
 Element.prototype.insertAdjacentHTML = function(position, markup){

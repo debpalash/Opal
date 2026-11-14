@@ -57,9 +57,23 @@ pub const LibraryItem = struct {
 
 /// Percent from resume/duration, clamped to [0,100]. 0 when duration is unknown.
 pub fn percentOf(resume_secs: f64, duration_secs: f64) f64 {
-    if (duration_secs <= 0 or resume_secs <= 0) return 0;
+    if (!std.math.isFinite(resume_secs) or !std.math.isFinite(duration_secs) or duration_secs <= 0 or resume_secs <= 0) return 0;
     const p = resume_secs / duration_secs * 100.0;
     return std.math.clamp(p, 0, 100);
+}
+
+/// Reading adapters store pages/chapters in the clock fields. Only timed media
+/// can promise minutes remaining; malformed and unknown clocks have no estimate.
+pub fn remainingMinutes(kind: ContentKind, resume_secs: f64, duration_secs: f64) ?u32 {
+    switch (kind) {
+        .watch, .movie, .tv, .anime, .podcast, .audiobook, .music => {},
+        else => return null,
+    }
+    if (!std.math.isFinite(resume_secs) or !std.math.isFinite(duration_secs) or
+        resume_secs < 0 or duration_secs <= resume_secs) return null;
+    const minutes = @ceil((duration_secs - resume_secs) / 60);
+    if (minutes > std.math.maxInt(u32)) return null;
+    return @intFromFloat(minutes);
 }
 
 /// The lower edge of the "Continue" band. It exists to keep an accidental
@@ -97,4 +111,20 @@ test "content kind keeps persisted adapters typed" {
 
 test "saved search works reopen through search instead of a media URL" {
     try std.testing.expectEqual(ContentKind.search, parseKind("search"));
+}
+
+test "invalid playback clocks never produce invalid library progress" {
+    try std.testing.expectEqual(@as(f64, 0), percentOf(std.math.nan(f64), 100));
+    try std.testing.expectEqual(@as(f64, 0), percentOf(20, std.math.nan(f64)));
+    try std.testing.expectEqual(@as(f64, 0), percentOf(std.math.inf(f64), 100));
+    try std.testing.expectEqual(@as(f64, 0), percentOf(20, std.math.inf(f64)));
+}
+
+test "remaining time rounds up and never treats reading progress as seconds" {
+    try std.testing.expectEqual(@as(?u32, 23), remainingMinutes(.movie, 1230, 2600));
+    try std.testing.expectEqual(@as(?u32, 1), remainingMinutes(.podcast, 299, 300));
+    try std.testing.expectEqual(@as(?u32, null), remainingMinutes(.comics, 10, 40));
+    try std.testing.expectEqual(@as(?u32, null), remainingMinutes(.novels, 10, 40));
+    try std.testing.expectEqual(@as(?u32, null), remainingMinutes(.movie, 300, 300));
+    try std.testing.expectEqual(@as(?u32, null), remainingMinutes(.movie, 10, std.math.inf(f64)));
 }

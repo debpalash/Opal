@@ -1068,7 +1068,7 @@ pub fn openNovel(idx: usize) void {
 
     // Snapshot the selected work (source + title + URL) BEFORE spawning — the
     // search grid can be reordered by a fresh search while chapters load.
-    open_source = @fromBackingInt(@intCast(row.source));
+    open_source = @enumFromInt(row.source);
 
     const tlen = @min(row.title_len, state.app.novels.work_title.len);
     @memcpy(state.app.novels.work_title[0..tlen], row.title_buf[0..tlen]);
@@ -1148,12 +1148,29 @@ fn chaptersReadingProvider(job: ReaderJob) void {
     const provider: reading_provider.Source = if (job.source == .standardebooks) .standardebooks else .wuxiaclick;
     const work = job.url[0..job.url_len];
     var url_buf: [1600]u8 = undefined;
-    const url = reading_provider.chapterListUrl(&url_buf, base, provider, work) orelse return;
-    const body = fetchReaderBody(url, 4 * 1024 * 1024, job.generation, false) orelse return;
-    defer alloc.free(body);
+    const directory = reading_provider.chapterListUrl(&url_buf, base, provider, work) orelse return;
     const rows = alloc.alloc(reading_provider.Chapter, MAX_CHAPTERS) catch return;
     defer alloc.free(rows);
-    const window = reading_provider.chaptersWindowTargetInto(body, base, provider, work, job.chapter_offset, job.resume_target[0..job.resume_target_len], rows);
+    const modern = provider == .wuxiaclick and reading_provider.modernWuxia(base);
+    var window: reading_provider.ChapterWindow = .{};
+    // Public Wuxia pages expose 100 chapters at a time. Fill the owned reader
+    // window across pages, retaining absolute ordinals and exact resume URLs.
+    var page: usize = 1;
+    var seen: usize = 0;
+    while (page <= 10000) : (page += 1) {
+        var page_url: [1600]u8 = undefined;
+        const url = if (modern) std.fmt.bufPrint(&page_url, "{s}?page={d}&order=asc", .{ directory, page }) catch return else directory;
+        const body = fetchReaderBody(url, 4 * 1024 * 1024, job.generation, false) orelse return;
+        defer alloc.free(body);
+        const part = reading_provider.chaptersPageTargetInto(body, base, provider, work, job.chapter_offset, job.resume_target[0..job.resume_target_len], seen, rows);
+        seen += part.page_count;
+        window.count += part.count;
+        window.total = part.total;
+        if (part.matched_ordinal) |ordinal| window.matched_ordinal = ordinal;
+        window.has_more = window.total > job.chapter_offset +| window.count;
+        const resume_found = job.resume_target_len == 0 or window.matched_ordinal != null;
+        if (!modern or (resume_found and (window.count >= MAX_CHAPTERS or !window.has_more)) or page >= part.page_total) break;
+    }
     parse_mutex.lock();
     defer parse_mutex.unlock();
     if (chapters_gen.load(.acquire) != job.generation) return;
@@ -2330,7 +2347,7 @@ fn novelSourceIcon(source: NovelSource) []const u8 {
 fn renderNovelCard(item: ListRow, index: usize, card_width: f32) void {
     var name_buf: [256]u8 = undefined;
     const name = safeUtf8Buf(item.title(), &name_buf);
-    const source: NovelSource = @fromBackingInt(@intCast(item.source));
+    const source: NovelSource = @enumFromInt(item.source);
 
     var bw: dvui.ButtonWidget = undefined;
     bw.init(@src(), .{}, .{

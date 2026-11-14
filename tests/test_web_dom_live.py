@@ -43,7 +43,17 @@ const encodedButton = probe.querySelector('button');
 const executable = probe.querySelector('script,iframe,object,embed,form') ||
   [...probe.querySelectorAll('*')].some(node => [...node.attributes].some(attr =>
     attr.name.toLowerCase().startsWith('on') || /^(?:javascript|vbscript):/i.test(attr.value)));
+const view = document.createElement('div');
+view.id = 'refresh-view'; document.body.append(view);
+view.innerHTML = '<button id="refresh-action">Before</button>';
+view.innerHTML = '<button id="refresh-action">After</button>';
+const refreshPreserved = view.querySelector('button').id === 'refresh-action';
+const duplicate = document.createElement('div'); document.body.append(duplicate);
+duplicate.innerHTML = '<span id="refresh-action">Duplicate</span><span id="local-duplicate">One</span><span id="local-duplicate">Two</span>';
+const collisionRejected = !duplicate.querySelector('span').id;
+const localUnique = duplicate.querySelectorAll('#local-duplicate').length === 1;
 document.getElementById('result').textContent = JSON.stringify({{
+  refreshPreserved, collisionRejected, localUnique,
   executed: window.__opalExecuted,
   executable: Boolean(executable),
   text: probe.textContent,
@@ -121,6 +131,9 @@ document.getElementById('result').textContent = JSON.stringify({{
         self.assertIn(marker, stdout, stderr[-2000:])
         payload = stdout.split(marker, 1)[1].split("</pre>", 1)[0]
         result = json.loads(payload.replace("&quot;", '"').replace("&amp;", "&"))
+        self.assertTrue(result["refreshPreserved"], "refresh stripped the action ID")
+        self.assertTrue(result["collisionRejected"])
+        self.assertTrue(result["localUnique"], "duplicate IDs inside one render")
         self.assertFalse(result["executed"])
         self.assertFalse(result["executable"])
         self.assertFalse(result["injectedAction"])

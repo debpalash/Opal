@@ -15,6 +15,22 @@ import test_setup_token_live as live
 
 
 class GitHubReadingLiveTest(unittest.TestCase):
+    def test_wuxia_large_directory_retains_absolute_chapter_windows(self):
+        self.api("novels/open?" + urlencode({
+            "source": "wuxiaclick", "title": "Renegade Immortal",
+            "url": "https://wuxia.click/novel/renegade-immortal",
+        }), method="POST")
+        first = self.until("novels", lambda d: not d["chapters_loading"] and bool(d["chapters"]))
+        self.assertFalse(first["error"])
+        self.assertGreater(first["chapter_total"], 400)
+        self.assertEqual(len(first["chapters"]), 400)
+        self.assertEqual(first["chapter_offset"], 0)
+        self.api("novels/window?" + urlencode({"ordinal":400, "generation":first["chapter_generation"]}), method="POST")
+        following = self.until("novels", lambda d: not d["chapters_loading"] and d["chapter_offset"] == 400)
+        self.assertFalse(following["error"])
+        self.assertEqual(len(following["chapters"]), 400)
+        self.assertNotEqual(first["chapters"][0], following["chapters"][0])
+
     def setUp(self):
         self.opal = live.IsolatedOpal(self)
         self.addCleanup(self.opal.stop)
