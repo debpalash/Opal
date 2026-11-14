@@ -48,13 +48,15 @@ function syncNowPlayingArt(active, status){
 $('np-art').onload = () => { $('np-art').hidden = false; };
 $('np-art').onerror = () => { $('np-art').hidden = true; };
 
+let nowPlayingSourceQuery = "";
 function applyStatus(d){
+  nowPlayingSourceQuery = String(d.source_query || "");
   $('conn-dot').classList.add('on');
   const active = d.active === true || (d.active == null && d.title && d.title !== 'No media');
   const error = active && d.error ? String(d.error) : '';
   const state = error ? 'Error'
     : d.recovering ? 'Recovering'
-    : d.loading ? 'Loading'
+    : d.loading ? (d.stage || 'Connecting')
     : d.buffering ? 'Buffering'
     : d.paused ? 'Paused' : 'Playing';
   const duration = Number.isFinite(+d.dur) ? Math.max(0, +d.dur) : 0;
@@ -71,6 +73,8 @@ function applyStatus(d){
   setStatusText('np-error-text', error);
   $('np-retry').hidden = !error || !d.retryable;
   $('np-retry').disabled = retryPending || !d.retryable;
+  if ($('np-choose-source')) $('np-choose-source').hidden = !error || !d.can_choose_source;
+  if ($('np-source-fallback')) $('np-source-fallback').checked = d.source_fallback !== false;
 
   const meta = [];
   if (active) {
@@ -365,3 +369,26 @@ async function loadPlayerTools(force){
   } catch { $('player-tools-state').textContent = 'No desktop player is available.'; }
   if (!$('player-tools').hidden) playerToolsWatch = setTimeout(() => loadPlayerTools(false), 2500);
 }
+
+if ($('np-choose-source')) $('np-choose-source').onclick = async () => {
+  const button = $('np-choose-source');
+  button.disabled = true;
+  try {
+    await apiMutation('/player/action?action=choose_source');
+    if (nowPlayingSourceQuery) $('q').value = nowPlayingSourceQuery;
+    for (const [id, value] of Object.entries({'search-content':'all','search-availability':'all','search-quality':'0','search-seeds':'0','search-size':'0','search-provider':''})) $(id).value = value;
+    $('search-sort').value = 'relevance';
+    if (typeof renderSearchFilterChips === 'function') renderSearchFilterChips();
+    openPage('search');
+    runSearch();
+    toast('Choose another source in Opal. Your playback position is kept.');
+  } catch (error) { toast(error?.message || 'Could not open sources'); }
+  finally { button.disabled = false; }
+};
+if ($('np-source-fallback')) $('np-source-fallback').onchange = async event => {
+  const checkbox = event.target, enabled = checkbox.checked;
+  checkbox.disabled = true;
+  try { await apiMutation('/player/action?action=source_fallback&value=' + enabled); }
+  catch (error) { checkbox.checked = !enabled; toast(error?.message || 'Could not change source fallback'); }
+  finally { checkbox.disabled = false; }
+};

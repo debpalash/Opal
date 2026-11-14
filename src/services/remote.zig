@@ -1688,6 +1688,11 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
         apiUnifiedSearchAction(stream, query, .play);
         return;
     }
+    if (std.mem.eql(u8, api_path, "/unified_search/prefer") or std.mem.eql(u8, api_path, "/unified_search/clear_preference")) {
+        if (!requireMethod(stream, method, "POST")) return;
+        apiUnifiedSearchAction(stream, query, if (std.mem.endsWith(u8, api_path, "/prefer")) .prefer else .clear_preference);
+        return;
+    }
     if (std.mem.eql(u8, api_path, "/unified_search/queue")) {
         if (!requireMethod(stream, method, "POST")) return;
         apiUnifiedSearchAction(stream, query, .queue);
@@ -4223,7 +4228,7 @@ fn apiUnifiedResolverSearch(stream: std.Io.net.Stream, query: []const u8) void {
             view.score,
         }) catch return;
         escJsonWrite(&w, view.provider.name());
-        w.writeAll("\"") catch return;
+        w.print("\",\"preferred\":{s},\"can_prefer\":{s}", .{ if (resolver.isPreferred(item)) "true" else "false", if (item.source == .plugin or item.source == .stremio) "true" else "false" }) catch return;
         if (item.source == .tmdb and item.catalog_id != 0) {
             w.writeAll(",\"media\":\"") catch return;
             escJsonWrite(&w, item.catalog_kind[0..@min(item.catalog_kind_len, item.catalog_kind.len)]);
@@ -4608,7 +4613,7 @@ fn apiPlayerSnapshot(stream: std.Io.net.Stream, ap: *player.MediaPlayer, players
     const aspect = if (aspect_c != null) std.mem.span(aspect_c) else "-1";
     const active_device = if (device_c != null) std.mem.span(device_c) else "auto";
     const load_error = txt.safeUtf8(ap.load_error[0..@min(ap.load_error_len, ap.load_error.len)]);
-    const retryable = load_error.len > 0 and ap.current_url_len > 0;
+    const retryable = load_error.len > 0 and (ap.current_url_len > 0 or ap.plugin_retry_pending);
 
     w.writeAll("{\"state\":{\"title\":\"") catch return;
     const title = if (ap.np_title_len > 0)
@@ -4872,6 +4877,17 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
             sendJsonStatus(stream, "409 Conflict", "{\"error\":\"nothing to retry\"}");
             return;
         },
+        .choose_source => {
+            if (!@import("resolver.zig").chooseAnotherSource(ap)) {
+                if (players_locked.*) {
+                    players_locked.* = false;
+                    state.players_mutex.unlock();
+                }
+                sendJsonStatus(stream, "409 Conflict", "{\"error\":\"Search for this title to choose a source\"}");
+                return;
+            }
+        },
+        .source_fallback => |enabled| ap.allow_source_fallback = enabled,
         .cancel_current => ap.cancelCurrentLoad(),
         .close_player => state.app.pending_remove_player_idx = @intCast(state.app.active_player_idx),
     }

@@ -82,11 +82,11 @@ pub fn build(buf: []u8) []const u8 {
     const recovering = player.last_error_time > 0 and now >= player.last_error_time and now - player.last_error_time <= 5000;
     const loading = player.is_loading or (player.is_torrent and !player.torrent_is_ready);
     const buffering = playback.paused_for_cache or player.is_buffering_paused;
-    const active = player.current_url_len > 0 or loading or !std.mem.eql(u8, title, "No media");
+    const active = player.current_url_len > 0 or player.plugin_retry_pending or loading or !std.mem.eql(u8, title, "No media");
     const raw_rating: f64 = @floatCast(player.loading_rating);
     const rating = std.math.clamp(finite(raw_rating, 0), 0, 10);
     const load_error = txt.safeUtf8(player.load_error[0..@min(player.load_error_len, player.load_error.len)]);
-    const retryable = load_error.len > 0 and player.current_url_len > 0;
+    const retryable = load_error.len > 0 and (player.current_url_len > 0 or player.plugin_retry_pending);
 
     w.print("{{\"active\":{s},\"pos\":{d:.1},\"dur\":{d:.1},\"vol\":{d:.0},\"paused\":{s},\"loading\":{s},\"buffering\":{s},\"recovering\":{s},\"error\":\"", .{
         if (active) "true" else "false",
@@ -100,7 +100,12 @@ pub fn build(buf: []u8) []const u8 {
     }) catch return buf[0..0];
     wire.writeJsonString(&w, load_error);
     w.print("\",\"retryable\":{s},\"title\":\"", .{if (retryable) "true" else "false"}) catch return buf[0..0];
+    // Playback stages expose actionable progress without revealing URLs.
     wire.writeJsonString(&w, title);
+    const stage: []const u8 = if (load_error.len > 0) "Stopped" else if (player.plugin_retry_pending and loading) "Resolving source" else if (buffering) "Buffering" else if (loading) "Connecting" else if (playback.paused) "Paused" else "Playing";
+    w.print("\",\"can_choose_source\":{s},\"source_fallback\":{s},\"stage\":\"{s}", .{ if (player.source_search_query_len > 0) "true" else "false", if (player.allow_source_fallback) "true" else "false", stage }) catch return buf[0..0];
+    w.writeAll("\",\"source_query\":\"") catch return buf[0..0];
+    wire.writeJsonString(&w, player.source_search_query[0..player.source_search_query_len]);
     w.writeAll("\",\"subtitle\":\"") catch return buf[0..0];
     wire.writeJsonString(&w, subtitle);
     w.writeAll("\",\"overview\":\"") catch return buf[0..0];

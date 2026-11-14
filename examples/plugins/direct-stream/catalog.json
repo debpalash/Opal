@@ -1,0 +1,11 @@
+[
+  {
+    "id": "demo",
+    "title": "My video",
+    "type": "video",
+    "episodes": [
+      {"url": "http://127.0.0.1:8000/episode-1.mp4", "quality": "1080p", "language": "en"},
+      {"url": "http://127.0.0.1:8000/episode-2.m3u8", "quality": "720p", "language": "en"}
+    ]
+  }
+]

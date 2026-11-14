@@ -869,3 +869,13 @@ body.inline-player-open{overflow:hidden}
 
 /* Shared disclosures retain usable tap targets on every screen. */
 .acc-group>summary{min-height:40px;padding:9px 0;cursor:pointer;color:var(--text-2);font-weight:650}
+
+/* Source recovery sits with transport feedback, using the existing palette. */
+.source-fallback-setting{display:flex;align-items:center;gap:8px;margin:12px 0;color:var(--text-2);font-size:12px;min-height:40px}
+.source-fallback-setting input{width:18px;height:18px;accent-color:var(--accent)}
+.search-source-option button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
+.np-error{flex-wrap:wrap}
+.np-error button{min-height:40px}
+
+.search-source-option>div:last-child{flex-wrap:wrap}
+.search-source-option button{min-height:40px}

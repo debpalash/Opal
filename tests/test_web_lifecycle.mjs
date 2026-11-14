@@ -1397,3 +1397,51 @@ test('Live TV admits only one load-more request and retains its page on failure'
   await retry;
   assert.equal(f.$('tv-hint').textContent, '2 of 3 channels');
 });
+
+test('source fallback changes use typed actions and roll back on failure', async () => {
+  const f = fixture('now-playing.js');
+  const checkbox = f.$('np-source-fallback');
+  checkbox.checked = false;
+  const pending = checkbox.onchange({target:checkbox});
+  assert.equal(checkbox.disabled, true);
+  f.take('/player/action?action=source_fallback&value=false').reject(new Error('Offline'));
+  await pending;
+  assert.equal(checkbox.checked, true);
+  assert.equal(checkbox.disabled, false);
+});
+
+test('source recovery offers the original query and visible resolution stage', async () => {
+  const f = fixture('now-playing.js');
+  f.run(`$('i-pp').firstElementChild = new Element();
+    globalThis.openPage = page => rendered.push(page);
+    globalThis.runSearch = () => rendered.push($('q').value);
+    applyStatus({active:true,title:'Fixture',stage:'Resolving source',loading:true,paused:true,pos:0,dur:0,vol:100});`);
+  assert.match(f.$('np-meta').dataset.value, /Resolving source/);
+  f.run(`applyStatus({active:true,title:'Fixture',error:'Unavailable',retryable:true,can_choose_source:true,source_query:'Fixture S01E02',pos:25,dur:90,paused:true,vol:100})`);
+  assert.equal(f.$('np-choose-source').hidden, false);
+  f.$('search-provider').value = 'Broken provider';
+  f.$('search-availability').value = 'torrents';
+  const pending = f.$('np-choose-source').onclick();
+  f.take('/player/action?action=choose_source').resolve({ok:true});
+  await pending;
+  assert.deepEqual(f.rendered, ['search', 'Fixture S01E02']);
+  assert.equal(f.$('search-provider').value, '');
+  assert.equal(f.$('search-availability').value, 'all');
+});
+
+test('source details expose an accessible per-title provider preference', async () => {
+  const f = fixture('catalog.js');
+  const button = f.$('prefer-fixture'); button.dataset.detailPrefer = '0';
+  f.$('search-detail').querySelectorAll = selector => selector === '[data-detail-prefer]' ? [button] : [];
+  f.run(`renderSearchDetail({identity:'fixture',kind:'video',row:{title:'Fixture',key:'abc',source:'plugin'},rows:[{title:'Fixture',key:'abc',source:'plugin',provider:'Example',can_prefer:true,preferred:false}]},17)`);
+  assert.match(f.$('search-detail').innerHTML,/data-detail-prefer="0" aria-pressed="false"/);
+  const pending = button.onclick();
+  f.take('/unified_search/prefer?generation=17&key=abc').resolve({ok:true});
+  await pending;
+  assert.equal(button.textContent,'Preferred provider');
+  assert.equal(button.attributes.get('aria-pressed'),'true');
+  const clear = button.onclick();
+  f.take('/unified_search/clear_preference?generation=17&key=abc').resolve({ok:true});
+  await clear;
+  assert.equal(button.attributes.get('aria-pressed'),'false');
+});

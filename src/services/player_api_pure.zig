@@ -76,6 +76,8 @@ pub const Action = union(enum) {
     loop_clear,
     clip_export,
     retry_current,
+    choose_source,
+    source_fallback: bool,
     cancel_current,
     close_player,
 };
@@ -170,6 +172,13 @@ pub fn parse(name: []const u8, value: ?[]const u8) ParseError!Action {
     if (std.mem.eql(u8, name, "loop-clear")) return .loop_clear;
     if (std.mem.eql(u8, name, "clip-export")) return .clip_export;
     if (std.mem.eql(u8, name, "retry")) return .retry_current;
+    if (std.mem.eql(u8, name, "choose_source")) return .choose_source;
+    if (std.mem.eql(u8, name, "source_fallback")) {
+        const flag = try required(value);
+        if (std.mem.eql(u8, flag, "true")) return .{ .source_fallback = true };
+        if (std.mem.eql(u8, flag, "false")) return .{ .source_fallback = false };
+        return error.InvalidValue;
+    }
     if (std.mem.eql(u8, name, "cancel")) return .cancel_current;
     if (std.mem.eql(u8, name, "close")) return .close_player;
     return error.UnknownAction;
@@ -220,4 +229,11 @@ test "fixed actions need no caller-controlled command text" {
     try std.testing.expectError(error.MissingValue, parse("live-captions", null));
     try std.testing.expectError(error.InvalidValue, parse("live-captions", "maybe"));
     try std.testing.expectEqual(Action.subtitle_translate, try parse("subtitle-translate", null));
+}
+
+test "source recovery and fallback controls are explicit typed operations" {
+    try std.testing.expectEqual(Action.choose_source, try parse("choose_source", null));
+    try std.testing.expect((try parse("source_fallback", "true")).source_fallback);
+    try std.testing.expect(!(try parse("source_fallback", "false")).source_fallback);
+    try std.testing.expectError(error.InvalidValue, parse("source_fallback", "maybe"));
 }

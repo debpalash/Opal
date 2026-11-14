@@ -357,6 +357,15 @@ var next_player_lifetime_id: std.atomic.Value(u64) = .init(1);
 pub const MediaPlayer = struct {
     /// Distinguishes a queued action from a later allocation at the same address.
     lifetime_id: u64 = 0,
+    plugin_retry_id: [64]u8 = @splat(0),
+    plugin_retry_item: [128]u8 = @splat(0),
+    plugin_retry_episode: [32]u8 = @splat(0),
+    plugin_retry_pending: bool = false,
+    plugin_source_active: bool = false,
+    plugin_resume_secs: ?f64 = null,
+    source_search_query: [256]u8 = @splat(0),
+    source_search_query_len: usize = 0,
+    allow_source_fallback: bool = true,
     mpv_ctx: *c.mpv.mpv_handle,
     mpv_gl: ?*c.mpv.mpv_render_context,
     /// Front buffer: the last frame the render worker finished. Read by the
@@ -814,6 +823,15 @@ pub const MediaPlayer = struct {
     fn initPrepared(allocator: std.mem.Allocator, start_renderer: bool) !*MediaPlayer {
         const self = try allocator.create(MediaPlayer);
         self.audio_only_intent = false;
+        self.plugin_retry_id = @splat(0);
+        self.plugin_retry_item = @splat(0);
+        self.plugin_retry_episode = @splat(0);
+        self.plugin_retry_pending = false;
+        self.plugin_source_active = false;
+        self.plugin_resume_secs = null;
+        self.source_search_query = @splat(0);
+        self.source_search_query_len = 0;
+        self.allow_source_fallback = true;
         self.lifetime_id = next_player_lifetime_id.fetchAdd(1, .monotonic);
         self.texture = null;
         self.current_torrent_id = -1;
@@ -1378,7 +1396,7 @@ pub const MediaPlayer = struct {
         self.load(.{ .url = std.mem.span(path) });
     }
 
-    fn setLoadError(self: *MediaPlayer, message: []const u8) void {
+    pub fn setLoadError(self: *MediaPlayer, message: []const u8) void {
         @memset(&self.load_error, 0);
         const n = @min(message.len, self.load_error.len);
         @memcpy(self.load_error[0..n], message[0..n]);
@@ -1426,6 +1444,10 @@ pub const MediaPlayer = struct {
             self.commitPlayback(request);
             return;
         }
+
+        self.plugin_retry_pending = false;
+        self.plugin_source_active = false;
+        self.source_search_query_len = 0;
 
         // A replace starts a new logical playback owner. This is separate from
         // commitPlayback because async resolution/fallback commits belong to
@@ -1855,12 +1877,50 @@ pub const MediaPlayer = struct {
         self.setLoadError(message);
     }
 
+    /// Invalidate the old item before admitting a provider resolution.
+    pub fn beginPluginResolve(self: *MediaPlayer, plugin_id: []const u8, item: []const u8, episode: []const u8) void {
+        self.cancelCurrentLoad();
+        self.load_serial = playback_load_sequence.fetchAdd(1, .acq_rel) + 1;
+        self.plugin_retry_pending = true;
+        @memset(&self.plugin_retry_id, 0);
+        @memset(&self.plugin_retry_item, 0);
+        @memset(&self.plugin_retry_episode, 0);
+        @memcpy(self.plugin_retry_id[0..@min(plugin_id.len, 63)], plugin_id[0..@min(plugin_id.len, 63)]);
+        @memcpy(self.plugin_retry_item[0..@min(item.len, 127)], item[0..@min(item.len, 127)]);
+        @memcpy(self.plugin_retry_episode[0..@min(episode.len, 31)], episode[0..@min(episode.len, 31)]);
+        self.is_loading = true;
+        self.load_error_len = 0;
+        self.provider = .mpv;
+        const label = "Resolving source…";
+        @memcpy(self.loading_label[0..label.len], label);
+        self.loading_label_len = label.len;
+    }
+
     /// Retry the current logical item without losing its owner, credential-free
     /// history identity, provider deep link, HTTP identity, or loopback policy.
     /// The desktop and remote player both use this seam so a retry behaves the
     /// same regardless of which surface requested it.
     pub fn retryCurrentLoad(self: *MediaPlayer) bool {
+        if (self.plugin_retry_pending or self.plugin_source_active) {
+            const plugin_resume_at = playback_load.saneResumePosition(if (self.last_seen_pos > 0) self.last_seen_pos else self.last_good_pos_secs);
+            const previous = state.app.active_player_idx;
+            for (state.app.players.items, 0..) |candidate, idx| if (candidate == self) {
+                state.app.active_player_idx = idx;
+                break;
+            };
+            const retry_id = self.plugin_retry_id;
+            const retry_item = self.plugin_retry_item;
+            const retry_episode = self.plugin_retry_episode;
+            const retry_query = self.source_search_query;
+            const retry_query_len = self.source_search_query_len;
+            @import("../services/plugins.zig").runPluginResolveByIdAt(std.mem.sliceTo(&retry_id, 0), std.mem.sliceTo(&retry_item, 0), std.mem.sliceTo(&retry_episode, 0), plugin_resume_at);
+            self.source_search_query = retry_query;
+            self.source_search_query_len = retry_query_len;
+            state.app.active_player_idx = previous;
+            return true;
+        }
         if (self.current_url_len == 0) return false;
+        const resume_at = playback_load.saneResumePosition(self.last_seen_pos);
 
         var url: [MAX_LOAD_URL]u8 = undefined;
         const url_len = @min(self.current_url_len, url.len);
@@ -1878,6 +1938,8 @@ pub const MediaPlayer = struct {
         const restore_len = @min(self.restore_target_len, restore_target.len);
         @memcpy(restore_target[0..restore_len], self.restore_target[0..restore_len]);
 
+        const source_query = self.source_search_query;
+        const source_query_len = self.source_search_query_len;
         const origin = self.playback_origin;
         const queue_item_id = self.queue_item_id;
         const loopback_stream = self.current_loopback_stream;
@@ -1890,7 +1952,10 @@ pub const MediaPlayer = struct {
             .user_agent = user_agent[0..user_agent_len],
             .prepared_header_fields = headers[0..headers_len],
             .loopback_stream = loopback_stream,
+            .resume_position_secs = resume_at,
         });
+        self.source_search_query = source_query;
+        self.source_search_query_len = source_query_len;
         return true;
     }
 
@@ -2116,6 +2181,9 @@ pub const MediaPlayer = struct {
     /// Cancel a load without destroying the player; stop network reads before
     /// resetting the logical identity and returning the pane to its idle state.
     pub fn cancelCurrentLoad(self: *MediaPlayer) void {
+        self.plugin_retry_pending = false;
+        self.plugin_source_active = false;
+        self.source_search_query_len = 0;
         self.releaseMemoryTorrent();
         self.load_serial = playback_load_sequence.fetchAdd(1, .acq_rel) + 1;
         @import("../services/auto_subs.zig").cancelForMediaChange();
@@ -3108,7 +3176,7 @@ pub fn updateTorrentBackgroundTasks() void {
                     // server's generic direct stream). Preserve the stable
                     // identity, headers, resume point and player surface while
                     // retrying it, and never loop after that second attempt.
-                    if (p.fallback_url_len > 0 and p.fallback_recovery.takeOnFailure()) {
+                    if (p.allow_source_fallback and p.fallback_url_len > 0 and p.fallback_recovery.takeOnFailure()) {
                         const fallback_len = p.fallback_url_len;
                         @memcpy(p.current_url[0..fallback_len], p.fallback_url[0..fallback_len]);
                         p.current_url_len = fallback_len;
@@ -3175,7 +3243,7 @@ pub fn updateTorrentBackgroundTasks() void {
                         continue;
                     }
                     const source = if (p.is_torrent and p.source_url_len > 0) p.source_url[0..p.source_url_len] else p.current_url[0..p.current_url_len];
-                    if (@import("../services/tmdb.zig").retryEpisodeSource(source)) continue;
+                    if (p.allow_source_fallback and @import("../services/tmdb.zig").retryEpisodeSource(source)) continue;
 
                     const detail = std.mem.span(c.mpv.mpv_error_string(ended.@"error"));
                     var error_buf: [256]u8 = undefined;
@@ -3351,6 +3419,7 @@ pub fn updateTorrentBackgroundTasks() void {
                                 @import("../services/co_watch.zig").onPlaybackEvent(.rewound);
                             }
                             p.last_seen_pos = newpos;
+                            if (!p.is_torrent and std.math.isFinite(newpos) and newpos > 0) p.last_good_pos_secs = newpos;
 
                             // Deferred TV watch commit: armed by the episode
                             // play flow, committed only when the ACTIVE player

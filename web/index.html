@@ -58,7 +58,9 @@
     <div id="np-error" class="np-error" role="alert" hidden>
       <div><strong>Playback stopped</strong><span id="np-error-text"></span></div>
       <button id="np-retry" type="button">Try again</button>
+      <button id="np-choose-source" type="button" hidden>Choose another source</button>
     </div>
+    <label class="source-fallback-setting"><input id="np-source-fallback" type="checkbox" checked> Try alternate sources automatically</label>
     <div class="seek-wrap"><input type="range" id="seek" aria-label="Playback position" min="0" max="100" value="0"></div>
     <div class="times"><span id="t-pos">--:--</span><span id="t-dur">--:--</span></div>
     <div class="transport">

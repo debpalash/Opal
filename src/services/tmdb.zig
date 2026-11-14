@@ -2645,7 +2645,7 @@ var episode_mutex = @import("../core/sync.zig").Mutex{};
 var episode_generation: std.atomic.Value(u64) = .init(0);
 var episode_query: [256]u8 = undefined;
 var episode_query_len: usize = 0;
-var attempted_urls: [3][2048]u8 = undefined;
+var attempted_urls: [3][8192]u8 = undefined;
 var attempted_lens: [3]usize = .{ 0, 0, 0 };
 var attempt_count: usize = 0;
 var attempt_started_ms: i64 = 0;
@@ -2719,6 +2719,12 @@ pub fn retryEpisodeSource(url: []const u8) bool {
     episode_mutex.lock();
     defer episode_mutex.unlock();
     if (attempt_count == 0 or attempt_started_ms == 0) return false;
+    for (state.app.players.items) |pl| {
+        if (!pl.allow_source_fallback and std.mem.eql(u8, url, pl.current_url[0..pl.current_url_len])) {
+            attempt_started_ms = 0;
+            return false;
+        }
+    }
     const index = attempt_count - 1;
     const decision = tmdb_pure.episodeRetryDecision(attempt_count, std.mem.eql(u8, url, attempted_urls[index][0..attempted_lens[index]]), episode_play_pending.load(.acquire));
     if (decision == .ignore) return false;
@@ -2782,7 +2788,7 @@ pub fn checkEpisodeStartup() void {
         defer episode_mutex.unlock();
         releaseAbandoned();
     }
-    var url: [2048]u8 = undefined;
+    var url: [8192]u8 = undefined;
     var len: usize = 0;
     episode_mutex.lock();
     if (!attempt_ready and attempt_started_ms != 0 and io.monotonicMilliTimestamp() - attempt_started_ms > 30_000 and attempt_count > 0) {
@@ -2909,7 +2915,8 @@ fn smartPlayEpisode(query: []const u8, generation: u64) void {
 
     // Snapshot the chosen candidate under the lock (results are kept
     // insertion-sorted by score, so rank order == array order).
-    var chosen_url: [2048]u8 = undefined;
+    var chosen_url: [8192]u8 = undefined;
+    var chosen_transport: @import("stream_source_pure.zig").Source = .{};
     var chosen_url_len: usize = 0;
     var chosen_name: [256]u8 = undefined;
     var chosen_name_len: usize = 0;
@@ -2949,6 +2956,7 @@ fn smartPlayEpisode(query: []const u8, generation: u64) void {
                 chosen_name_len = @min(it.name_len, chosen_name.len);
                 @memcpy(chosen_name[0..chosen_name_len], it.name[0..chosen_name_len]);
                 chosen_source = it.source;
+                chosen_transport = it.transport;
             }
         }
         if (chosen_url_len > 0 or !resolver.isResolving()) break;
@@ -2982,7 +2990,7 @@ fn smartPlayEpisode(query: []const u8, generation: u64) void {
         if (std.mem.startsWith(u8, url, "magnet:") or chosen_source == .torrent) {
             search.loadTorrentToPlayer(url);
         } else {
-            @import("browser.zig").loadContentDirect(url);
+            @import("browser.zig").playDirect(.{ .url = url, .user_agent = chosen_transport.user_agent[0..chosen_transport.user_agent_len], .prepared_header_fields = chosen_transport.header_fields[0..chosen_transport.header_fields_len], .source_search_query = query });
         }
         var tb: [160]u8 = undefined;
         var nb: [128]u8 = undefined;

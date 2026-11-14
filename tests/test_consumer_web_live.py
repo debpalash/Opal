@@ -49,6 +49,8 @@ class ConsumerHandler(web._Handler):
 DRIVER = r"""
 (async () => {
   const checks = [], errors = [];
+  window.__consumerChecks = checks; window.__consumerErrors = errors;
+  window.__consumerStage = "starting";
   window.addEventListener('error', e => errors.push(String(e.message)));
   window.addEventListener('unhandledrejection', e => errors.push(String(e.reason)));
   const check = (name, ok) => { checks.push({name, ok:!!ok}); };
@@ -56,15 +58,32 @@ DRIVER = r"""
   const until = async test => { for (let n=0;n<500;n++) { if (test()) return; await sleep(20); } throw new Error('Timed out'); };
   try {
     await until(() => AUTHENTICATED);
+    window.__consumerStage = 'navigation';
     const pages = [...new Set(navPageButtons.map(el => el.dataset.page))];
     for (const page of pages) {
       openPage(page, {focus:false});
       check('navigation ' + page, $('page-' + page)?.classList.contains('on'));
     }
+    window.__consumerStage = 'source-controls';
     openPage('search');
+    applyStatus({active:true,title:'Fixture stream',error:'Source unavailable',retryable:true,can_choose_source:true,source_query:'Fixture S01E02',source_fallback:true,pos:25,dur:90,paused:true,vol:100});
+    check('source recovery is visible', !$('np-choose-source').hidden);
+    check('fallback control reflects the player', $('np-source-fallback').checked);
+    const sourceRow = {title:'Fixture stream',source:'plugin',provider:'Fixture provider',key:'feed',can_prefer:true,preferred:false,detail:'Direct stream · 1080p · en'};
+    renderSearchDetail({identity:'fixture-stream',kind:'video',row:sourceRow,rows:[sourceRow]},7);
+    const prefer = $('search-detail').querySelector('[data-detail-prefer]');
+    check('source details include language and quality', /1080p.*en/.test($('search-detail').textContent));
+    check('provider preference has a phone-sized target', prefer.getBoundingClientRect().height >= 40);
+    await prefer.onclick();
+    check('preferred provider has an accessible selected state', prefer.getAttribute('aria-pressed') === 'true');
+    await prefer.onclick();
+    check('provider preference can be cleared', prefer.getAttribute('aria-pressed') === 'false');
+    renderSearchDetail(null);
+    window.__consumerStage = 'show';
     await openShow(1399, 'The Long Night Signal');
     const origin = $('show-back'); origin.focus();
     const video = $('video'); video.muted = true;
+    window.__consumerStage = 'media';
     openStreamUrl(location.origin + '/__consumer.wav', 'A local listening session');
     await until(() => video.readyState >= 1);
     check('real generated media loaded', video.duration === 30);
@@ -130,7 +149,12 @@ class ConsumerWebTest(unittest.TestCase):
                         page.on('pageerror', lambda error: browser_errors.append(str(error)))
                         try:
                             page.goto(f'http://127.0.0.1:{server.server_port}/#home')
-                            page.wait_for_selector('#tap-result', state='attached', timeout=15000)
+                            try:
+                                page.wait_for_selector('#tap-result', state='attached', timeout=30000)
+                            except Exception:
+                                print(page.evaluate('({stage:window.__consumerStage,checks:window.__consumerChecks,errors:window.__consumerErrors,ready:document.readyState})'), flush=True)
+                                print('Browser errors:',browser_errors,flush=True)
+                                raise
                             result = json.loads(page.locator('#tap-result').text_content())
                         finally:
                             page.close()

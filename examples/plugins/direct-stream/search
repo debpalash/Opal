@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""No network access: search the catalog beside this executable."""
+import json
+from pathlib import Path
+import sys
+rows = json.loads(Path(__file__).with_name('catalog.json').read_text())
+query = sys.argv[1].casefold() if len(sys.argv) > 1 else ''
+print(json.dumps([
+    {'id': row['id'], 'title': row['title'], 'type': row.get('type', 'video'),
+     'episodes': len(row['episodes'])}
+    for row in rows if query in row['title'].casefold()
+]))

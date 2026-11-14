@@ -34,7 +34,8 @@ pub var catalog_loaded: bool = false;
 pub const StreamResult = struct {
     title: [128]u8 = std.mem.zeroes([128]u8),
     title_len: usize = 0,
-    url: [512]u8 = std.mem.zeroes([512]u8),
+    url: [8192]u8 = std.mem.zeroes([8192]u8),
+    transport: @import("stream_source_pure.zig").Source = .{},
     url_len: usize = 0,
     addon_name: [32]u8 = std.mem.zeroes([32]u8),
     addon_name_len: usize = 0,
@@ -349,39 +350,23 @@ pub fn queryStreams(imdb_id: []const u8, media_type: []const u8) void {
 
                 if (rn < 10) continue;
 
-                // Parse "streams":[{"title":"...","url":"..."},...]
-                var pos: usize = 0;
-                while (pos < rn and stream_count < 32) {
-                    const url_key = "\"url\":\"";
-                    const next = std.mem.indexOf(u8, resp_buf[pos..], url_key) orelse break;
-                    const uabs = pos + next + url_key.len;
-                    const ue = std.mem.indexOfScalar(u8, resp_buf[uabs..], '"') orelse break;
-
+                const parsed = alloc.alloc(@import("stream_source_pure.zig").Source, 32) catch continue;
+                defer alloc.free(parsed);
+                const count = @import("stream_source_pure.zig").parseStreams(alloc, resp_buf[0..rn], parsed) orelse continue;
+                for (parsed[0..count]) |source| {
                     results_mutex.lock();
+                    defer results_mutex.unlock();
+                    if (stream_count >= streams.len) break;
                     var sr = &streams[stream_count];
                     sr.* = std.mem.zeroes(StreamResult);
-
-                    const slen = @min(ue, 511);
-                    @memcpy(sr.url[0..slen], resp_buf[uabs .. uabs + slen]);
-                    sr.url_len = slen;
-
-                    // Try to get title (look backwards for "title":"...")
-                    if (std.mem.lastIndexOf(u8, resp_buf[pos .. pos + next], "\"title\":\"")) |tp| {
-                        const tabs = pos + tp + 9;
-                        const tee = std.mem.indexOfScalar(u8, resp_buf[tabs..], '"') orelse 0;
-                        const tlen = @min(tee, 127);
-                        @memcpy(sr.title[0..tlen], resp_buf[tabs .. tabs + tlen]);
-                        sr.title_len = tlen;
-                    }
-
-                    // Tag which addon this came from
-                    const anlen = @min(addon.name_len, 31);
-                    @memcpy(sr.addon_name[0..anlen], addon.name[0..anlen]);
-                    sr.addon_name_len = anlen;
-
+                    sr.transport = source;
+                    sr.url_len = source.url_len;
+                    @memcpy(sr.url[0..sr.url_len], source.url[0..source.url_len]);
+                    sr.title_len = @min(source.title_len, sr.title.len);
+                    @memcpy(sr.title[0..sr.title_len], source.title[0..sr.title_len]);
+                    sr.addon_name_len = @min(addon.name_len, sr.addon_name.len);
+                    @memcpy(sr.addon_name[0..sr.addon_name_len], addon.name[0..sr.addon_name_len]);
                     stream_count += 1;
-                    results_mutex.unlock();
-                    pos = uabs + ue;
                 }
             }
 
@@ -391,5 +376,7 @@ pub fn queryStreams(imdb_id: []const u8, media_type: []const u8) void {
                 logs.pushLog("info", "stremio", "No streams found", false);
             }
         }
-    }.worker, .{ id_buf, id_len, type_buf, type_len })) |t| @import("../core/workers.zig").release(t) else |_| {}
+    }.worker, .{ id_buf, id_len, type_buf, type_len })) |t| @import("../core/workers.zig").release(t) else |_| {
+        stream_loading = false;
+    }
 }

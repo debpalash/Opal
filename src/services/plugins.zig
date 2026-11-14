@@ -44,7 +44,8 @@ pub const PluginResult = struct {
     overview_len: usize = 0,
     poster_url: [256]u8 = std.mem.zeroes([256]u8),
     poster_url_len: usize = 0,
-    stream_url: [512]u8 = std.mem.zeroes([512]u8),
+    stream_url: [8192]u8 = std.mem.zeroes([8192]u8),
+    transport: @import("stream_source_pure.zig").Source = .{},
     stream_url_len: usize = 0,
     episodes: u16 = 0,
     score: f32 = 0.0,
@@ -539,8 +540,10 @@ fn runSearch(plugin: Plugin, query: []const u8, rows: []@import("plugins_pure.zi
 
 fn searchPluginInto(plugin: Plugin, query: []const u8, out: []UniversalResult) usize {
     const pp = @import("plugins_pure.zig");
-    var rows: [UNIVERSAL_ROWS_PER_PLUGIN]pp.SearchRow = @as([UNIVERSAL_ROWS_PER_PLUGIN]pp.SearchRow, @splat(.{}));
-    const run = runSearch(plugin, query, &rows);
+    const rows = @import("../core/alloc.zig").allocator.alloc(pp.SearchRow, UNIVERSAL_ROWS_PER_PLUGIN) catch return 0;
+    defer @import("../core/alloc.zig").allocator.free(rows);
+    @memset(rows, .{});
+    const run = runSearch(plugin, query, rows);
     if (run.outcome != .ok) return 0;
     const n = @min(run.count, out.len);
     for (rows[0..n], 0..) |row, i| {
@@ -750,29 +753,115 @@ pub fn runPluginTrending() void {
 
 pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
     if (active_plugin >= plugin_count) return;
-    runPluginResolveWith(plugins[active_plugin], id, episode);
+    runPluginResolveWith(plugins[active_plugin], id, episode, null);
 }
 
 pub fn runPluginResolveById(plugin_id: []const u8, id: []const u8, episode: []const u8) void {
-    if (!@import("../core/source_config_pure.zig").validId(plugin_id)) return;
-    var dir_buf: [512]u8 = undefined;
-    const plugin = loadPluginAt(getPluginDir(&dir_buf), plugin_id) orelse return;
-    runPluginResolveWith(plugin, id, episode);
+    runPluginResolveByIdAt(plugin_id, id, episode, null);
 }
 
-fn runPluginResolveWith(plugin: Plugin, id: []const u8, episode: []const u8) void {
-    if (!plugin.has_resolve) return;
+pub fn runPluginResolveByIdAt(plugin_id: []const u8, id: []const u8, episode: []const u8, resume_at: ?f64) void {
+    if (!@import("../core/source_config_pure.zig").validId(plugin_id)) return;
+    var dir_buf: [512]u8 = undefined;
+    const plugin = loadPluginAt(getPluginDir(&dir_buf), plugin_id) orelse {
+        if (state.app.active_player_idx < state.app.players.items.len) state.app.players.items[state.app.active_player_idx].setLoadError("This source is no longer installed. Choose another source.");
+        return;
+    };
+    runPluginResolveWith(plugin, id, episode, resume_at);
+}
 
-    // ── Instant feedback: show loading on player immediately ──
-    if (state.app.players.items.len > 0 and state.app.active_player_idx < state.app.players.items.len) {
-        const pl = state.app.players.items[state.app.active_player_idx];
-        pl.is_loading = true;
-        pl.provider = .mpv; // Switch to player view
-        // Show which episode we're resolving
-        var lbl_buf: [64]u8 = undefined;
-        const lbl = std.fmt.bufPrint(&lbl_buf, "Resolving Ep {s}...", .{episode}) catch "Resolving...";
-        @memcpy(pl.loading_label[0..lbl.len], lbl);
-        pl.loading_label_len = lbl.len;
+const ResolveTicket = struct {
+    address: usize,
+    lifetime: u64,
+    serial: u64,
+};
+const ResolveCompletion = struct {
+    ticket: ResolveTicket,
+    source: ?@import("stream_source_pure.zig").Source = null,
+    manga: bool = false,
+    message: []const u8 = "Source could not be resolved. Try again or choose another source.",
+};
+var completion_mutex: sync.Mutex = .{};
+var completions: [32]?ResolveCompletion = @splat(null);
+
+fn publishResolve(completion: ResolveCompletion) void {
+    completion_mutex.lock();
+    defer completion_mutex.unlock();
+    // One slot per player; a newer serial always wins, including failures.
+    var free: ?usize = null;
+    for (&completions, 0..) |*slot, i| {
+        if (slot.*) |old| {
+            if (old.ticket.address == completion.ticket.address) {
+                if (old.ticket.serial <= completion.ticket.serial) slot.* = completion;
+                state.wakeUi();
+                return;
+            }
+        } else free = i;
+    }
+    if (free) |i| completions[i] = completion;
+    state.wakeUi();
+}
+
+pub fn drainResolved() void {
+    for (0..completions.len) |slot| {
+        completion_mutex.lock();
+        const entry = completions[slot];
+        completions[slot] = null;
+        completion_mutex.unlock();
+        const completion = entry orelse continue;
+        for (state.app.players.items) |pl| {
+            if (@intFromPtr(pl) != completion.ticket.address or pl.lifetime_id != completion.ticket.lifetime or pl.load_serial != completion.ticket.serial) continue;
+            pl.is_loading = false;
+            if (completion.manga) break;
+            if (completion.source) |source| {
+                const url = source.url[0..source.url_len];
+                if (std.mem.startsWith(u8, url, "magnet:?")) {
+                    // Torrent handoff uses the selected player; restore it only
+                    // for the duration of the synchronous owner-thread call.
+                    const previous = state.app.active_player_idx;
+                    for (state.app.players.items, 0..) |candidate, idx| if (candidate == pl) {
+                        state.app.active_player_idx = idx;
+                        break;
+                    };
+                    @import("search.zig").loadTorrentToPlayer(url);
+                    state.app.active_player_idx = previous;
+                } else {
+                    const resume_at = pl.plugin_resume_secs;
+                    const source_query = pl.source_search_query;
+                    const source_query_len = pl.source_search_query_len;
+                    pl.load(.{ .url = url, .user_agent = source.user_agent[0..source.user_agent_len], .prepared_header_fields = source.header_fields[0..source.header_fields_len], .resume_position_secs = resume_at });
+                    pl.plugin_source_active = true;
+                    pl.source_search_query = source_query;
+                    pl.source_search_query_len = source_query_len;
+                }
+            } else {
+                pl.setLoadError(completion.message);
+            }
+            break;
+        }
+    }
+}
+
+fn runPluginResolveWith(plugin: Plugin, id: []const u8, episode: []const u8, resume_at: ?f64) void {
+    if (state.app.players.items.len == 0) {
+        const new_player = player.acquire(@import("../core/alloc.zig").allocator) catch {
+            state.showToast("Could not open a player");
+            return;
+        };
+        state.app.players.append(@import("../core/alloc.zig").allocator, new_player) catch {
+            new_player.deinit(@import("../core/alloc.zig").allocator);
+            return;
+        };
+        state.app.active_player_idx = 0;
+    }
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
+    const target = state.app.players.items[state.app.active_player_idx];
+    target.beginPluginResolve(plugin.id[0..plugin.id_len], id, episode);
+    target.plugin_resume_secs = resume_at;
+    const ticket = ResolveTicket{ .address = @intFromPtr(target), .lifetime = target.lifetime_id, .serial = target.load_serial };
+    if (!plugin.has_resolve or id.len >= 128 or episode.len >= 32) {
+        publishResolve(.{ .ticket = ticket, .message = "This source cannot resolve the selected episode." });
+        return;
     }
 
     // Copy id/episode into fixed buffers passed *by value* — the caller's
@@ -786,7 +875,9 @@ fn runPluginResolveWith(plugin: Plugin, id: []const u8, episode: []const u8) voi
     @memcpy(ep_buf[0..ep_len], episode[0..ep_len]);
 
     if (@import("../core/workers.zig").spawnLegacy(struct {
-        fn worker(rid_buf: [128]u8, rid_len: usize, rep_buf: [32]u8, rep_len: usize, p: Plugin) void {
+        fn worker(rid_buf: [128]u8, rid_len: usize, rep_buf: [32]u8, rep_len: usize, p: Plugin, job: ResolveTicket) void {
+            var completion = ResolveCompletion{ .ticket = job };
+            defer publishResolve(completion);
             const rid = rid_buf[0..rid_len];
             const rep = rep_buf[0..rep_len];
             var exec_buf: [600]u8 = undefined;
@@ -810,25 +901,35 @@ fn runPluginResolveWith(plugin: Plugin, id: []const u8, episode: []const u8) voi
                     },
                     .deny => {
                         logUntrustedNative(&p);
+                        completion.message = "Review and approve this source in Settings before playing.";
                         return;
                     },
                 }
             };
-            var buf: [8192]u8 = undefined;
+            var buf: [64 * 1024]u8 = undefined;
             const run = bounded_process.run(argv, &buf, .{ .timeout_ms = 30_000 });
             if (!run.ok()) {
                 logPluginProcessFailure(p.name[0..p.name_len], run);
+                completion.message = switch (run.failure) {
+                    .timeout => "This source took too long. Try again or choose another source.",
+                    .spawn, .watchdog_spawn => "Could not start this source. Check its required tools in Settings.",
+                    .output_limit => "This source returned too much data. Choose another source.",
+                    .nonzero_exit, .abnormal_exit => "This source failed to resolve the episode. Try again or choose another source.",
+                    else => "This source is unavailable. Try again or choose another source.",
+                };
                 return;
             }
             const len = run.output.len;
 
             if (len < 5) {
+                completion.message = "This source returned no stream. Choose another source.";
                 logs.pushLog("error", "plugin", "Resolve returned no data", false);
                 return;
             }
 
             const json = buf[0..len];
             if (!pp.validResponse(c_alloc, json, .resolve)) {
+                completion.message = "This source returned an invalid response. Try again or choose another source.";
                 logs.pushLog("error", "plugin", "Resolve returned malformed JSON", false);
                 return;
             }
@@ -838,6 +939,7 @@ fn runPluginResolveWith(plugin: Plugin, id: []const u8, episode: []const u8) voi
                 std.mem.eql(u8, extractField(json, "type").?, "manga");
 
             if (is_manga) {
+                completion.manga = true;
                 // ── Manga: parse images array → comic viewer ──
                 const comics = @import("comics.zig");
                 _ = comics;
@@ -981,31 +1083,14 @@ fn runPluginResolveWith(plugin: Plugin, id: []const u8, episode: []const u8) voi
                 } else {
                     logs.pushLog("error", "plugin", "Manga: no images found", false);
                 }
-            } else if (extractField(json, "url")) |url| {
-                // ── Video/stream: original handler ──
-                if (url.len < 5) return;
-
-                if (state.app.players.items.len == 0 or state.app.active_player_idx >= state.app.players.items.len) return;
-
-                // Check if it's a magnet link → torrent engine
-                if (std.mem.startsWith(u8, url, "magnet:?")) {
-                    // Reuse the one cold-start-safe handoff path; plugin results
-                    // must not lose the first click while DHT initializes.
-                    @import("search.zig").loadTorrentToPlayer(url);
-                } else {
-                    // Structured arguments in the typed seam avoid command-string
-                    // quoting/injection and clear credentials from the prior host.
-                    const pl = state.app.players.items[state.app.active_player_idx];
-                    // This resolve callback runs off the UI thread. Preserve the
-                    // old command-only transition (no texture/UI mutation).
-                    pl.commitPlayback(.{ .url = url, .mode = .replace });
-                    logs.pushLog("info", "plugin", "Playing resolved stream", false);
-                }
             } else {
-                logs.pushLog("error", "plugin", "Resolve: no URL in response", false);
+                completion.source = @import("stream_source_pure.zig").parseResolve(c_alloc, json);
+                if (completion.source == null) completion.message = "Source returned an invalid stream or unsupported headers. Choose another source.";
             }
         }
-    }.worker, .{ id_buf, id_len, ep_buf, ep_len, plugin })) |t| @import("../core/workers.zig").release(t) else |_| {}
+    }.worker, .{ id_buf, id_len, ep_buf, ep_len, plugin, ticket })) |t| @import("../core/workers.zig").release(t) else |_| {
+        publishResolve(.{ .ticket = ticket, .message = "Could not start this source. Try again." });
+    }
 }
 
 fn executeAndParse(argv: []const []const u8) void {
@@ -1078,7 +1163,11 @@ fn executeAndParse(argv: []const []const u8) void {
         extractJsonString(obj, "title", &r.title, &r.title_len);
         extractJsonString(obj, "overview", &r.overview, &r.overview_len);
         extractJsonString(obj, "poster", &r.poster_url, &r.poster_url_len);
-        extractJsonString(obj, "stream_url", &r.stream_url, &r.stream_url_len);
+        if (@import("stream_source_pure.zig").parseResolve(c_alloc, obj)) |transport| {
+            r.transport = transport;
+            r.stream_url_len = transport.url_len;
+            @memcpy(r.stream_url[0..r.stream_url_len], transport.url[0..transport.url_len]);
+        }
         extractJsonString(obj, "year", &r.year, &r.year_len);
         extractJsonString(obj, "type", &r.media_type, &r.media_type_len);
 
@@ -1976,9 +2065,10 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                 // If stream_url is already set, play directly
                 if (item.stream_url_len > 0) {
                     const stream_slice = item.stream_url[0..item.stream_url_len];
-                    if (state.app.players.items.len > 0 and state.app.active_player_idx < state.app.players.items.len) {
-                        const p = state.app.players.items[state.app.active_player_idx];
-                        p.load(.{ .url = stream_slice, .mode = .replace });
+                    if (std.mem.startsWith(u8, stream_slice, "magnet:?")) {
+                        @import("search.zig").loadTorrentToPlayer(stream_slice);
+                    } else {
+                        @import("browser.zig").playDirect(.{ .url = stream_slice, .title = title, .user_agent = item.transport.user_agent[0..item.transport.user_agent_len], .prepared_header_fields = item.transport.header_fields[0..item.transport.header_fields_len], .source_search_query = title });
                     }
                 } else if (item.episodes > 0) {
                     // Toggle episode selector
