@@ -28,6 +28,7 @@ class MusicCatalog(unittest.TestCase):
                     self.assertEqual(result['source'], source)
                     self.assertGreater(len(result['songs']), 0, result)
                     for song in result['songs']:
+                        self.assertIn(song['source'], range(8))
                         self.assertTrue(song['id'])
                         self.assertTrue(song['title'])
                         self.assertTrue(song['url'].startswith('https://'))
@@ -36,7 +37,9 @@ class MusicCatalog(unittest.TestCase):
                 time.sleep(.25)
             self.fail(f"source {source} timed out")
 
-        loaded(0)  # First visit, no explicit search.
+        loaded(8)  # First visit uses the combined public catalog.
+        request("POST", "/api/music/source?id=0")
+        loaded(0)  # Individual source, no explicit search.
         request("POST", "/api/music/source?id=7")
         loaded(7)  # Source change, no explicit search.
         request("POST", "/api/music/search?q=Daft%20Punk")

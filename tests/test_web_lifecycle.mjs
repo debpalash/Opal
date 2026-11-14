@@ -1365,3 +1365,35 @@ test('Gutenberg discovery presents one feed with optional collections and in-app
   f.run(`renderOpds({connected:true,loading:true,discovery:true,entries:[]})`);
   assert.match(f.$('opds-results').innerHTML, /browse-skeleton/);
 });
+
+test('Live TV ignores an older query that settles after a new search', async () => {
+  const f = fixture('discovery.js');
+  f.run('globalThis.appendTv = rows => rendered.push(rows.map(row => row.name).join(","))');
+  f.$('tv-q').value = 'old';
+  const old = f.run('runTv(true)');
+  f.$('tv-q').value = 'new';
+  const current = f.run('runTv(true)');
+  f.take('/livetv?q=new&offset=0').resolve({total:1, channels:[{name:'New channel'}]});
+  await current;
+  f.take('/livetv?q=old&offset=0').resolve({total:30, channels:[{name:'Old channel'}]});
+  await old;
+  assert.deepEqual(f.rendered, ['New channel']);
+  assert.equal(f.$('tv-hint').textContent, '1 of 1 channels');
+});
+
+test('Live TV admits only one load-more request and retains its page on failure', async () => {
+  const f = fixture('discovery.js');
+  f.run('globalThis.appendTv = () => {}');
+  const first = f.run('runTv(true)');
+  f.take('/livetv?q=&offset=0').resolve({total:3, channels:[{name:'One'}]});
+  await first;
+  const more = f.run('runTv(false)');
+  const duplicate = f.run('runTv(false)');
+  assert.equal(f.requests.filter(r => r.path === '/livetv?q=&offset=1').length, 1);
+  f.take('/livetv?q=&offset=1').reject(new Error('Offline'));
+  await more;
+  const retry = f.run('runTv(false)');
+  f.take('/livetv?q=&offset=1').resolve({total:3, channels:[{name:'Two'}]});
+  await retry;
+  assert.equal(f.$('tv-hint').textContent, '2 of 3 channels');
+});

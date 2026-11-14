@@ -1,5 +1,16 @@
 'use strict';
 
+let playerReturnFocus = null;
+function showInlinePlayer(){
+  const overlay = $('player'), video = $('video');
+  if (!overlay.classList.contains('on')) playerReturnFocus = document.activeElement;
+  overlay.classList.add('on');
+  document.body.classList.add('inline-player-open');
+  if ($('player-speed')) video.playbackRate = Number($('player-speed').value) || 1;
+  $('player-status') && ($('player-status').textContent = 'Loading…');
+  overlay.focus({preventScroll:true});
+}
+
 // ── Hosted inline player ──
 // A single video element hosts direct files, HLS and restarted transcodes.
 // Retire the previous transport before every handoff: otherwise hls.js can
@@ -27,12 +38,70 @@ function openPlayer(rel){
   tr.kind = 'subtitles'; tr.label = 'Subtitles'; tr.default = true;
   tr.src = `${BASE}/vtt?file=${encodeURIComponent(base + '.srt')}`;
   v.appendChild(tr);
-  $('player').classList.add('on');
+  showInlinePlayer();
 }
 $('player-close').onclick = () => {
   resetPlayerSource();
   $('player').classList.remove('on');
+  document.body.classList.remove('inline-player-open');
+  if (document.pictureInPictureElement === $('video')) document.exitPictureInPicture().catch(()=>{});
+  if (document.fullscreenElement === $('player')) document.exitFullscreen().catch(()=>{});
+  if (playerReturnFocus?.isConnected) playerReturnFocus.focus({preventScroll:true});
+  playerReturnFocus = null;
 };
+
+// Keep playback feedback and keyboard transport inside the active overlay.
+// In particular, arrows must not move focus to the catalog underneath it.
+{
+  const video = $('video'), status = $('player-status');
+  const feedback = text => { if (status && $('player').classList.contains('on')) status.textContent = text; };
+  for (const [event, text] of Object.entries({waiting:'Buffering…', stalled:'Waiting for the stream…', playing:'', pause:'Paused', ended:'Finished', error:'Playback failed. Try reopening this title or choose another source.'})) {
+    video.addEventListener(event, () => feedback(text));
+  }
+  const speed = $('player-speed');
+  if (speed) speed.onchange = () => { video.playbackRate = Number(speed.value) || 1; };
+  const pip = $('player-pip'), fullscreen = $('player-fullscreen');
+  if (pip) {
+    pip.hidden = !document.pictureInPictureEnabled;
+    pip.onclick = async () => {
+      try {
+        if (document.pictureInPictureElement === video) await document.exitPictureInPicture();
+        else await video.requestPictureInPicture();
+      } catch { feedback('Picture in picture is unavailable for this stream.'); }
+    };
+  }
+  if (fullscreen) {
+    fullscreen.hidden = !document.fullscreenEnabled;
+    fullscreen.onclick = async () => {
+      try {
+        if (document.fullscreenElement) await document.exitFullscreen();
+        else await $('player').requestFullscreen();
+      } catch { feedback('Fullscreen is unavailable in this browser.'); }
+    };
+  }
+  $('player').addEventListener('keydown', event => {
+    if (event.defaultPrevented) return;
+    event.stopPropagation();
+    if (event.key === 'Escape') { event.preventDefault(); $('player-close').click(); return; }
+    if (event.key === 'Tab') {
+      const controls = [...$('player').querySelectorAll('video,button:not([disabled]),select')].filter(el => !el.hidden);
+      const first = controls[0], last = controls[controls.length - 1];
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === $('player'))) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && (document.activeElement === last || document.activeElement === $('player'))) { event.preventDefault(); first?.focus(); }
+      return;
+    }
+    if (event.altKey || event.ctrlKey || event.metaKey || /^(INPUT|SELECT|TEXTAREA|BUTTON|VIDEO)$/.test(event.target.tagName) || event.target.isContentEditable) return;
+    if (event.key === ' ' || event.key.toLowerCase() === 'k') {
+      event.preventDefault(); if (!event.repeat) { if (video.paused) video.play().catch(()=>feedback('Press play to start playback.')); else video.pause(); }
+    } else if (event.key.toLowerCase() === 'm') {
+      event.preventDefault(); if (!event.repeat) video.muted = !video.muted;
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      if (Number.isFinite(video.duration) && video.duration > 0) {
+        event.preventDefault(); video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + (event.key === 'ArrowRight' ? 10 : -10)));
+      }
+    }
+  });
+}
 
 // ── Setup (first-run from the browser — essential for hosted mode) ──
 async function loadSetup(){
@@ -160,7 +229,7 @@ function openTranscode(rel, title, startSecs){
   [...v.querySelectorAll('track')].forEach(tr => tr.remove());
   v._tcRel = rel; v._tcTitle = title || ''; v._tcBase = base;
   v.src = transcodeUrl(rel, base);
-  $('player').classList.add('on');
+  showInlinePlayer();
   v.onerror = () => {
     $('player-title').textContent = (title || '') + ' — transcode failed (is ffmpeg installed?)';
   };
@@ -204,7 +273,7 @@ function openHls(url, title){
   });
   h.loadSource(url);
   h.attachMedia(v);
-  $('player').classList.add('on');
+  showInlinePlayer();
   v.play().catch(()=>{});
 }
 function toast(msg){

@@ -777,9 +777,18 @@
 </div>
 
 <!-- Hosted inline player -->
-<div id="player">
+<div id="player" role="dialog" aria-modal="true" aria-labelledby="player-title" tabindex="-1">
   <video id="video" controls playsinline autoplay></video>
-  <div class="bar"><div class="t" id="player-title"></div><button id="player-close">Close</button></div>
+  <div class="bar">
+    <div class="player-copy"><div class="t" id="player-title"></div><div id="player-status" role="status" aria-live="polite"></div></div>
+    <div class="player-actions">
+      <label class="sr-only" for="player-speed">Playback speed</label>
+      <select id="player-speed" title="Playback speed"><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="1.75">1.75×</option><option value="2">2×</option></select>
+      <button id="player-pip" type="button" hidden>Picture in picture</button>
+      <button id="player-fullscreen" type="button" hidden>Fullscreen</button>
+      <button id="player-close" type="button">Close</button>
+    </div>
+  </div>
 </div>
 
 <!-- YouTube embed player (plays in the browser, hosted or companion) -->

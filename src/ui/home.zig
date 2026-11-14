@@ -1305,7 +1305,24 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         } else {
             renderPrivateTitle(i + base_id + 50, card_w);
         }
-        if (item.percent > 0) {
+        if (revealed and manage_continue) {
+            const next_label = item.next_label[0..@min(item.next_label_len, item.next_label.len)];
+            var remaining_buf: [40]u8 = undefined;
+            const caption = if (next_label.len > 0)
+                next_label
+            else if (library_pure.remainingMinutes(library_pure.parseKind(item.kind[0..@min(item.kind_len, item.kind.len)]), item.resume_secs, item.duration_secs)) |minutes|
+                std.fmt.bufPrint(&remaining_buf, "{d} min left", .{minutes}) catch ""
+            else
+                "";
+            if (caption.len > 0) _ = dvui.label(@src(), "{s}", .{caption}, .{
+                .id_extra = i + base_id + 80,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
+                .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+                .min_size_content = .{ .w = card_w, .h = 18 },
+                .max_size_content = .{ .w = card_w, .h = 18 },
+            });
+        }
+        if (std.math.isFinite(item.percent) and item.percent > 0) {
             var progress = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = i + base_id + 60,
                 .background = true,

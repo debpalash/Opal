@@ -49,7 +49,15 @@ class TvLibraryTest(unittest.TestCase):
         special = live.request("POST", "/api/library/action?action=watched&kind=tv&id=-42&season=0&episode=1&value=true", host=opal.loopback_authority, extra_headers=headers)
         self.assertEqual(special.status, 200, special.body)
         special_rows = live.request("GET", "/api/library/watched?kind=tv&id=-42&season=0", host=opal.loopback_authority, extra_headers=headers)
+        self.assertEqual(special_rows.status, 200, special_rows.body)
         self.assertEqual(special_rows.json()["episodes"], [1])
+        # Keyless IDs must also survive the normal season path and a reset.
+        for value, expected in (("true", [2]), ("false", [])):
+            result = live.request("POST", f"/api/library/action?action=watched&kind=tv&id=-42&season=1&episode=2&value={value}", host=opal.loopback_authority, extra_headers=headers)
+            self.assertEqual(result.status, 200, result.body)
+            result = live.request("GET", "/api/library/watched?kind=tv&id=-42&season=1", host=opal.loopback_authority, extra_headers=headers)
+            self.assertEqual(result.status, 200, result.body)
+            self.assertEqual(result.json()["episodes"], expected)
 
 
 if __name__ == "__main__":

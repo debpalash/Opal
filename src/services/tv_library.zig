@@ -614,7 +614,9 @@ pub const MAX_EPISODES_PER_SEASON: usize = @intCast(tp.MAX_EPISODES_PER_SEASON);
 
 /// The single mutation path for local and connected-account TV history.
 pub fn setEpisodeWatched(tmdb_id: i32, season: u32, episode: u32, watched: bool) void {
-    if (tmdb_id <= 0 or episode == 0) return;
+    // Keyless catalog shows use signed hash IDs. Zero alone is invalid;
+    // rejecting negative IDs silently discarded acknowledged watched toggles.
+    if (tmdb_id == 0 or episode == 0) return;
     db.tvMarkWatched(tmdb_id, season, episode, watched);
     // The remembered IMDb id lets a keyless (hashed) show be reported by IMDb
     // rather than as an unrelated TMDB id.

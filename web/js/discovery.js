@@ -67,16 +67,24 @@ function renderAi(d){
 // filter, exactly like the desktop tab. Hosted: play the stream URL in the
 // browser <video> (HLS plays natively on Safari/iOS); companion: hand to mpv.
 let tvOffset = 0, tvTotal = 0, tvQuery = '';
+let tvGeneration = 0, tvLoading = false;
 function loadTv(){ if (!$('tv-results').children.length) runTv(true); }
 $('tv-go').onclick = () => runTv(true);
 $('tv-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runTv(true); $('tv-q').blur(); } });
 $('tv-more').onclick = () => runTv(false);
 
 async function runTv(reset){
-  if (reset) { tvOffset = 0; tvQuery = $('tv-q').value.trim(); $('tv-results').innerHTML = ''; }
+  if (!reset && tvLoading) return;
+  if (reset) { ++tvGeneration; tvOffset = 0; tvQuery = $('tv-q').value.trim(); $('tv-results').innerHTML = ''; }
+  const generation = tvGeneration, offset = tvOffset;
+  tvLoading = true;
+  $('tv-more').disabled = true;
+  $('tv-results').setAttribute('aria-busy', 'true');
   $('tv-hint').innerHTML = '<span class="spin"></span> Loading channels…';
   try {
-    const d = await api('/livetv?q=' + encodeURIComponent(tvQuery) + '&offset=' + tvOffset);
+    const d = await api('/livetv?q=' + encodeURIComponent(tvQuery) + '&offset=' + offset);
+    if (generation !== tvGeneration) return;
+    if (d?.error || !Array.isArray(d?.channels)) throw new Error('Invalid channel response');
     tvTotal = d.total || 0;
     const got = d.channels || [];
     appendTv(got);
@@ -85,7 +93,16 @@ async function runTv(reset){
       ? tvOffset + ' of ' + tvTotal.toLocaleString() + ' channels'
       : 'No channels yet — install a Live TV source in the desktop app.';
     $('tv-more').style.display = (tvOffset < tvTotal && got.length) ? '' : 'none';
-  } catch { $('tv-hint').textContent = 'Could not load channels.'; }
+  } catch {
+    if (generation !== tvGeneration) return;
+    $('tv-hint').textContent = 'Could not load channels. Try searching again or retry More.';
+  } finally {
+    if (generation === tvGeneration) {
+      tvLoading = false;
+      $('tv-more').disabled = false;
+      $('tv-results').setAttribute('aria-busy', 'false');
+    }
+  }
 }
 
 function appendTv(chans){
@@ -136,7 +153,7 @@ function openStreamUrl(url, title){
   $('player-title').textContent = title || '';
   [...v.querySelectorAll('track')].forEach(tr => tr.remove());
   v.src = url;
-  $('player').classList.add('on');
+  showInlinePlayer();
   v.onerror = () => { $('player-title').textContent = (title || '') + ' — stream not playable in this browser (try Safari for HLS)'; };
   v.play().catch(()=>{});
 }
