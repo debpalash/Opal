@@ -886,6 +886,13 @@ pub fn submitScopedQuery(query_text: []const u8) void {
 }
 
 /// Display an already-resolved query through the same editable shell field.
+pub fn recoverSourceQuery(query_text: []const u8) void {
+    view_filters = .{};
+    size_choice = 0;
+    view_dirty = true;
+    setUniversalQuery(query_text);
+}
+
 pub fn setUniversalQuery(query_text: []const u8) void {
     setSearchScope(.all);
     setQueryText(query_text);
@@ -2525,6 +2532,11 @@ fn renderCompactRowMain(idx: usize, item: *const @import("resolver.zig").Resolve
         const open = expanded_sources_row == row_key;
         if (components.iconButton(@src(), if (open) icons.tvg.lucide.@"chevron-up" else icons.tvg.lucide.@"chevron-down", "Choose a source", open))
             expanded_sources_row = if (open) 0 else row_key;
+    }
+    if (item.source == .stremio or item.source == .plugin) {
+        const preferred = @import("resolver.zig").isPreferred(item);
+        if (components.iconButton(@src(), icons.tvg.lucide.star, if (preferred) "Clear preferred provider for this title" else "Prefer this provider for this title", preferred))
+            @import("resolver.zig").rememberProvider(item, !preferred);
     }
     const action_icon = if (item.source == .anime or item.source == .podcast) icons.tvg.lucide.@"arrow-up-right" else if (item.source == .novels or item.source == .comics or item.source == .opds) icons.tvg.lucide.book else if (item.source == .vndb or item.source == .tmdb or item.source == .audiobooks) icons.tvg.lucide.info else icons.tvg.lucide.play;
     const action_name = if (item.source == .anime or item.source == .podcast) "Open" else if (item.source == .novels or item.source == .comics or item.source == .opds) "read" else if (item.source == .audiobooks) "open audio" else if (item.source == .vndb or item.source == .tmdb) "details" else "play";

@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""Resolve a stable work ID and a one-based episode to a direct media URL."""
+import json
+from pathlib import Path
+import sys
+try:
+    item_id, episode = sys.argv[1], int(sys.argv[2])
+    rows = json.loads(Path(__file__).with_name('catalog.json').read_text())
+    work = next(row for row in rows if row['id'] == item_id)
+    if episode < 1 or episode > len(work['episodes']):
+        raise ValueError('Episode is unavailable')
+    print(json.dumps(work['episodes'][episode - 1]))
+except (ValueError, IndexError, KeyError, StopIteration, OSError) as error:
+    print(f'Cannot resolve episode: {error}', file=sys.stderr)
+    sys.exit(1)

@@ -695,10 +695,14 @@ pub fn renderGrid() !void {
                         .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.lg },
                     });
 
+                    components.toggleRow(@src(), "Try alternate sources automatically", "Only compatible sources for the same item", &p.allow_source_fallback);
                     var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 0.5 });
                     defer actions.deinit();
                     if (components.actionButton(@src(), "Try again", .primary, i + 5604)) {
                         _ = p.retryCurrentLoad();
+                    }
+                    if (p.source_search_query_len > 0 and components.actionButton(@src(), "Choose another source", .secondary, i + 5606)) {
+                        _ = @import("../services/resolver.zig").chooseAnotherSource(p);
                     }
                     if (components.actionButton(@src(), "Close", .secondary, i + 5605)) {
                         state.app.pending_remove_player_idx = @as(i32, @intCast(i));

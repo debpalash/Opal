@@ -426,7 +426,20 @@ function renderSearchDetail(group, generation){
     <div class="search-detail-content">${artwork ? `<img class="search-detail-art" src="${esc(artwork)}" alt="" referrerpolicy="no-referrer">` : ''}<div class="search-detail-copy"><h2>${esc(row.title)}</h2>
       ${row.author ? `<p class="search-detail-author">${esc(row.author)}</p>` : ''}${row.summary ? `<p class="search-detail-summary">${esc(row.summary)}</p>` : '<p class="search-detail-summary">Choose an available source below.</p>'}
       ${row.source === 'tmdb' && row.id > 0 && ['movie','tv'].includes(row.media) ? `<button id="search-preview-start" class="search-preview-start">Preview trailer</button><div id="search-preview-slot">${searchPreviewMarkup}</div>` : ''}
-      <h3>Available sources</h3><div class="search-source-options">${group.rows.map((variant, i) => `<div class="search-source-option"><div><strong>${esc(variant.provider || variant.source || 'Source')}</strong><span>${esc(searchReleaseMetadata(variant) || variant.detail || unifiedActionLabel(variant.source))}</span></div><div>${variant.queueable ? `<button data-detail-queue="${i}">Queue</button>` : ''}<button data-detail-play="${i}"${variant.key ? '' : ' disabled'}>${unifiedActionLabel(variant.source)}</button></div></div>`).join('')}</div></div></div>`;
+      <h3>Available sources</h3><div class="search-source-options">${group.rows.map((variant, i) => `<div class="search-source-option"><div><strong>${esc(variant.provider || variant.source || 'Source')}</strong><span>${esc([searchReleaseMetadata(variant), variant.detail].filter(Boolean).join(' · ') || unifiedActionLabel(variant.source))}</span></div><div>${variant.can_prefer ? `<button data-detail-prefer="${i}" aria-pressed="${variant.preferred === true}">${variant.preferred ? 'Preferred provider' : 'Prefer provider'}</button>` : ''}${variant.queueable ? `<button data-detail-queue="${i}">Queue</button>` : ''}<button data-detail-play="${i}"${variant.key ? '' : ' disabled'}>${unifiedActionLabel(variant.source)}</button></div></div>`).join('')}</div></div></div>`;
+  $('search-detail').querySelectorAll('[data-detail-prefer]').forEach(button => button.onclick = async () => {
+    const variant = group.rows[Number(button.dataset.detailPrefer)];
+    if (!variant?.key) return;
+    button.disabled = true;
+    try {
+      await apiMutation('/unified_search/' + (variant.preferred ? 'clear_preference' : 'prefer') + '?generation=' + generation + '&key=' + encodeURIComponent(variant.key));
+      variant.preferred = !variant.preferred;
+      button.textContent = variant.preferred ? 'Preferred provider' : 'Prefer provider';
+      button.setAttribute('aria-pressed', String(variant.preferred));
+      toast(variant.preferred ? 'Provider preference saved for this title' : 'Provider preference cleared');
+    } catch (error) { toast(error?.message || 'Could not save provider preference'); }
+    finally { button.disabled = false; }
+  });
   if (row.source === 'tmdb' && row.id > 0 && ['movie','tv'].includes(row.media)) $('search-preview-start').onclick = () => startSearchPreview(row, generation);
   $('search-detail-close').onclick = () => { renderSearchDetail(null); if (unifiedSearchPayload) renderUnifiedResults(unifiedSearchPayload); $('q').focus(); };
   panel.querySelectorAll('[data-detail-play]').forEach(button => button.onclick = () => runUnifiedAction(group.rows[Number(button.dataset.detailPlay)], generation, 'play', button));

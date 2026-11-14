@@ -65,7 +65,7 @@ def test_web_now_playing_context_contract():
     status = _src("src/services/remote_status.zig")
     worker = _src("web/service-worker.js")
     state_order = [ui.find(token) for token in (
-        "d.recovering ? 'Recovering'", "d.loading ? 'Loading'",
+        "d.recovering ? 'Recovering'", "d.loading ? (d.stage || 'Connecting')",
         "d.buffering ? 'Buffering'", "d.paused ? 'Paused'",
     )]
     checks = {

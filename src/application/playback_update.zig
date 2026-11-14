@@ -7,6 +7,7 @@ pub fn tick() void {
     state.players_mutex.lock();
     defer state.players_mutex.unlock();
     @import("../services/streamlink.zig").drainResolved();
+    @import("../services/plugins.zig").drainResolved();
     @import("../services/youtube_player.zig").drainResolved();
     @import("../player/player.zig").updateTorrentBackgroundTasks();
     @import("../services/jellyfin.zig").drainTranscodeRecovery();

@@ -59,7 +59,8 @@ pub const ResolvedItem = struct {
     catalog_rank: u16 = 0, // Provider relevance order within movie/show results; zero unknown.
     author: [160]u8 = std.mem.zeroes([160]u8),
     author_len: usize = 0,
-    url: [2048]u8 = std.mem.zeroes([2048]u8), // magnet/http/jf item id
+    url: [8192]u8 = std.mem.zeroes([8192]u8), // magnet/http/jf item id
+    transport: @import("stream_source_pure.zig").Source = .{},
     url_len: usize = 0,
     source: SourceType = .torrent,
     provider: search_view.Provider = .{},
@@ -107,6 +108,9 @@ pub const ResolvedItem = struct {
     plugin_item_id: [128]u8 = std.mem.zeroes([128]u8),
     plugin_item_id_len: usize = 0,
     plugin_episodes: u16 = 0,
+    preference_query: [256]u8 = @splat(0),
+    preference_query_len: usize = 0,
+    preferred: bool = false,
     opds_entry: @import("opds_pure.zig").OpdsEntry = .{},
     opds_connection_identity: u64 = 0,
 };
@@ -599,7 +603,7 @@ pub fn unlockResultsForGeneration() void {
 /// Remote clients receive opaque identities, never local paths, magnets, or
 /// expiring signed URLs. The fixed FIFO transfers a validated result copy back
 /// to the UI thread, where all player/navigation mutations already belong.
-pub const RemoteActionKind = enum { play, queue };
+pub const RemoteActionKind = enum { play, queue, prefer, clear_preference };
 pub const RemoteActionResult = enum { accepted, stale, not_found, full };
 const REMOTE_ACTION_CAP: usize = 8;
 const RemoteAction = struct {
@@ -643,6 +647,8 @@ pub fn actionKey(item: *const ResolvedItem) u64 {
     } else {
         hash.update(item.name[0..item.name_len]);
     }
+    hash.update(item.transport.user_agent[0..item.transport.user_agent_len]);
+    hash.update(item.transport.header_fields[0..item.transport.header_fields_len]);
     const key = hash.final();
     return if (key == 0) 1 else key;
 }
@@ -699,7 +705,7 @@ pub fn searchView(item: *const ResolvedItem) search_view.Item {
         .seeds = item.seeds,
         .leech = item.leech,
         .size_bytes = item.size_bytes,
-        .score = item.score,
+        .score = @import("source_preference_pure.zig").rankedScore(item.score, item.preferred),
         .key = actionKey(item),
     };
 }
@@ -710,6 +716,7 @@ pub fn searchView(item: *const ResolvedItem) search_view.Item {
 /// This keeps the web Queue button honest until those identities become typed.
 pub fn isRemoteQueueable(item: *const ResolvedItem) bool {
     const url = item.url[0..item.url_len];
+    if (item.transport.header_fields_len > 0 or item.transport.user_agent_len > 0 or url.len > 2047) return false;
     return switch (item.source) {
         .torrent => search_view.torrentQueueable(url, item.name[0..@min(item.name_len, item.name.len)], item.size_bytes),
         .youtube, .local, .music, .radio => url.len > 0,
@@ -773,6 +780,8 @@ pub fn drainRemoteAction() void {
             @import("../player/player.zig").openTriggerNow();
             playResolvedItem(&action.item);
         },
+        .prefer => rememberProvider(&action.item, true),
+        .clear_preference => rememberProvider(&action.item, false),
         .queue => @import("queue.zig").addToQueue(
             action.item.url[0..action.item.url_len],
             action.item.name[0..action.item.name_len],
@@ -1030,7 +1039,7 @@ fn pushResult(item: ResolvedItem) bool {
 /// Caller owns the locking. `query` empty means "use the module-level query"
 /// (the live path), so the live behaviour is byte-for-byte what it was.
 fn relevanceBefore(_: void, a: ResolvedItem, b: ResolvedItem) bool {
-    return search_view.lessThan(.relevance, .{ .score = a.score, .key = actionKey(&a) }, .{ .score = b.score, .key = actionKey(&b) });
+    return search_view.lessThan(.relevance, .{ .score = @import("source_preference_pure.zig").rankedScore(a.score, a.preferred), .key = actionKey(&a) }, .{ .score = @import("source_preference_pure.zig").rankedScore(b.score, b.preferred), .key = actionKey(&b) });
 }
 
 fn pushInto(
@@ -1048,6 +1057,9 @@ fn pushInto(
     const match_info = computeMatchAgainst(scored_item, query);
     if (match_info.match_pct == 0) return false;
 
+    const search_query = if (query.len > 0) query else resolver_query[0..resolver_query_len];
+    copyField(&scored_item.preference_query, &scored_item.preference_query_len, search_query);
+    scored_item.preferred = isPreferred(&scored_item);
     scored_item.match_pct = match_info.match_pct;
     const health = @import("link_health.zig");
     const candidate_url = item.url[0..item.url_len];
@@ -1072,7 +1084,7 @@ fn pushInto(
             const transport_url = std.mem.indexOf(u8, url, "://") != null or std.mem.startsWith(u8, url, "magnet:?") or std.mem.startsWith(u8, url, "/");
             const same_namespace = items[d].source == scored_item.source and
                 (scored_item.source != .plugin or std.mem.eql(u8, items[d].plugin_id[0..items[d].plugin_id_len], scored_item.plugin_id[0..scored_item.plugin_id_len]));
-            if ((transport_url or same_namespace) and dedup.sameItem(current_url, url)) {
+            if ((transport_url or same_namespace) and @import("stream_source_pure.zig").sameIdentity(&items[d].transport, &scored_item.transport) and dedup.sameItem(current_url, url)) {
                 // A later backend may supply real size/artwork/seed metadata
                 // for the same transport. Publish that enrichment even when
                 // the visible result count is unchanged.
@@ -1089,7 +1101,8 @@ fn pushInto(
                 }
                 return true;
             }
-            if (!fallbackCompatible(items[d].source, scored_item.source) or
+            if (items[d].transport.url_len > 0 or scored_item.transport.url_len > 0 or
+                !fallbackCompatible(items[d].source, scored_item.source) or
                 !search_view.sameTypedWork(items[d].catalog_kind[0..items[d].catalog_kind_len], items[d].catalog_id, scored_item.catalog_kind[0..scored_item.catalog_kind_len], scored_item.catalog_id) or
                 !dedup.sameSemantic(items[d].name[0..items[d].name_len], name)) continue;
             if (scored_item.score < items[d].score) {
@@ -1469,13 +1482,13 @@ fn serializeRows(rows: []const ResolvedItem, out: []u8) ?[]u8 {
     var w = ccp.Writer.init(out);
     var n: u16 = 0;
     for (rows[0..@min(rows.len, MAX_RESULTS)]) |*row| {
-        if (content.cacheEligible(.{ .source = @tagName(row.source), .provider = row.provider.name(), .url = row.url[0..row.url_len] })) n += 1;
+        if (row.transport.url_len == 0 and content.cacheEligible(.{ .source = @tagName(row.source), .provider = row.provider.name(), .url = row.url[0..row.url_len] })) n += 1;
     }
     w.u16v(n);
     var i: usize = 0;
     while (i < @min(rows.len, MAX_RESULTS)) : (i += 1) {
         const it = rows[i];
-        if (!content.cacheEligible(.{ .source = @tagName(it.source), .provider = it.provider.name(), .url = it.url[0..it.url_len] })) continue;
+        if (it.transport.url_len > 0 or !content.cacheEligible(.{ .source = @tagName(it.source), .provider = it.provider.name(), .url = it.url[0..it.url_len] })) continue;
         w.blob(it.name[0..@min(it.name_len, it.name.len)]);
         w.blob(it.detail[0..@min(it.detail_len, it.detail.len)]);
         w.blob(it.provider.name());
@@ -2341,6 +2354,20 @@ fn resolveInstalledPlugins(query_buf: [256]u8, qlen: usize) void {
         else
             entry.plugin_name[0..entry.plugin_name_len];
         item.detail_len = detail.len;
+        item.transport = entry.row.transport;
+        if (entry.row.stream_url_len > 0) {
+            const source = &entry.row.transport;
+            const kind: []const u8 = if (std.mem.startsWith(u8, entry.row.stream_url[0..entry.row.stream_url_len], "magnet:?")) "Torrent" else "Direct stream";
+            const direct_detail = std.fmt.bufPrint(&item.detail, "{s} · {s}{s}{s}{s}{s}", .{
+                kind, entry.plugin_name[0..entry.plugin_name_len],
+                if (source.quality_len > 0) " · " else "",
+                source.quality[0..source.quality_len],
+                if (source.language_len > 0) " · " else "",
+                source.language[0..source.language_len],
+            }) catch "Direct stream";
+            item.detail_len = direct_detail.len;
+            item.quality = detectQuality(source.quality[0..source.quality_len]);
+        }
         copyField(&item.url, &item.url_len, entry.row.stream_url[0..entry.row.stream_url_len]);
         copyField(&item.plugin_id, &item.plugin_id_len, entry.plugin_id[0..entry.plugin_id_len]);
         item.provider = search_view.Provider.init(item.plugin_id[0..item.plugin_id_len]);
@@ -4268,95 +4295,30 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
             continue;
         }
 
-        // Parse streams
-        var spos: usize = 0;
-        while (spos < sn) {
-            const url_key = "\"url\":\"";
-            const next = std.mem.indexOf(u8, sbuf[spos..], url_key) orelse break;
-            const uabs = spos + next + url_key.len;
-            const ue = std.mem.indexOfScalar(u8, sbuf[uabs..], '"') orelse break;
-
-            var item = std.mem.zeroes(ResolvedItem);
-            item.source = .stremio;
-
-            const ulen = @min(ue, 2047);
-            @memcpy(item.url[0..ulen], sbuf[uabs .. uabs + ulen]);
-            item.url_len = ulen;
-
-            // Get title
-            if (std.mem.lastIndexOf(u8, sbuf[spos .. spos + next], "\"title\":\"")) |tp| {
-                const tabs = spos + tp + 9;
-                const tee = std.mem.indexOfScalar(u8, sbuf[tabs..], '"') orelse 0;
-                const tlen = @min(tee, 255);
-                @memcpy(item.name[0..tlen], sbuf[tabs .. tabs + tlen]);
-                item.name_len = tlen;
-            }
-
-            if (item.name_len == 0) {
-                // Fall back to addon name
-                const aname = addon.name[0..addon.name_len];
-                var fallback: [128]u8 = undefined;
-                const fb = std.fmt.bufPrint(&fallback, "Stream from {s}", .{aname}) catch "Stream";
-                const fblen = @min(fb.len, 255);
-                @memcpy(item.name[0..fblen], fb[0..fblen]);
-                item.name_len = fblen;
-            }
-
-            // Detail
-            {
-                const aname = addon.name[0..addon.name_len];
-                const det = std.fmt.bufPrint(&item.detail, "Stremio · {s}", .{aname}) catch "Stremio";
-                item.detail_len = det.len;
-            }
-
+        const parsed = alloc.alloc(@import("stream_source_pure.zig").Source, 32) catch continue;
+        defer alloc.free(parsed);
+        const count = @import("stream_source_pure.zig").parseStreams(alloc, sbuf[0..sn], parsed) orelse {
+            noteWorkerOutcome(.parse_failed);
+            continue;
+        };
+        for (parsed[0..count]) |source| {
+            var item = ResolvedItem{ .source = .stremio, .transport = source };
+            copyField(&item.url, &item.url_len, source.url[0..source.url_len]);
+            const name = if (source.title_len > 0) source.title[0..source.title_len] else addon.name[0..addon.name_len];
+            copyField(&item.name, &item.name_len, name);
+            item.provider = search_view.Provider.init(addon.name[0..addon.name_len]);
+            const kind: []const u8 = if (std.mem.startsWith(u8, item.url[0..item.url_len], "magnet:?")) "Torrent" else "Direct stream";
+            const detail = std.fmt.bufPrint(&item.detail, "{s} · {s}{s}{s}{s}{s}", .{
+                kind,                                    addon.name[0..addon.name_len],
+                if (source.quality_len > 0) " · " else "",
+                source.quality[0..source.quality_len],
+                if (source.language_len > 0) " · " else "",
+                source.language[0..source.language_len],
+            }) catch kind;
+            item.detail_len = detail.len;
             item.quality = detectQuality(item.name[0..item.name_len]);
-            if (item.url_len > 0) _ = pushResult(item);
-            spos = uabs + ue;
-        }
-
-        // Torrentio (and similar) without debrid returns "infoHash" with no "url".
-        // Convert each infoHash to a magnet link so it can be fed to the torrent engine.
-        var ih_pos: usize = 0;
-        while (ih_pos < sn) {
-            const ih_key = "\"infoHash\":\"";
-            const ih_next = std.mem.indexOf(u8, sbuf[ih_pos..sn], ih_key) orelse break;
-            const ih_abs = ih_pos + ih_next + ih_key.len;
-            const ih_end = std.mem.indexOfScalar(u8, sbuf[ih_abs..sn], '"') orelse break;
-            const hash = sbuf[ih_abs .. ih_abs + ih_end];
-            // Valid SHA-1 info hash is exactly 40 hex chars; SHA-256 is 64
-            if (hash.len >= 40 and hash.len <= 64) {
-                var ih_item = std.mem.zeroes(ResolvedItem);
-                ih_item.source = .stremio;
-                var mag_buf: [256]u8 = undefined;
-                if (std.fmt.bufPrint(&mag_buf, "magnet:?xt=urn:btih:{s}", .{hash})) |mag| {
-                    const mlen = @min(mag.len, 2047);
-                    @memcpy(ih_item.url[0..mlen], mag[0..mlen]);
-                    ih_item.url_len = mlen;
-                    // Look backward in this chunk for a "title" field
-                    const look_start = if (ih_next > 512) ih_pos + ih_next - 512 else ih_pos;
-                    if (std.mem.lastIndexOf(u8, sbuf[look_start .. ih_pos + ih_next], "\"title\":\"")) |tp| {
-                        const tabs = look_start + tp + 9;
-                        const tee = std.mem.indexOfScalar(u8, sbuf[tabs..sn], '"') orelse 0;
-                        const tlen = @min(tee, 255);
-                        @memcpy(ih_item.name[0..tlen], sbuf[tabs .. tabs + tlen]);
-                        ih_item.name_len = tlen;
-                    }
-                    if (ih_item.name_len == 0) {
-                        const aname = addon.name[0..addon.name_len];
-                        var fb: [128]u8 = undefined;
-                        const fbs = std.fmt.bufPrint(&fb, "Stream from {s}", .{aname}) catch "Stream";
-                        const fbl = @min(fbs.len, 255);
-                        @memcpy(ih_item.name[0..fbl], fbs[0..fbl]);
-                        ih_item.name_len = fbl;
-                    }
-                    const aname = addon.name[0..addon.name_len];
-                    const det = std.fmt.bufPrint(&ih_item.detail, "Stremio · {s}", .{aname}) catch "Stremio";
-                    ih_item.detail_len = det.len;
-                    ih_item.quality = detectQuality(ih_item.name[0..ih_item.name_len]);
-                    _ = pushResult(ih_item);
-                } else |_| {}
-            }
-            ih_pos = ih_abs + ih_end;
+            if (item.quality == 0) item.quality = detectQuality(source.quality[0..source.quality_len]);
+            _ = pushResult(item);
         }
     }
 }
@@ -4420,7 +4382,88 @@ pub fn sourceCount(item: *const ResolvedItem) usize {
     );
 }
 
+fn providerIdentity(item: *const ResolvedItem) []const u8 {
+    return if (item.plugin_id_len > 0) item.plugin_id[0..item.plugin_id_len] else if (item.provider.len > 0) item.provider.name() else @tagName(item.source);
+}
+
+pub fn isPreferred(item: *const ResolvedItem) bool {
+    const db = @import("../core/db.zig");
+    var key_buf: [64]u8 = undefined;
+    const key = @import("source_preference_pure.zig").key(item.preference_query[0..item.preference_query_len], &key_buf) orelse return false;
+    const stmt = db.prepare("SELECT value FROM config WHERE key = ?") orelse return false;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, key);
+    if (db.step(stmt) != 100) return false;
+    const value = db.columnText(stmt, 0) orelse return false;
+    return std.mem.eql(u8, value, providerIdentity(item));
+}
+
+pub fn rememberProvider(item: *const ResolvedItem, remember: bool) void {
+    if (state.app.incognito_mode) { state.showToast("Source preferences are not saved in private mode"); return; }
+    const db = @import("../core/db.zig");
+    var key_buf: [64]u8 = undefined;
+    const key = @import("source_preference_pure.zig").key(item.preference_query[0..item.preference_query_len], &key_buf) orelse return;
+    const stmt = db.prepare(if (remember) "INSERT OR REPLACE INTO config(key,value) VALUES(?,?)" else "DELETE FROM config WHERE key = ?") orelse return;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, key);
+    if (remember) db.bindText(stmt, 2, providerIdentity(item));
+    if (db.step(stmt) != 101) {
+        state.showToast("Could not save source preference");
+        return;
+    }
+    results_mutex.lock();
+    for (results[0..result_count]) |*row| row.preferred = isPreferred(row);
+    std.sort.insertion(ResolvedItem, results[0..result_count], {}, relevanceBefore);
+    results_revision +%= 1;
+    results_mutex.unlock();
+    state.showToast(if (remember) "Preferred provider saved for this title" else "Provider preference cleared");
+}
+
+const Recovery = struct { address: usize, lifetime: u64, serial: u64, position: f64, query: [256]u8, query_len: usize };
+var recovery: ?Recovery = null;
+var recovery_mutex: @import("../core/sync.zig").Mutex = .{};
+
+pub fn chooseAnotherSource(pl: *@import("../player/player.zig").MediaPlayer) bool {
+    if (pl.source_search_query_len == 0) return false;
+    recovery_mutex.lock();
+    recovery = .{ .address = @intFromPtr(pl), .lifetime = pl.lifetime_id, .serial = pl.load_serial, .position = if (pl.last_seen_pos > 0) pl.last_seen_pos else pl.last_good_pos_secs, .query = pl.source_search_query, .query_len = pl.source_search_query_len };
+    recovery_mutex.unlock();
+    @import("search.zig").recoverSourceQuery(pl.source_search_query[0..pl.source_search_query_len]);
+    state.navigateToTab(.Search);
+    state.showToast("Choose another source. Your playback position is kept.");
+    return true;
+}
+
 pub fn playResolvedItem(item: *const ResolvedItem) void {
+    var resume_at: ?f64 = null;
+    recovery_mutex.lock();
+    const saved_recovery = recovery;
+    recovery = null;
+    recovery_mutex.unlock();
+    if (saved_recovery) |pending| {
+        if (std.mem.eql(u8, pending.query[0..pending.query_len], item.preference_query[0..item.preference_query_len])) {
+            for (state.app.players.items, 0..) |pl, idx| {
+                if (@intFromPtr(pl) == pending.address and pl.lifetime_id == pending.lifetime and pl.load_serial == pending.serial) {
+                    state.app.active_player_idx = idx;
+                    resume_at = @import("../player/playback_load_pure.zig").saneResumePosition(pending.position);
+                    break;
+                }
+            }
+        }
+    }
+    defer {
+        if (state.app.active_player_idx < state.app.players.items.len) {
+            const pl = state.app.players.items[state.app.active_player_idx];
+            if (item.preference_query_len > 0) {
+                pl.source_search_query = item.preference_query;
+                pl.source_search_query_len = item.preference_query_len;
+            }
+            if (pl.plugin_retry_pending) {
+                pl.plugin_resume_secs = resume_at;
+                pl.setNowPlaying(item.poster_url[0..item.poster_url_len], item.name[0..item.name_len], item.detail[0..item.detail_len]);
+            }
+        }
+    }
     switch (item.source) {
         .jellyfin => {
             const jf = @import("jellyfin.zig");
@@ -4439,7 +4482,7 @@ pub fn playResolvedItem(item: *const ResolvedItem) void {
             if (std.mem.startsWith(u8, url, "magnet:?")) {
                 @import("search.zig").loadTorrentToPlayer(url);
             } else if (std.mem.startsWith(u8, url, "http://") or std.mem.startsWith(u8, url, "https://")) {
-                @import("browser.zig").playDirect(.{ .url = url, .title = item.name[0..item.name_len] });
+                @import("browser.zig").playDirect(.{ .url = url, .title = item.name[0..item.name_len], .user_agent = item.transport.user_agent[0..item.transport.user_agent_len], .prepared_header_fields = item.transport.header_fields[0..item.transport.header_fields_len], .resume_position_secs = resume_at, .source_search_query = item.preference_query[0..item.preference_query_len] });
             } else {
                 @import("plugins.zig").runPluginResolveById(
                     item.plugin_id[0..item.plugin_id_len],
@@ -4581,6 +4624,10 @@ pub fn playResolvedItem(item: *const ResolvedItem) void {
                 .fallback_url_2 = item.fallback_url_2[0..item.fallback_url_2_len],
                 .title = item.name[0..item.name_len],
                 .subtitle = item.detail[0..item.detail_len],
+                .user_agent = item.transport.user_agent[0..item.transport.user_agent_len],
+                .prepared_header_fields = item.transport.header_fields[0..item.transport.header_fields_len],
+                .resume_position_secs = resume_at,
+                .source_search_query = item.preference_query[0..item.preference_query_len],
             });
         },
     }

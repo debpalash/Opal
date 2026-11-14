@@ -2790,6 +2790,7 @@ pub const PlaybackRequest = struct {
     /// this on the request makes candidate health a property of the playback
     /// seam instead of forcing each card/view to invent its own hook.
     health_kind: []const u8 = "",
+    source_search_query: []const u8 = "",
 };
 
 fn FixedPlaybackField(comptime capacity: usize) type {
@@ -2827,6 +2828,7 @@ const DeferredPlayback = struct {
     user_agent: FixedPlaybackField(512) = .{},
     header_fields: FixedPlaybackField(2048) = .{},
     health_kind: FixedPlaybackField(64) = .{},
+    source_search_query: FixedPlaybackField(256) = .{},
     metadata: ?state.PendingPlay = null,
     mode: player.LoadMode = .replace,
     origin: player.PlaybackOrigin = .direct,
@@ -2851,7 +2853,7 @@ const DeferredPlayback = struct {
             request.prepared_header_fields
         else
             @import("../player/http_headers_pure.zig").buildHeaderFields(request.headers, &fields_buf);
-        if (!out.header_fields.set(fields)) return null;
+        if (!out.header_fields.set(fields) or !out.source_search_query.set(request.source_search_query)) return null;
         out.audio_only = request.audio_only;
         out.browser_handoff = request.browser_handoff;
         out.mode = request.mode;
@@ -2880,6 +2882,7 @@ const DeferredPlayback = struct {
             .user_agent = self.user_agent.slice(),
             .prepared_header_fields = self.header_fields.slice(),
             .health_kind = self.health_kind.slice(),
+            .source_search_query = self.source_search_query.slice(),
         };
     }
 };
@@ -3017,6 +3020,8 @@ pub fn playDirect(request: PlaybackRequest) void {
     });
 
     if (request.mode == .replace) {
+        p.source_search_query_len = @min(request.source_search_query.len, p.source_search_query.len);
+        @memcpy(p.source_search_query[0..p.source_search_query_len], request.source_search_query[0..p.source_search_query_len]);
         p.setNowPlaying(request.art_url, request.title, request.subtitle);
         state.gotoPlayer();
     }

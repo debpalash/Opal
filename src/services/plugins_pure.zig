@@ -46,8 +46,9 @@ pub const SearchRow = struct {
     id_len: usize = 0,
     title: [128]u8 = std.mem.zeroes([128]u8),
     title_len: usize = 0,
-    stream_url: [512]u8 = std.mem.zeroes([512]u8),
+    stream_url: [8192]u8 = std.mem.zeroes([8192]u8),
     stream_url_len: usize = 0,
+    transport: @import("stream_source_pure.zig").Source = .{},
     year: [8]u8 = std.mem.zeroes([8]u8),
     year_len: usize = 0,
     media_type: [16]u8 = std.mem.zeroes([16]u8),
@@ -82,7 +83,15 @@ pub fn parseSearchRows(allocator: std.mem.Allocator, input: []const u8, out: []S
         var row: SearchRow = .{};
         copyJsonString(value, "id", &row.id, &row.id_len);
         copyJsonString(value, "title", &row.title, &row.title_len);
-        copyJsonString(value, "stream_url", &row.stream_url, &row.stream_url_len);
+        const direct_url = value.object.get("stream_url");
+        if (direct_url) |u| {
+            if (u != .string) continue;
+            if (u.string.len > 0) {
+                row.transport = @import("stream_source_pure.zig").fromValue(value) orelse continue;
+                row.stream_url_len = row.transport.url_len;
+                @memcpy(row.stream_url[0..row.stream_url_len], row.transport.url[0..row.stream_url_len]);
+            }
+        }
         copyJsonString(value, "year", &row.year, &row.year_len);
         copyJsonString(value, "type", &row.media_type, &row.media_type_len);
         copyJsonString(value, "poster", &row.poster_url, &row.poster_url_len);
@@ -358,4 +367,12 @@ test "manifest permission uses only a typed top-level field" {
     ));
     try std.testing.expect(try manifestUnsafe(std.testing.allocator, "{\"allow_unsafe\":true}"));
     try std.testing.expectError(error.InvalidPermission, manifestUnsafe(std.testing.allocator, "{\"allow_unsafe\":\"true\"}"));
+}
+
+test {
+    _ = @import("stream_source_pure.zig");
+}
+
+test {
+    _ = @import("source_preference_pure.zig");
 }

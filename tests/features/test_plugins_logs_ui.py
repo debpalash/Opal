@@ -9,6 +9,7 @@ Two "so many sources now" upgrades:
 Both route their decision logic through tested pure modules (plugins_pure /
 logs_pure). See tests/features/harness.py for the shared @test decorator."""
 from .harness import *  # noqa: F401,F403
+from pathlib import Path
 
 
 @test("Plugins page groups + filters the source catalog", "UI Standards")
@@ -163,3 +164,23 @@ def test_source_table_capacity():
     return "pass", ("source endpoint table sized in fields (512, was 64) with a loud "
                     "error on overflow; install state reads the source file, not the "
                     "parsed table; one shared filename-safety rule")
+
+
+@test("Direct-stream plugins share bounded transport and owner-thread completion", "Plugins")
+def test_direct_stream_contract():
+    source = _src("src/services/stream_source_pure.zig")
+    plugins = _src("src/services/plugins.zig")
+    resolver = _src("src/services/resolver.zig")
+    update = _src("src/application/playback_update.zig")
+    checks = {
+        "bounded transport": "url: [8192]u8" in source and "proxyHeaders" in source,
+        "structured parser": "parseStreams(alloc" in resolver,
+        "owner publication": 'plugins.zig").drainResolved()' in update,
+        "stale completion gate": "pl.lifetime_id != completion.ticket.lifetime" in plugins and "pl.load_serial != completion.ticket.serial" in plugins,
+        "source preference": "source_preference_pure.zig" in resolver and "rememberProvider" in resolver,
+        "plugin example": (Path(PROJECT_DIR) / "examples/plugins/direct-stream/resolve").exists(),
+    }
+    missing = [name for name, passed in checks.items() if not passed]
+    if missing:
+        return "fail", ", ".join(missing)
+    return "pass", "Bounded streams, headers, publication, preferences and authoring example"
