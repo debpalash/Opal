@@ -1,0 +1,10 @@
+{
+  "tag": "v0.9.6",
+  "items": [
+    {
+      "path": "assets/releases/v0.9.6/source-selection.png",
+      "alt": "Opal browser companion showing two staged direct-stream providers with quality, language and per-title provider preference controls.",
+      "caption": "Choose a direct stream and remember a preferred provider. Current browser-companion UI with staged demo source metadata; this preview does not represent a live provider or playback session."
+    }
+  ]
+}

@@ -12,6 +12,14 @@ match the tag exactly.
 
 ## Unreleased
 
+## v0.9.6 — 2026-11-14
+
+- **More dependable direct streams.** Plugins and Stremio add-ons can play long signed links with their required Referer, Origin and User-Agent headers. Resolving errors, timeouts and revoked approvals now finish with a useful message, and an older request cannot replace a newer selection.
+- **Choose and recover your sources.** Source details show the provider, stream type and available quality/language. Prefer a provider for a title, control compatible automatic fallbacks, and retry or choose another source while keeping your playback position. These controls are available in the desktop app and browser companion.
+- **A better browser player.** Playback speed, fullscreen, picture in picture where supported, clearer buffering feedback, keyboard controls and focus handling make listening and watching smoother. Phone controls and profile forms fit smaller screens.
+- **Browsing and reading fixes.** Old Live TV searches no longer overwrite new results, refreshed controls keep working, keyless shows retain watched state, and invalid clocks no longer turn into completed progress. Continue cards show time remaining. The public WuxiaClick connector follows its updated catalog and chapter format, including accurate chapter windows across numbering gaps.
+- **Build your own streaming plugin.** A runnable direct-stream example and protocol guide demonstrate search, episodes, headers and useful failures without adding provider-specific extraction to core.
+
 - **Picture presets work on iPhone/iPad too.** The grade now uses a filter every platform ships (iOS lacks `eq`), with the same look.
 
 ## v0.9.5 — 2026-11-10
