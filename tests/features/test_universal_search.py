@@ -376,3 +376,17 @@ def test_web_folded_sources():
     missing = [name for name, passed in checks.items() if not passed]
     return ("fail", ", ".join(missing)) if missing else (
         "pass", "/unified_search rows carry source_count+labels; web expander plays a picked source with the rest as fallbacks")
+
+
+@test("Compact release rows keep title and metadata to two lines", "Search")
+def test_compact_release_two_lines():
+    search = _src('src/services/search.zig')
+    row = search.split('fn renderCompactRowMain(', 1)[1].split('fn renderSearchResultContext(', 1)[0]
+    assert row.count('searchRowLine(') == 2, 'title and metadata only, including torrent warnings'
+    assert 'searchRowTitle(' not in row, 'titles must not reserve two lines'
+    assert 'releaseSummary(' in row, 'health and known upload date stay inline'
+    assert 'releaseStatus(' not in row and 'components.tipId(' not in row, 'no release hover panel'
+    label = search.split('fn searchRowLine(', 1)[1].split('fn groupSourceTotal(', 1)[0]
+    assert 'components.tip(' not in label, 'truncated text must not open another hover panel'
+    assert '.max_size_content' not in row, 'do not clip metadata with a fixed row height'
+    return 'pass', 'Two single-line labels; health/date inline, no text hover panels (GUI boundary)'

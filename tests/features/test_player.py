@@ -998,7 +998,7 @@ def test_scam_torrent_flagging():
         "native queue guarded": "if (action.queue)" in sz and "if (risk.risk == .block)" in sz and "Blocked scam torrent" in sz,
         "remote queue guarded": "search_view.torrentQueueable(" in rz and "kind == .queue and !isRemoteQueueable(&item)" in rz,
         "pure queue rejects blocked risk": '@import("torrent_risk_pure.zig").assess(name, @floatFromInt(size_bytes)).risk != .block' in view,
-        "visible blocked label": "Scam? · blocked torrent" in sz,
+        "visible blocked label": 'if (risk.risk == .block) "Blocked · "' in sz,
         "reason available in blocked action": "Blocked scam torrent: {s}" in rz and "risk.reason" in sz,
     }
     bad = [k for k, v in checks.items() if not v]

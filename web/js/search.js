@@ -362,7 +362,7 @@ function searchAspect(kind){
 }
 function searchReleaseMetadata(row){
   const item = unifiedSearchItem(row);
-  return [({1:'480p', 2:'720p', 3:'1080p', 4:'4K'})[item.quality], item.size ? fmtSize(item.size) : '', item.torrent ? `${item.seeds} seeds · ${item.leech} peers` : ''].filter(Boolean).join(' · ');
+  return [({1:'480p', 2:'720p', 3:'1080p', 4:'4K'})[item.quality], item.size ? fmtSize(item.size) : '', item.torrent ? `${item.seeds} seeds · ${item.leech} peers` : '', item.torrent ? (row.release_summary || 'Health unknown') : ''].filter(Boolean).join(' · ');
 }
 function searchRowSources(row, generation, index){
   // Folded renditions of this one row (server "sources"); index picks which plays first.

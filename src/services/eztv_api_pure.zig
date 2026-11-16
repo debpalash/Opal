@@ -54,6 +54,7 @@ pub const Item = struct {
     seeds: u16 = 0,
     peers: u16 = 0,
     size_bytes: u64 = 0,
+    date_released_unix: i64 = 0,
 };
 
 /// Value of `"key":"..."` inside `block`, or null. Returns a slice INTO block.
@@ -109,6 +110,7 @@ pub fn parseItems(body: []const u8, out: []Item) usize {
             .seeds = @intCast(@min(numField(block, "seeds") orelse 0, 65535)),
             .peers = @intCast(@min(numField(block, "peers") orelse 0, 65535)),
             .size_bytes = numField(block, "size_bytes") orelse 0,
+            .date_released_unix = @intCast(@min(numField(block, "date_released_unix") orelse 0, std.math.maxInt(i64))),
         };
         n += 1;
     }
@@ -216,4 +218,11 @@ test "buildUrl normalises the base and refuses a bad id" {
     try t.expect(buildUrl("https://eztv1.xyz", "tt6048596", 100, &buf) == null);
     var tiny: [8]u8 = undefined;
     try t.expect(buildUrl("https://eztv1.xyz", "6048596", 100, &tiny) == null);
+}
+
+test "release upload timestamp survives feed parsing" {
+    var items: [2]Item = undefined;
+    const n = parseItems("{\"torrents\":[{\"title\":\"Example\",\"magnet_url\":\"magnet:?xt=urn:btih:abc\",\"date_released_unix\":1700000000}]}", &items);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqual(@as(i64, 1700000000), items[0].date_released_unix);
 }

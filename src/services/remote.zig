@@ -4228,6 +4228,12 @@ fn apiUnifiedResolverSearch(stream: std.Io.net.Stream, query: []const u8) void {
             view.score,
         }) catch return;
         escJsonWrite(&w, view.provider.name());
+        w.print("\",\"uploaded_ts\":{d},\"release_summary\":\"", .{item.uploaded_ts}) catch return;
+        var release_summary_buffer: [96]u8 = undefined;
+        if (item.source == .torrent) escJsonWrite(&w, @import("search_meta_pure.zig").releaseSummary(item.seeds, item.leech, item.uploaded_ts, &release_summary_buffer));
+        w.writeAll("\",\"release_status\":\"") catch return;
+        var release_status_buffer: [256]u8 = undefined;
+        if (item.source == .torrent) escJsonWrite(&w, @import("search_meta_pure.zig").releaseStatus(item.seeds, item.leech, item.uploaded_ts, io_g.timestamp(), &release_status_buffer));
         w.print("\",\"preferred\":{s},\"can_prefer\":{s}", .{ if (resolver.isPreferred(item)) "true" else "false", if (item.source == .plugin or item.source == .stremio) "true" else "false" }) catch return;
         if (item.source == .tmdb and item.catalog_id != 0) {
             w.writeAll(",\"media\":\"") catch return;

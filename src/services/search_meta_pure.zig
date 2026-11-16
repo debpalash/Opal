@@ -158,6 +158,52 @@ pub fn metaLine(m: Meta, buf: []u8) []const u8 {
     return buf[0..w];
 }
 
+/// Index-reported swarm signal, never a probability of completing playback.
+pub fn swarmHealth(seeds: u16, leech: u16) []const u8 {
+    if (seeds == 0) return if (leech > 0) "No seeds reported" else "Health unknown";
+    if (seeds >= 20 and @as(u32, seeds) * 2 >= leech) return "Strong swarm";
+    if (seeds >= 5) return "Moderate swarm";
+    return "Limited swarm";
+}
+
+/// Short enough for the second line; missing optional dates stay in details.
+pub fn releaseSummary(seeds: u16, leech: u16, uploaded: i64, buf: []u8) []const u8 {
+    var date_buf: [16]u8 = undefined;
+    const date = if (uploaded > 0 and uploaded < 4102444800) @import("tmdb_pure.zig").ymd(uploaded, &date_buf) else null;
+    return std.fmt.bufPrint(buf, "{s}{s}{s}", .{ swarmHealth(seeds, leech), if (date != null) " · " else "", date orelse "" }) catch swarmHealth(seeds, leech);
+}
+
+test "compact release summary omits unknown boilerplate and stays on one line" {
+    var buf: [96]u8 = undefined;
+    try t.expectEqualStrings("Strong swarm · 2023-11-14", releaseSummary(42, 7, 1700000000, &buf));
+    try t.expectEqualStrings("Health unknown", releaseSummary(0, 0, 0, &buf));
+    try t.expect(std.mem.indexOfScalar(u8, releaseSummary(1, 2, 0, &buf), '\n') == null);
+}
+
+pub fn releaseStatus(seeds: u16, leech: u16, uploaded: i64, now: i64, buf: []u8) []const u8 {
+    var date_buf: [64]u8 = undefined;
+    var ymd_buf: [16]u8 = undefined;
+    const ymd = if (uploaded > 0 and uploaded <= now) @import("tmdb_pure.zig").ymd(uploaded, &ymd_buf) orelse "unknown" else "unknown";
+    const date = if (uploaded > 0 and uploaded <= now)
+        std.fmt.bufPrint(&date_buf, "Uploaded {s} ({d}d ago)", .{ ymd, @divFloor(now - uploaded, 86400) }) catch "Upload date unknown"
+    else
+        "Upload date unknown";
+    return std.fmt.bufPrint(buf, "{s} (index) · {s} · Updates unknown · Full-file success unmeasured", .{ swarmHealth(seeds, leech), date }) catch "Health unknown";
+}
+
+test "release health never turns seed counts into completion odds" {
+    try t.expectEqualStrings("Health unknown", swarmHealth(0, 0));
+    try t.expectEqualStrings("No seeds reported", swarmHealth(0, 30));
+    try t.expectEqualStrings("Limited swarm", swarmHealth(1, 0));
+    try t.expectEqualStrings("Moderate swarm", swarmHealth(15, 115));
+    try t.expectEqualStrings("Strong swarm", swarmHealth(100, 50));
+    var b: [256]u8 = undefined;
+    const status = releaseStatus(100, 50, 86400, 259200, &b);
+    try t.expect(std.mem.indexOf(u8, status, "Uploaded 1970-01-02 (2d ago)") != null);
+    try t.expect(std.mem.indexOf(u8, status, "Full-file success unmeasured") != null);
+    try t.expect(std.mem.indexOf(u8, releaseStatus(0, 0, 999999, 10, &b), "Upload date unknown") != null);
+}
+
 // ── Tests ──
 
 const t = std.testing;

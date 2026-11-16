@@ -1153,7 +1153,7 @@ test('Search card secondary metadata keeps genres without repeating year rating 
   f.run(`renderUnifiedResults({generation:42,results:[{title:'Film',source:'tmdb',media:'movie',id:1,key:'a',year:2016,rating:7.6,detail:'2016 · Movie details · 7.6/10 · Drama',poster_url:'https://images.example/film.jpg'}],sources:[]})`);
   const markup=f.$('results').innerHTML;
   assert.match(markup,/search-art-placeholder/);
-  assert.match(markup,/search-card-release">Drama</);
+  assert.match(markup,/search-card-release"[^>]*>Drama</);
 });
 
 test('Provider poster failure retains card fallback without hiding title and actions', () => {
@@ -1519,4 +1519,19 @@ test('comic chapter changes reset page slots and reject previous chapter respons
   f.take('/comics').resolve({title:'New',pages:1,downloaded:1,ready_pages:[0],loading:false}); await current;
   assert.equal(f.run('comicPageSlots.size'), 1);
   assert.match(f.$('cx-progress').textContent, /New/);
+});
+
+test('Release cards show provider health and dates without invented completion percentages', () => {
+  const f = fixture('catalog.js');
+  const status = 'Strong swarm (index) · Uploaded 2026-11-01 (14d ago) · Updates unknown · Full-file success unmeasured';
+  f.run(`globalThis.releaseRow = {source:'torrent', torrent:true, seeds:42, leech:7, release_status:${JSON.stringify(status)}, release_summary:"Strong swarm · 2026-11-01"}`);
+  assert.match(f.run('searchReleaseMetadata(releaseRow)'), /Strong swarm.*2026-11-01/);
+  const unknown = f.run("searchReleaseMetadata({source:'torrent', torrent:true})");
+  assert.match(unknown, /Health unknown/);
+  assert.doesNotMatch(unknown, /%|Updates unknown|unmeasured|Upload date unknown/);
+  assert.doesNotMatch(f.run("searchReleaseMetadata({source:'tmdb'})"), /swarm|success|Upload/);
+  f.run("renderUnifiedResults({generation:42,results:[{...releaseRow,title:'Film release',key:'release-a'}],sources:[]})");
+  const markup = f.$('results').innerHTML;
+  assert.match(markup, /search-card-release">[^<]*Strong swarm[^<]*2026-11-01/);
+  assert.doesNotMatch(markup, /search-card-release"[^>]*title=|Full-file success|Updates unknown/);
 });
