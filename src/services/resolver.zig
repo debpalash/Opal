@@ -75,6 +75,7 @@ pub const ResolvedItem = struct {
     /// Leechers. Seeds alone hide the difference between a dead torrent and a
     /// busy one; seeds/leech is the ratio people actually judge a swarm by.
     leech: u16 = 0,
+    uploaded_ts: i64 = 0, // Provider upload time; unknown for unsupported sources.
     match_pct: u8 = 0, // 0-100% keyword match score for UI display
     score: u32 = 9999, // cached composite sort score (lower = better)
     is_nsfw: bool = false, // computed at insert from item name
@@ -1465,8 +1466,8 @@ fn attrValue(html: []const u8, name: []const u8, limit: usize) ?[]const u8 {
 // ══════════════════════════════════════════════════════════
 
 fn cacheKey(buf: []u8, query: []const u8, scope: CacheScope) []const u8 {
-    // Ranking v2: old cached scores must not restore the former arbitrary order.
-    return content.cacheIdentity(buf, query, scope.mask, scope.fingerprint ^ 0x72616e6b76320001) orelse "";
+    // Upload metadata changes the row wire format; invalidate older cache entries.
+    return content.cacheIdentity(buf, query, scope.mask, scope.fingerprint ^ 0x72616e6b76320002) orelse "";
 }
 
 /// Serialize the current `results` (under caller's lock) into `out`.
@@ -1499,6 +1500,7 @@ fn serializeRows(rows: []const ResolvedItem, out: []u8) ?[]u8 {
         w.u32v(@truncate(it.size_bytes));
         w.u32v(@truncate(it.size_bytes >> 32));
         w.u16v(it.leech);
+        w.u32v(@intCast(std.math.clamp(it.uploaded_ts, 0, std.math.maxInt(u32))));
         w.u8v(it.match_pct);
         w.u32v(it.score);
         w.boolv(it.is_nsfw);
@@ -1569,6 +1571,7 @@ fn deserializeInto(bytes: []const u8) usize {
         const size_hi = r.u32v() orelse break;
         it.size_bytes = @as(u64, size_lo) | (@as(u64, size_hi) << 32);
         it.leech = r.u16v() orelse break;
+        it.uploaded_ts = r.u32v() orelse break;
         it.match_pct = r.u8v() orelse break;
         it.score = r.u32v() orelse break;
         it.is_nsfw = r.boolv() orelse break;
@@ -2419,6 +2422,7 @@ fn resolveApibayNative(query: []const u8) SourceStatus {
         @memcpy(item.url[0..mag.len], mag);
         item.url_len = mag.len;
         item.quality = detectQuality(r.name);
+        item.uploaded_ts = std.fmt.parseInt(i64, field(o, "added"), 10) catch 0;
         item.seeds = r.seeds;
         item.leech = r.leech;
         item.size_bytes = r.size;
@@ -2860,6 +2864,7 @@ fn resolveEztv(query_buf: [256]u8, qlen: usize) void {
         item.url_len = ulen;
 
         item.quality = detectQuality(it.title);
+        item.uploaded_ts = it.date_released_unix;
         item.seeds = it.seeds;
         item.leech = it.peers;
         item.size_bytes = it.size_bytes;

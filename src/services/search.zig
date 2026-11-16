@@ -2490,7 +2490,7 @@ fn renderCompactRowMain(idx: usize, item: *const @import("resolver.zig").Resolve
     };
     const body = theme.mediaTitleFont(item.name[0..item.name_len], dvui.themeGet().font_body);
     const small = body.withSize(theme.font_size.small);
-    const row_height = body.textHeight() * 3 + 14 + (if (risk.risk != .ok) small.textHeight() else @as(f32, 0));
+    const row_height = body.textHeight() + small.textHeight() + 16;
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = row_key,
         .expand = .horizontal,
@@ -2499,7 +2499,6 @@ fn renderCompactRowMain(idx: usize, item: *const @import("resolver.zig").Resolve
         .color_border = .{ .color = theme.colors.border_subtle },
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .min_size_content = .{ .w = 0, .h = row_height - 13 },
-        .max_size_content = .{ .w = 0, .h = row_height - 13 },
         .padding = .{ .x = theme.spacing.sm, .y = 6, .w = theme.spacing.sm, .h = 6 },
     });
     defer row.deinit();
@@ -2508,21 +2507,21 @@ fn renderCompactRowMain(idx: usize, item: *const @import("resolver.zig").Resolve
     const queueable = item.source == .torrent and resolver.isRemoteQueueable(item);
     const actions_width: f32 = (if (queueable) @as(f32, 72) else 36) + (if (sources > 1) @as(f32, 120) else 0);
     const text_width = @max(0, row.data().contentRect().w - actions_width - theme.spacing.sm);
-    var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .max_size_content = .{ .w = 0, .h = row_height - 13 } });
-    var title_buffer: [520]u8 = undefined;
-    const title = searchRowTitle(item.name[0..item.name_len], body, text_width, &title_buffer);
-    _ = dvui.label(@src(), "{s}", .{title}, .{ .id_extra = row_key +% 1, .font = body, .color_text = .{ .color = theme.colors.text_primary }, .max_size_content = .{ .w = text_width, .h = body.textHeight() * 2 } });
+    var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+    searchRowLine(row_key +% 1, safeUtf8(item.name[0..item.name_len]), body, text_width, theme.colors.text_primary);
     const meta_pure = @import("search_meta_pure.zig");
     var meta_buffer: [64]u8 = undefined;
     const meta = meta_pure.metaLine(.{ .quality = item.quality, .size_bytes = item.size_bytes, .seeds = item.seeds, .leech = item.leech }, &meta_buffer);
     var line: [512]u8 = undefined;
     const provider = if (item.provider.len > 0) item.provider.name() else "Provider unknown";
+    var summary_buffer: [96]u8 = undefined;
+    const summary = meta_pure.releaseSummary(item.seeds, item.leech, item.uploaded_ts, &summary_buffer);
+    const caution: []const u8 = if (risk.risk == .block) "Blocked · " else if (risk.risk != .ok) "Caution · " else "";
     const metadata = if (item.source == .torrent)
-        std.fmt.bufPrint(&line, "{s} · {s}{s}{s}", .{ chip_text, provider, if (meta.len > 0) " · " else "", meta }) catch chip_text
+        std.fmt.bufPrint(&line, "{s}{s} · {s} · {s}{s}{s}", .{ caution, summary, provider, meta, if (meta.len > 0) " · " else "", chip_text }) catch chip_text
     else
         std.fmt.bufPrint(&line, "{s}{s}{s}{s}{s}", .{ chip_text, if (meta.len > 0) " · " else "", meta, if (item.detail_len > 0) " · " else "", safeUtf8(item.detail[0..item.detail_len]) }) catch chip_text;
-    searchRowLine(row_key +% 2, metadata, small, text_width, theme.colors.text_secondary);
-    if (risk.risk != .ok) searchRowLine(row_key +% 3, if (risk.risk == .block) "Scam? · blocked torrent" else "Caution · check torrent details", small, text_width, if (risk.risk == .block) theme.colors.danger else theme.colors.warning);
+    searchRowLine(row_key +% 2, metadata, small, text_width, if (risk.risk == .block) theme.colors.danger else if (risk.risk != .ok) theme.colors.warning else theme.colors.text_secondary);
     content.deinit();
     var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
     defer actions.deinit();
@@ -2547,7 +2546,6 @@ fn renderCompactRowMain(idx: usize, item: *const @import("resolver.zig").Resolve
         if (dvui.buttonIcon(@src(), "queue", icons.tvg.lucide.plus, .{}, .{}, .{ .id_extra = row_key +% 5, .data_out = &button_data, .color_fill = .{ .color = theme.transparent }, .color_fill_hover = .{ .color = theme.colors.bg_hover }, .color_text = .{ .color = theme.colors.text_secondary }, .border = dvui.Rect.all(0), .padding = dvui.Rect.all(8), .min_size_content = .{ .w = 16, .h = 16 } })) pending.* = .{ .idx = idx, .queue = true };
         components.tip(@src(), button_data, "Add torrent to queue");
     }
-    components.tipId(@src(), row.data().*, safeUtf8(item.name[0..item.name_len]), row_key);
     if (dvui.clicked(row.data(), .{})) pending.* = .{ .idx = idx };
     renderSearchResultContext(row_key, row.data().borderRectScale().r, item);
 }
