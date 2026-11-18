@@ -10,10 +10,10 @@
 # SDL_HINT_APP_NAME — so only a real bundle fixes this.
 #
 # The skeleton is static (Info.plist + icns + Credits.rtf); only the executable
-# is refreshed each build via a hardlink (same inode, zero copy). Launching the
+# is copied each build before patching its bundle-local library path. Launching the
 # binary from inside Contents/MacOS/ makes NSBundle.mainBundle resolve to this
-# .app. dev.sh keeps CWD at the project root, so CWD-relative resource lookups
-# (engines/, web/, plugins-manifest.json) still win before SDL_GetBasePath.
+# .app. Resource symlinks also support Finder launches with CWD=/ while
+# keeping development edits to engines, scripts, and web assets live.
 #
 # Prints the path to launch on success (Contents/MacOS/Opal).
 set -euo pipefail
@@ -23,11 +23,12 @@ BIN="$ROOT/zig-out/bin/opal"
 APP="$ROOT/dist/Opal-dev.app"
 MACOS="$APP/Contents/MacOS"
 RES="$APP/Contents/Resources"
+FRAMEWORKS="$APP/Contents/Frameworks"
 EXE="$MACOS/Opal"
 
 [ -f "$BIN" ] || { echo "[dev-app] ERROR: $BIN missing (build first)" >&2; exit 1; }
 
-mkdir -p "$MACOS" "$RES"
+mkdir -p "$MACOS" "$RES" "$FRAMEWORKS"
 
 # ── Info.plist (static) ────────────────────────────────────────
 if [ ! -f "$APP/Contents/Info.plist" ]; then
@@ -120,10 +121,34 @@ fi
 # ── Credits.rtf (About panel body) ─────────────────────────────
 [ -f "$ROOT/assets/Credits.rtf" ] && cp "$ROOT/assets/Credits.rtf" "$RES/Credits.rtf"
 
-# ── Refresh the executable each build. Hardlink = same inode, no copy; zig
-#    replaces the build output with a new inode each rebuild, so re-link every
-#    time. Fall back to copy if hardlink fails (e.g. cross-filesystem).
-ln -f "$BIN" "$EXE" 2>/dev/null || cp -f "$BIN" "$EXE"
+# Finder starts with CWD=/, so provide the same resource paths as build-app.sh.
+# Symlinks keep this development bundle lightweight and source edits live.
+for resource in engines scripts bin web; do
+    [ ! -d "$ROOT/$resource" ] || ln -sfn "$ROOT/$resource" "$RES/$resource"
+done
+for resource in plugins-manifest.json manga-sources-sfw.json; do
+    [ ! -f "$ROOT/data/$resource" ] || ln -sfn "$ROOT/data/$resource" "$RES/$resource"
+done
+[ ! -d "$ROOT/assets/browser-integration" ] || ln -sfn "$ROOT/assets/browser-integration" "$RES/browser-integration"
+[ ! -f "$ROOT/zig-out/bin/zig-bypassdpi" ] || ln -sfn "$ROOT/zig-out/bin/zig-bypassdpi" "$RES/zig-bypassdpi"
+[ ! -f "$ROOT/zig-out/bin/opal-mcp" ] || ln -sfn "$ROOT/zig-out/bin/opal-mcp" "$MACOS/opal-mcp"
+
+# Remove the previous executable first: older bundles hardlinked it to BIN.
+# Patching or signing a hardlink would also mutate Zig's original build output.
+rm -f "$EXE"
+cp "$BIN" "$EXE"
 chmod +x "$EXE"
+
+# The local wrapper has a bare install name; Finder cannot resolve it from /.
+WRAPPER="$ROOT/libtorrent_wrapper.so"
+[ -f "$WRAPPER" ] || { echo "[dev-app] ERROR: $WRAPPER missing (build first)" >&2; exit 1; }
+rm -f "$FRAMEWORKS/libtorrent_wrapper.so"
+cp "$WRAPPER" "$FRAMEWORKS/libtorrent_wrapper.so"
+install_name_tool -change "libtorrent_wrapper.so" \
+    "@executable_path/../Frameworks/libtorrent_wrapper.so" "$EXE"
+# install_name_tool invalidates the Mach-O signature. Sign the copied wrapper
+# first, then the bundle (including its main executable and resource seal).
+codesign --force --sign - "$FRAMEWORKS/libtorrent_wrapper.so" >&2
+codesign --force --sign - "$APP" >&2
 
 echo "$EXE"

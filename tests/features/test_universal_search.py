@@ -390,3 +390,15 @@ def test_compact_release_two_lines():
     assert 'components.tip(' not in label, 'truncated text must not open another hover panel'
     assert '.max_size_content' not in row, 'do not clip metadata with a fixed row height'
     return 'pass', 'Two single-line labels; health/date inline, no text hover panels (GUI boundary)'
+
+
+@test("Poster cards top-align titles, show NR, and sidebar skips active focus ring", "Search")
+def test_poster_card_polish():
+    tmdb = _src('src/services/tmdb.zig')
+    card = tmdb.split('// Keep the clickable title within its footer budget', 1)[1].split('// Year', 1)[0]
+    assert '.gravity_y = 0 }' in card and '.gravity_y = 0.5 }' not in card, 'titles must be top-aligned'
+    assert '"NR"' in tmdb, 'unrated cards keep the rating slot'
+    shell = _src('src/ui/shell.zig')
+    assert 'if (!active) button.drawFocus();' in shell, 'active sidebar row must not draw focus ring'
+    assert 'omnibox_prev_route == .search' in shell, 'stale query must clear when returning to browse'
+    return 'pass', 'Card title/NR + sidebar focus + stale-query clear present (GUI boundary)'

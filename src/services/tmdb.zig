@@ -1211,6 +1211,9 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
             if (@import("opal-fmt").bufPrintZ(&rb, "{d:.1}/10", .{item.rating})) |rating| {
                 _ = dvui.label(@src(), "{s}", .{rating}, .{ .id_extra = idx + 310, .color_text = .{ .color = sc } });
             } else |_| {}
+        } else {
+            // Keep the slot so unrated titles don't look like a render gap.
+            _ = dvui.label(@src(), "NR", .{}, .{ .id_extra = idx + 311, .color_text = .{ .color = theme.colors.text_secondary } });
         }
 
         // Spacer
@@ -1253,7 +1256,7 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
     });
     title_btn.processEvents();
     title_btn.drawBackground();
-    dvui.labelNoFmt(@src(), wrapped_title, .{}, title_btn.data().options.strip().override(title_btn.style()).override(.{ .gravity_x = 0, .gravity_y = 0.5 }));
+    dvui.labelNoFmt(@src(), wrapped_title, .{}, title_btn.data().options.strip().override(title_btn.style()).override(.{ .gravity_x = 0, .gravity_y = 0 }));
     title_btn.drawFocus();
     const title_clicked = title_btn.clicked();
     title_btn.deinit();

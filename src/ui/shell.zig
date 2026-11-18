@@ -810,6 +810,13 @@ fn closeOverflowMenu() void {
 /// One query entry, with identical routing for Enter and the Search button.
 /// Every ordinary query uses the shared all-content resolver.
 fn omnibox(narrow: bool) void {
+    // Leaving results for a browse grid: the grid shows the catalog, not the
+    // last query, so a retained query would label unrelated content. Wallpapers
+    // search results live in browse and keep their query.
+    if (state.app.router.current == .browse and omnibox_prev_route == .search and search_mod.currentScope() != .wallpapers) {
+        @memset(&state.app.magnet_buf, 0);
+    }
+    omnibox_prev_route = state.app.router.current;
     search_mod.enterSearchContext(switch (state.app.router.current) {
         .browse => .browse,
         .search => .results,
@@ -1280,7 +1287,9 @@ fn sidebarButton(label: []const u8, glyph: []const u8, active: bool, expanded: b
         .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
     }));
     row.deinit();
-    button.drawFocus();
+    // A clicked row stays focused; the active fill + accent already mark it,
+    // so only draw the ring on non-active rows (keyboard traversal).
+    if (!active) button.drawFocus();
     if (!expanded) components.tipId(@src(), button.data().*, label, id);
     const clicked = button.clicked();
     button.deinit();
@@ -1670,6 +1679,7 @@ var query_bounds: dvui.Rect.Physical = .{};
 var query_clear_bounds: dvui.Rect.Physical = .{};
 var query_id: ?dvui.Id = null;
 var query_was_focused = false;
+var omnibox_prev_route: @TypeOf(state.app.router.current) = .home;
 pub fn clearQueryBoundsForTest() dvui.Rect.Physical {
     return query_clear_bounds;
 }

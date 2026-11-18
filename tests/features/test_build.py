@@ -1688,3 +1688,14 @@ def test_readme_native_capture():
     }
     bad = [k for k, ok in checks.items() if not ok]
     return ("fail", "; ".join(bad)) if bad else ("pass", "three previews regenerate from licensed frames, opt-in only")
+
+
+@test("Development app launches independently of checkout working directory", "Build")
+def test_dev_app_finder_packaging():
+    result = subprocess.run(
+        [sys.executable, "tests/test_dev_app.py"], cwd=PROJECT_DIR,
+        capture_output=True, text=True, timeout=15,
+    )
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "copied executable relinked and signed; Finder resources resolve from bundle"
