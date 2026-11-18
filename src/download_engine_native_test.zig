@@ -404,3 +404,63 @@ test "Native download requests identity and rejects compressed range body" {
     try std.testing.expectEqual(@as(u64, 0), rows[0].done);
     try std.testing.expectError(error.FileNotFound, io.openFileAbsolute(path, .{}));
 }
+
+test "Native download full GET retry restarts at zero after a short body" {
+    workers.init();
+    defer workers.finishShutdown();
+    engine.cfg_segments.store(1, .release);
+    defer engine.cfg_segments.store(4, .release);
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try address.listen(io.io(), .{ .reuse_address = true });
+    defer server.deinit(io.io());
+    const Fixture = struct {
+        fn requestHead(stream: std.Io.net.Stream) void {
+            var rb: [2048]u8 = undefined;
+            var reader = stream.reader(io.io(), &rb);
+            while (true) {
+                const line = reader.interface.takeDelimiterInclusive('\n') catch return;
+                if (std.mem.eql(u8, line, "\r\n")) return;
+            }
+        }
+        fn send(stream: std.Io.net.Stream, text: []const u8) void {
+            var wb: [1024]u8 = undefined;
+            var writer = stream.writer(io.io(), &wb);
+            writer.interface.writeAll(text) catch return;
+            writer.interface.flush() catch {};
+        }
+        fn serve(listener: *std.Io.net.Server) void {
+            for (0..3) |phase| {
+                const stream = listener.accept(io.io()) catch return;
+                defer stream.close(io.io());
+                requestHead(stream);
+                send(stream, "HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n");
+                if (phase == 1) send(stream, "abcd");
+                if (phase == 2) send(stream, "abcdefgh");
+            }
+        }
+    };
+    var fixture = try io.io().concurrent(Fixture.serve, .{&server});
+    defer _ = fixture.cancel(io.io());
+    var ub: [128]u8 = undefined;
+    const url = try std.fmt.bufPrint(&ub, "http://127.0.0.1:{d}/fixture", .{server.socket.address.getPort()});
+    var pb: [1024]u8 = undefined;
+    var fixture_dir = std.testing.tmpDir(.{});
+    defer fixture_dir.cleanup();
+    var directory: [1024]u8 = undefined;
+    const directory_len = try fixture_dir.dir.realPath(std.testing.io, &directory);
+    const path = try std.fmt.bufPrint(&pb, "{s}{c}fixture.bin", .{ directory[0..directory_len], std.fs.path.sep });
+    defer engine.removeArtifacts(path);
+    defer io.deleteFileAbsolute(path) catch {};
+    try std.testing.expect(engine.start(url, path));
+    defer clearJobs();
+    var rows: [engine.MAX_DOWNLOADS]engine.Snap = undefined;
+    const deadline = io.monotonicMilliTimestamp() + 5000;
+    while (io.monotonicMilliTimestamp() < deadline) {
+        if (engine.snapshot(&rows) == 1 and rows[0].status == .done) break;
+        io.sleep(5 * std.time.ns_per_ms);
+    }
+    try std.testing.expectEqual(engine.Status.done, rows[0].status);
+    const bytes = try io.cwdReadFileAlloc(path, std.testing.allocator, 16);
+    defer std.testing.allocator.free(bytes);
+    try std.testing.expectEqualStrings("abcdefgh", bytes);
+}

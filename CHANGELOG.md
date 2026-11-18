@@ -12,6 +12,12 @@ match the tag exactly.
 
 ## Unreleased
 
+## v0.9.7 — 2026-11-19
+
+- **Downloads recover cleanly.** Interrupted downloads restart from byte zero when the server does not support ranges. Transfer logs identify the failing request stage. The download API accepts magnets without a player open, and search queue requests report when an item cannot be staged.
+- **More ways to search and read.** The source catalog has 191 entries across video, reading, music, and live audio. Iken readers can move between free chapters with Previous and Next.
+- **Linux and Jellyfin fixes.** AppImage file associations use the persistent AppImage path. Wayland launches preserve the subprocess environment, and SQLite no longer memory-maps Opal’s database. The Arch package recipes use the installed libtorrent ABI. Jellyfin uses standard authorization headers.
+
 ## v0.9.6 — 2026-11-14
 
 - **More dependable direct streams.** Plugins and Stremio add-ons can play long signed links with their required Referer, Origin and User-Agent headers. Resolving errors, timeouts and revoked approvals now finish with a useful message, and an older request cannot replace a newer selection.

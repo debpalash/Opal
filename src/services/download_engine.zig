@@ -626,7 +626,10 @@ fn probeOwned(url: []const u8, guard: *StreamGuard) ?ProbeResult {
     req.sendBodiless() catch return null;
 
     var redirect_buf: [16 * 1024]u8 = undefined;
-    const response = req.receiveHead(&redirect_buf) catch return null;
+    const response = req.receiveHead(&redirect_buf) catch |err| {
+        logf("warn", false, "Download probe response failed: {s}", .{@errorName(err)});
+        return null;
+    };
     if (response.head.content_encoding != .identity) return null;
 
     var out = ProbeResult{};
@@ -940,6 +943,15 @@ fn segmentWorker(idx: usize, token: u32, si: usize) void {
 
     var attempts: u32 = 0;
     while (workerAlive(d, token)) {
+        // A full GET always starts at byte zero. Retrying it at the old
+        // write offset would append the beginning of the file a second time.
+        if (!d.ranges_ok and d.done[si].load(.acquire) > 0) {
+            file.setLength(io_global.io(), d.total) catch {
+                d.seg_failed[si].store(true, .release);
+                return;
+            };
+            d.done[si].store(0, .release);
+        }
         const before = d.done[si].load(.acquire);
         if (d.segs[si].len > 0 and before >= d.segs[si].len) return;
         var guard: StreamGuard = .{};
@@ -962,7 +974,7 @@ fn segmentWorker(idx: usize, token: u32, si: usize) void {
         const result: AttemptResult = if (expired) .retry else task.await(client.io);
         if (!workerAlive(d, token)) return;
         if (result != .retry) return;
-        if (d.done[si].load(.acquire) > before) attempts = 0;
+        if (d.ranges_ok and d.done[si].load(.acquire) > before) attempts = 0;
         if (!retryWait(d, token, si, &attempts)) return;
     }
 }
@@ -1011,7 +1023,8 @@ fn segmentAttempt(d: *Download, token: u32, si: usize, client: *std.http.Client,
         return .retry;
     };
     var redirect_buf: [16 * 1024]u8 = undefined;
-    var response = req.receiveHead(&redirect_buf) catch {
+    var response = req.receiveHead(&redirect_buf) catch |err| {
+        logf("warn", false, "Download response failed: {s} (segment {d})", .{ @errorName(err), si + 1 });
         return .retry;
     };
 
@@ -1062,7 +1075,11 @@ fn segmentAttempt(d: *Download, token: u32, si: usize, client: *std.http.Client,
         var writer = std.Io.Writer.fixed(buf[0..want]);
         const streamed: ?usize = reader.stream(&writer, .limited(want)) catch |err| switch (err) {
             error.EndOfStream => null,
-            else => return .retry,
+            else => {
+                const reason = if (response.bodyErr()) |cause| @errorName(cause) else @errorName(err);
+                logf("warn", false, "Download body read failed: {s} (segment {d}, byte {d})", .{ reason, si + 1, seg.offset + done });
+                return .retry;
+            },
         };
         guard.stage_ms.store(0, .release);
         const n = streamed orelse {

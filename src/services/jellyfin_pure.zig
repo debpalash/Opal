@@ -266,13 +266,15 @@ test "primaryImageUrl embeds token, cache key omits it" {
     try std.testing.expect(std.mem.indexOf(u8, key, "api_key") == null);
 }
 
+// mpv parses HTTP headers as a comma-separated list. The authenticated
+// media request only needs the token, so its header contains no commas.
 pub fn authorizationValue(out: []u8, token: []const u8) ?[]const u8 {
-    if (token.len == 0 or std.mem.indexOfAny(u8, token, "\"\\\r\n") != null) return null;
-    return std.fmt.bufPrint(out, "MediaBrowser Client=\"Opal\", Device=\"Desktop\", Token=\"{s}\"", .{token}) catch null;
+    if (token.len == 0 or std.mem.indexOfAny(u8, token, ",\"\\\r\n") != null) return null;
+    return std.fmt.bufPrint(out, "MediaBrowser Token=\"{s}\"", .{token}) catch null;
 }
 
 test "Jellyfin playback uses MediaBrowser authorization" {
     var out: [128]u8 = undefined;
-    try std.testing.expectEqualStrings("MediaBrowser Client=\"Opal\", Device=\"Desktop\", Token=\"abc\"", authorizationValue(&out, "abc").?);
+    try std.testing.expectEqualStrings("MediaBrowser Token=\"abc\"", authorizationValue(&out, "abc").?);
     try std.testing.expect(authorizationValue(&out, "a\r\nb") == null);
 }
