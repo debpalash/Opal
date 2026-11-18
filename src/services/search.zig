@@ -2756,6 +2756,8 @@ fn attachTorrentToPlayerOwned(tid: c_int, source: []const u8, metadata: state.Pe
         p.has_metadata = false;
         p.last_load_time = 0;
         p.selected_file_idx = -1;
+        // A Stremio season-pack row names its episode's file as `&so=N`.
+        p.requested_file_idx = if (@import("stream_source_pure.zig").magnetFileIndex(source)) |idx| @intCast(idx) else -1;
         p.metadata_start_time = @import("../core/io_global.zig").timestamp();
         p.is_loading = true;
         p.is_torrent = true;

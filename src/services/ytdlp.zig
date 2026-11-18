@@ -306,12 +306,19 @@ fn downloadWorker() void {
     }
 
     var sums_buf: [16 * 1024]u8 = undefined;
-    const sums_output = rf.fetch(YTDLP_SUMS_URL, &sums_buf, .{
-        .timeout_secs = 30,
-        .connect_timeout_secs = 15,
-        .https_only = true,
-        .impersonate = false,
-    });
+    // The release CDN publishes several addresses and a single unreachable one
+    // can eat a whole attempt's connect budget; the binary is already staged,
+    // so one more try is cheaper than discarding a verified-able update.
+    var sums_output: ?[]const u8 = null;
+    var sums_attempt: u8 = 0;
+    while (sums_output == null and update_pure.shouldFetchChecksums(sums_attempt, workers.isQuitting())) : (sums_attempt += 1) {
+        sums_output = rf.fetch(YTDLP_SUMS_URL, &sums_buf, .{
+            .timeout_secs = 30,
+            .connect_timeout_secs = 15,
+            .https_only = true,
+            .impersonate = false,
+        });
+    }
     if (workers.isQuitting()) return;
     const sums = sums_output orelse {
         logs.pushLog("error", "ytdlp", "yt-dlp checksum download failed; keeping the working version", true);

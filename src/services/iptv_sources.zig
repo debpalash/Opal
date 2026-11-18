@@ -112,7 +112,7 @@ pub const SOURCES = [_]Source{
         .kind = .m3u,
         .url = "https://raw.githubusercontent.com/benmoose39/YouTube_to_m3u/main/youtube.m3u",
         .region = "Global",
-        .note = "YouTube live streams as HLS. Stale since 2025 — some may be dead.",
+        .note = "Stale since 2025 — verified 2026-11: every entry is a dead placeholder.",
         .approx = 259,
     },
     // ── Distinct catalogs (own streams, not iptv-org mirrors) ──
@@ -173,6 +173,90 @@ pub const SOURCES = [_]Source{
         .region = "Global",
         .note = "Tubi free ad-supported live channels.",
         .approx = 179,
+    },
+    // More FAST catalogs (apsattv.com community playlists) and maintained
+    // national free-to-air lists. Each verified 2026-11: valid #EXTM3U and a
+    // 5-stream sample answering with an HLS manifest. Opt-in.
+    .{
+        .id = "xumo-tv",
+        .name = "Xumo Play (FAST)",
+        .kind = .m3u,
+        .url = "https://www.apsattv.com/xumo.m3u",
+        .region = "USA",
+        .note = "Xumo Play free ad-supported channels.",
+        .approx = 389,
+    },
+    .{
+        .id = "localnow-tv",
+        .name = "Local Now (FAST)",
+        .kind = .m3u,
+        .url = "https://www.apsattv.com/localnow.m3u",
+        .region = "USA",
+        .note = "Local Now city news and free channels.",
+        .approx = 542,
+    },
+    .{
+        .id = "lg-channels",
+        .name = "LG Channels (FAST)",
+        .kind = .m3u,
+        .url = "https://www.apsattv.com/lg.m3u",
+        .region = "Global",
+        .note = "LG Channels free streams. Some regions geo-block.",
+        .approx = 1286,
+    },
+    .{
+        .id = "vizio-tv",
+        .name = "Vizio WatchFree+ (FAST)",
+        .kind = .m3u,
+        .url = "https://www.apsattv.com/vizio.m3u",
+        .region = "USA",
+        .note = "Vizio WatchFree+ free ad-supported channels.",
+        .approx = 482,
+    },
+    .{
+        .id = "tcl-tv",
+        .name = "TCL TV+ (FAST)",
+        .kind = .m3u,
+        .url = "https://www.apsattv.com/tclplus.m3u",
+        .region = "North America",
+        .note = "TCL TV+ free ad-supported channels.",
+        .approx = 494,
+    },
+    .{
+        .id = "kodinerds-de",
+        .name = "Kodinerds (Germany)",
+        .kind = .m3u,
+        .url = "https://raw.githubusercontent.com/jnk22/kodinerds-iptv/master/iptv/clean/clean_tv.m3u",
+        .region = "Germany",
+        .note = "German public and free-to-air TV (ARD, ZDF, regionals).",
+        .approx = 315,
+    },
+    .{
+        .id = "paratv-fr",
+        .name = "ParaTV (France)",
+        .kind = .m3u,
+        .url = "https://raw.githubusercontent.com/Paradise-91/ParaTV/main/playlists/paratv/main/paratv.m3u",
+        .region = "France",
+        .note = "French free-to-air and FAST channels, regenerated daily.",
+        .approx = 459,
+    },
+    .{
+        .id = "freeview-nz",
+        .name = "Freeview (New Zealand)",
+        .kind = .m3u,
+        .url = "https://i.mjh.nz/nz/raw-tv.m3u8",
+        .region = "New Zealand",
+        .note = "New Zealand free-to-air. Some channels geo-block.",
+        .approx = 38,
+    },
+    .{
+        .id = "freeview-au",
+        .name = "Freeview (Australia, Sydney)",
+        .kind = .m3u,
+        .url = "https://i.mjh.nz/au/Sydney/raw-tv.m3u8",
+        .region = "Australia",
+        .note = "Australian free-to-air. Some channels geo-block.",
+        .approx = 175,
     },
 };
 
@@ -277,7 +361,9 @@ test "distinct catalog sources present, opt-in, https m3u" {
     // The non-iptv-org additions must stay in the registry, be m3u playlists on
     // https, and default OFF (curation keeps the default set small + clean).
     const distinct = [_][]const u8{
-        "tdtchannels", "pluto-tv", "samsung-tvplus", "plex-tv", "roku-tv", "tubi-tv",
+        "tdtchannels", "pluto-tv",     "samsung-tvplus", "plex-tv",     "roku-tv",
+        "tubi-tv",     "xumo-tv",      "localnow-tv",    "lg-channels", "vizio-tv",
+        "tcl-tv",      "kodinerds-de", "paratv-fr",      "freeview-nz", "freeview-au",
     };
     for (distinct) |id| {
         const s = byId(id) orelse return error.MissingDistinctSource;

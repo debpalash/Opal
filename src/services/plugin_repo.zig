@@ -21,7 +21,9 @@ const secret_store = @import("../core/secret_store.zig");
 // exceeds 32 (47 entries), so a low cap silently drops sources past the limit
 // in both the bundled parse and the remote refresh (parseManifest :262). Keep
 // this comfortably above the manifest size; each Plugin is fixed-size buffers.
-pub const MAX = 128;
+// 256 since the Nov 2026 expansion pushed the manifest past 128 entries
+// (tests/features/test_source_layer.py checks the manifest fits).
+pub const MAX = 256;
 
 pub const Plugin = struct {
     id: [32]u8 = std.mem.zeroes([32]u8),

@@ -1870,7 +1870,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_comics_pure).step);
 
-    inline for (.{ "expanded_reading_pure", "reading_provider_pure", "music_audius_pure", "audio_sources_pure", "source_request_pure", "anime_hianime_pure", "comicfury_pure", "webcomic_sources_pure", "western_comics_pure", "western_publishers_pure", "wallpapers_pure", "wallpaper_desktop_pure", "native_browser_pure", "browser_privacy_pure", "embedded_tabs_pure" }) |module| {
+    inline for (.{ "expanded_reading_pure", "reading_provider_pure", "music_audius_pure", "audio_sources_pure", "source_request_pure", "anime_hianime_pure", "stremio_pure", "stream_source_pure", "comicfury_pure", "webcomic_sources_pure", "western_comics_pure", "western_publishers_pure", "wallpapers_pure", "wallpaper_desktop_pure", "native_browser_pure", "browser_privacy_pure", "embedded_tabs_pure" }) |module| {
         const source_test = addBoundTest(b, .{ .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/" ++ module ++ ".zig"),
             .target = target,

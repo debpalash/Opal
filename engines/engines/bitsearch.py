@@ -1,4 +1,4 @@
-# VERSION: 1.2
+# VERSION: 1.3
 # AUTHORS: LightDestory (https://github.com/LightDestory)
 
 import re
@@ -10,7 +10,8 @@ from novaprinter import prettyPrinter
 
 
 class bitsearch(object):
-    url = "https://bitsearch.to/"
+    # bitsearch.to (and solidtorrents.to) 301 to bitsearch.eu since 2026.
+    url = "https://bitsearch.eu/"
     name = "BitSearch"
     supported_categories = {
         "all": "",
@@ -51,7 +52,9 @@ class bitsearch(object):
         def __findTorrents(self, html):
             torrents = []
             trs = re.findall(
-                r"<div class=\"bg-white rounded-lg shadow-sm border border-gray-200 p-6 hover:shadow-md transition duration-150 ease-in-out\">.+?</div>\s?<\!-- Mobile",
+                # The card gained a leading `torrent-result-card` class token in
+                # the 2026 redesign; the exact-class match then found 0 cards.
+                r"<div class=\"(?:torrent-result-card )?bg-white rounded-lg shadow-sm border border-gray-200 p-6 hover:shadow-md transition duration-150 ease-in-out\">.+?</div>\s?<\!-- Mobile",
                 html,
             )
             for tr in trs:

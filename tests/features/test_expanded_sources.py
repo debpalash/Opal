@@ -25,12 +25,22 @@ def test_github_torrent_sources():
     return 'pass', 'DMHY, ACG.RIP, Mikan and SubsPlease feed contracts and bounded network reads'
 
 
+@test("New torrent engines parse captured provider responses without network", "Sources")
+def test_new_torrent_engines():
+    result = subprocess.run([sys.executable, 'tests/test_new_torrent_engines.py'],
+                            cwd=PROJECT_DIR, capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        return 'fail', (result.stderr or result.stdout)[-1200:]
+    return 'pass', ('AniLibria, AniRena, AudioBook Bay, FitGirl, FOSS Torrents, KickassTorrents, '
+                    'Kisssub, LinuxTracker, NNM-Club and TorrentKitty request/parse paths')
+
+
 @test("New GitHub sources have unique installable catalog entries and production adapters", "Sources")
 def test_github_source_catalog():
     rows = json.loads((PROJECT_DIR / 'data/plugins-manifest.json').read_text())['plugins']
     ids = [row['id'] for row in rows]
     assert len(ids) == len(set(ids)), 'duplicate provider ids'
-    assert len(ids) <= 128, 'source manager capacity exceeded'
+    assert len(ids) <= 256, 'source manager capacity exceeded'
     entries = {row['id']: row for row in rows}
     for source in ('dmhy', 'acgrip', 'mikan', 'poorlydrawnlines', 'readnovelfull', 'latestcomics', 'ysk', 'xoxo', 'imagecomics', 'globalcomix', 'standardebooks', 'wuxiaclick', 'openverse', 'netlabels', 'somafm', 'comicfury', 'hianime'):
         row = entries[source]

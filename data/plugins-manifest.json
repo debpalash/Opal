@@ -158,14 +158,17 @@
       "id": "eztv",
       "name": "EZTV (TV)",
       "type": "torrent",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "endpoints": {
         "base": "https://eztvx.to",
         "api": "https://eztvx.to/api/get-torrents",
         "calendar": "https://eztvx.to/calendar/",
         "countdown": "https://eztvx.to/countdown/",
         "mirrors": [
-          "https://eztv1.xyz"
+          "https://eztv1.xyz",
+          "https://eztv.tf",
+          "https://eztv.wf",
+          "https://eztv.yt"
         ]
       },
       "file": "plugins/eztv.json"
@@ -184,12 +187,12 @@
       "id": "limetorrents",
       "name": "LimeTorrents",
       "type": "torrent",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "endpoints": {
-        "base": "https://www.limetorrents.cc",
+        "base": "https://www.limetorrents.fun",
         "mirrors": [
-          "https://limetorrents.cc",
-          "https://www.limetorrents.lol"
+          "https://www.limetorrents.lol",
+          "https://www.limetorrents.cc"
         ]
       },
       "file": "plugins/limetorrents.json"
@@ -208,11 +211,11 @@
       "id": "torrentproject",
       "name": "TorrentProject",
       "type": "torrent",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "endpoints": {
-        "base": "https://torrentproject.com.se",
+        "base": "https://torrentproject.cc",
         "mirrors": [
-          "https://torrentproject.com.se"
+          "https://torrentproject.cc"
         ]
       },
       "file": "plugins/torrentproject.json"
@@ -231,9 +234,12 @@
       "id": "solidtorrents",
       "name": "SolidTorrents",
       "type": "torrent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
-        "base": "https://solidtorrents.to"
+        "base": "https://bitsearch.eu",
+        "mirrors": [
+          "https://solidtorrents.to"
+        ]
       },
       "file": "plugins/solidtorrents.json"
     },
@@ -304,16 +310,6 @@
       }
     },
     {
-      "id": "readallcomics",
-      "name": "ReadAllComics",
-      "type": "comics",
-      "version": "1.0.0",
-      "endpoints": {
-        "base": "https://readallcomics.com"
-      },
-      "file": "plugins/readallcomics.json"
-    },
-    {
       "id": "subsplease",
       "name": "SubsPlease (anime releases)",
       "type": "anime",
@@ -358,9 +354,9 @@
       "id": "mediafusion",
       "name": "MediaFusion (Stremio)",
       "type": "stremio",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
-        "stremio": "https://mediafusion.elfhosted.com/manifest.json",
+        "stremio": "https://mediafusionfortheweebs.midnightignite.me/manifest.json",
         "types": "movie,series"
       },
       "file": "plugins/mediafusion.json"
@@ -369,22 +365,22 @@
       "id": "comet",
       "name": "Comet \u00b7 debrid (Stremio)",
       "type": "stremio",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
-        "stremio": "https://comet.elfhosted.com/manifest.json",
+        "stremio": "https://comet.feels.legal/manifest.json",
         "types": "movie,series"
       },
       "file": "plugins/comet.json"
     },
     {
       "id": "thepiratebay-plus",
-      "name": "ThePirateBay+ (Stremio)",
+      "name": "ThePirateBay (via Torrentio)",
       "type": "stremio",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
-        "stremio": "https://thepiratebay-plus.strem.fun/manifest.json",
+        "stremio": "https://torrentio.strem.fun/providers=thepiratebay/manifest.json",
         "types": "movie,series",
-        "debrid": "https://thepiratebay-plus.strem.fun/{provider}={key}/manifest.json"
+        "debrid": "https://torrentio.strem.fun/providers=thepiratebay|{provider}={key}/manifest.json"
       },
       "file": "plugins/thepiratebay-plus.json"
     },
@@ -535,9 +531,12 @@
       "id": "bitsearch",
       "name": "Bitsearch",
       "type": "torrent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
-        "base": "https://bitsearch.to"
+        "base": "https://bitsearch.eu",
+        "mirrors": [
+          "https://bitsearch.to"
+        ]
       },
       "file": "plugins/bitsearch.json"
     },
@@ -545,9 +544,9 @@
       "id": "torrentgalaxy",
       "name": "TorrentGalaxy",
       "type": "torrent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
-        "base": "https://torrentgalaxy.one"
+        "base": "https://torrentgalaxy.info"
       },
       "file": "plugins/torrentgalaxy.json"
     },
@@ -575,9 +574,13 @@
       "id": "tokyotoshokan",
       "name": "Tokyo Toshokan",
       "type": "torrent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
-        "base": "http://tokyotosho.info"
+        "base": "https://tokyo-tosho.net",
+        "mirrors": [
+          "https://tokyo-tosho.net",
+          "https://www.tokyotosho.info"
+        ]
       },
       "file": "plugins/tokyotoshokan.json"
     },
@@ -595,10 +598,12 @@
       "id": "peerflix",
       "name": "Peerflix",
       "type": "stremio",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
-        "stremio": "https://peerflix.mov/manifest.json"
-      }
+        "stremio": "https://addon.peerflix.mov/manifest.json",
+        "types": "movie,series"
+      },
+      "file": "plugins/peerflix.json"
     },
     {
       "id": "aiostreams",
@@ -644,13 +649,6 @@
       "endpoints": {
         "base": "https://api.knaben.org/v1"
       }
-    },
-    {
-      "id": "anidbapp",
-      "name": "AniDBApp (experimental)",
-      "type": "anime",
-      "version": "1.0.0",
-      "endpoints": { "base": "https://anidb.app" }
     },
     {
       "id": "animehub",
@@ -1063,9 +1061,12 @@
       "id": "hianime",
       "name": "HiAnime",
       "type": "anime",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
-        "base": "https://hianime.at"
+        "base": "https://hianime.fm",
+        "mirrors": [
+          "https://hianime.at"
+        ]
       },
       "file": "plugins/hianime.json",
       "note": "Installed direct anime provider; exact show and episode matching, supported ZokoAnime HLS embeds."
@@ -1192,6 +1193,993 @@
       },
       "file": "plugins/globalcomix.json",
       "note": "Publisher and independent comics. Native reader includes complete free issues only; paid issues and partial previews are excluded."
+    },
+    {
+      "id": "nnmclub",
+      "name": "NNM-Club (Russian)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://nnmclub.to"
+      },
+      "file": "plugins/nnmclub.json",
+      "note": "Large Russian-language general tracker; guest search with exact sizes and swarm counts."
+    },
+    {
+      "id": "torrentkitty",
+      "name": "TorrentKitty (DHT)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://www.torrentkitty.tv"
+      },
+      "file": "plugins/torrentkitty.json",
+      "note": "DHT-crawled magnets; size and swarm counts unknown."
+    },
+    {
+      "id": "anirena",
+      "name": "AniRena (anime releases)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://www.anirena.com"
+      },
+      "file": "plugins/anirena.json",
+      "note": "Public RSS search; real .torrent downloads with sizes."
+    },
+    {
+      "id": "kisssub",
+      "name": "Kisssub (anime releases)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://www.kisssub.org",
+        "mirrors": [
+          "https://www.comicat.org",
+          "https://www.miobt.com"
+        ]
+      },
+      "file": "plugins/kisssub.json",
+      "note": "Chinese and multilingual anime releases; Comicat and MioBT are tried as mirrors."
+    },
+    {
+      "id": "anilibria",
+      "name": "AniLibria (anime, Russian dub)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://anilibria.top"
+      },
+      "file": "plugins/anilibria.json",
+      "note": "Public JSON API; provider magnets with size and swarm counts."
+    },
+    {
+      "id": "fitgirl",
+      "name": "FitGirl Repacks (games)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://fitgirl-repacks.site"
+      },
+      "file": "plugins/fitgirl.json",
+      "note": "Site search feed; magnet and repack size from each post."
+    },
+    {
+      "id": "audiobookbay",
+      "name": "AudioBook Bay (audiobooks)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://audiobookbay.lu"
+      },
+      "file": "plugins/audiobookbay.json",
+      "note": "Audiobook search; magnets built from each book page's info hash and trackers."
+    },
+    {
+      "id": "linuxtracker",
+      "name": "LinuxTracker (Linux ISOs)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://linuxtracker.org"
+      },
+      "file": "plugins/linuxtracker.json",
+      "note": "Linux distribution torrents with size and swarm counts."
+    },
+    {
+      "id": "fosstorrents",
+      "name": "FOSS Torrents (Linux & open source)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://fosstorrents.com"
+      },
+      "file": "plugins/fosstorrents.json",
+      "note": "Official torrents for free/open-source software and distros."
+    },
+    {
+      "id": "torrentsdb",
+      "name": "TorrentsDB (Stremio)",
+      "type": "stremio",
+      "version": "1.0.0",
+      "endpoints": {
+        "stremio": "https://torrentsdb.com/manifest.json",
+        "types": "movie,series"
+      },
+      "file": "plugins/torrentsdb.json"
+    },
+    {
+      "id": "stremthru-torz",
+      "name": "StremThru Torz (Stremio)",
+      "type": "stremio",
+      "version": "1.0.0",
+      "endpoints": {
+        "stremio": "https://stremthru.elfhosted.com/stremio/torz/eyJzdG9yZXMiOlt7ImMiOiJwMnAiLCJ0IjoiIn1dfQ==/manifest.json",
+        "types": "movie,series"
+      },
+      "file": "plugins/stremthru-torz.json"
+    },
+    {
+      "id": "radio-bbc-world-service",
+      "name": "BBC World Service",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "BBC World Service",
+        "stream": "https://stream.live.vc.bbcmedia.co.uk/bbc_world_service",
+        "country": "GB"
+      },
+      "file": "plugins/radio-bbc-world-service.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-npr",
+      "name": "NPR Program Stream",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "NPR Program Stream",
+        "stream": "https://npr-ice.streamguys1.com/live.mp3",
+        "country": "US"
+      },
+      "file": "plugins/radio-npr.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-kexp",
+      "name": "KEXP 90.3 Seattle",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "KEXP 90.3 Seattle",
+        "stream": "https://kexp-mp3-128.streamguys1.com/kexp128.mp3",
+        "country": "US"
+      },
+      "file": "plugins/radio-kexp.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-wfmu",
+      "name": "WFMU Freeform",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "WFMU Freeform",
+        "stream": "https://stream0.wfmu.org/freeform-128k",
+        "country": "US"
+      },
+      "file": "plugins/radio-wfmu.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-wnyc",
+      "name": "WNYC 93.9 FM",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "WNYC 93.9 FM",
+        "stream": "https://fm939.wnyc.org/wnycfm",
+        "country": "US"
+      },
+      "file": "plugins/radio-wnyc.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-wqxr",
+      "name": "WQXR Classical",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "WQXR Classical",
+        "stream": "https://stream.wqxr.org/wqxr",
+        "country": "US"
+      },
+      "file": "plugins/radio-wqxr.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-dublab",
+      "name": "dublab",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "dublab",
+        "stream": "https://dublab.out.airtime.pro/dublab_a",
+        "country": "US"
+      },
+      "file": "plugins/radio-dublab.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-nts-1",
+      "name": "NTS Radio 1",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "NTS Radio 1",
+        "stream": "https://stream-relay-geo.ntslive.net/stream",
+        "country": "GB"
+      },
+      "file": "plugins/radio-nts-1.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-nts-2",
+      "name": "NTS Radio 2",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "NTS Radio 2",
+        "stream": "https://stream-relay-geo.ntslive.net/stream2",
+        "country": "GB"
+      },
+      "file": "plugins/radio-nts-2.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-rinse-fm",
+      "name": "Rinse FM",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "Rinse FM",
+        "stream": "https://admin.stream.rinse.fm/proxy/rinse_uk/stream",
+        "country": "GB"
+      },
+      "file": "plugins/radio-rinse-fm.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-fip",
+      "name": "FIP",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "FIP",
+        "stream": "https://icecast.radiofrance.fr/fip-midfi.mp3",
+        "country": "FR"
+      },
+      "file": "plugins/radio-fip.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-fip-jazz",
+      "name": "FIP Jazz",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "FIP Jazz",
+        "stream": "https://icecast.radiofrance.fr/fipjazz-midfi.mp3",
+        "country": "FR"
+      },
+      "file": "plugins/radio-fip-jazz.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-fip-rock",
+      "name": "FIP Rock",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "FIP Rock",
+        "stream": "https://icecast.radiofrance.fr/fiprock-midfi.mp3",
+        "country": "FR"
+      },
+      "file": "plugins/radio-fip-rock.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-fip-electro",
+      "name": "FIP Electro",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "FIP Electro",
+        "stream": "https://icecast.radiofrance.fr/fipelectro-midfi.mp3",
+        "country": "FR"
+      },
+      "file": "plugins/radio-fip-electro.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-fip-world",
+      "name": "FIP Monde",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "FIP Monde",
+        "stream": "https://icecast.radiofrance.fr/fipworld-midfi.mp3",
+        "country": "FR"
+      },
+      "file": "plugins/radio-fip-world.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-fip-groove",
+      "name": "FIP Groove",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "FIP Groove",
+        "stream": "https://icecast.radiofrance.fr/fipgroove-midfi.mp3",
+        "country": "FR"
+      },
+      "file": "plugins/radio-fip-groove.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-france-musique",
+      "name": "France Musique",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "France Musique",
+        "stream": "https://icecast.radiofrance.fr/francemusique-midfi.mp3",
+        "country": "FR"
+      },
+      "file": "plugins/radio-france-musique.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-france-inter",
+      "name": "France Inter",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "France Inter",
+        "stream": "https://icecast.radiofrance.fr/franceinter-midfi.mp3",
+        "country": "FR"
+      },
+      "file": "plugins/radio-france-inter.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-swiss-jazz",
+      "name": "Radio Swiss Jazz",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "Radio Swiss Jazz",
+        "stream": "https://stream.srg-ssr.ch/m/rsj/mp3_128",
+        "country": "CH"
+      },
+      "file": "plugins/radio-swiss-jazz.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-swiss-classic",
+      "name": "Radio Swiss Classic",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "Radio Swiss Classic",
+        "stream": "https://stream.srg-ssr.ch/m/rsc_de/mp3_128",
+        "country": "CH"
+      },
+      "file": "plugins/radio-swiss-classic.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-swiss-pop",
+      "name": "Radio Swiss Pop",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "Radio Swiss Pop",
+        "stream": "https://stream.srg-ssr.ch/m/rsp/mp3_128",
+        "country": "CH"
+      },
+      "file": "plugins/radio-swiss-pop.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-1live",
+      "name": "WDR 1LIVE",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "WDR 1LIVE",
+        "stream": "https://wdr-1live-live.icecastssl.wdr.de/wdr/1live/live/mp3/128/stream.mp3",
+        "country": "DE"
+      },
+      "file": "plugins/radio-1live.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-dlf",
+      "name": "Deutschlandfunk",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "Deutschlandfunk",
+        "stream": "https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3",
+        "country": "DE"
+      },
+      "file": "plugins/radio-dlf.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-fluxfm-chillhop",
+      "name": "FluxFM Chillhop",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "FluxFM Chillhop",
+        "stream": "https://streams.fluxfm.de/Chillhop/mp3-128/streams.fluxfm.de/",
+        "country": "DE"
+      },
+      "file": "plugins/radio-fluxfm-chillhop.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-rnz-national",
+      "name": "RNZ National",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "RNZ National",
+        "stream": "https://stream-ice.radionz.co.nz/national_aac64",
+        "country": "NZ"
+      },
+      "file": "plugins/radio-rnz-national.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-plaza",
+      "name": "Nightwave Plaza",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "Nightwave Plaza",
+        "stream": "https://radio.plaza.one/mp3",
+        "country": "JP"
+      },
+      "file": "plugins/radio-plaza.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-air-vividh-bharati",
+      "name": "AIR Vividh Bharati",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "AIR Vividh Bharati",
+        "stream": "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/playlist.m3u8",
+        "country": "IN"
+      },
+      "file": "plugins/radio-air-vividh-bharati.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-cbc-music",
+      "name": "CBC Music Toronto",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "CBC Music Toronto",
+        "stream": "https://cbcradiolive.akamaized.net/hls/live/2041057/ES_R2ETR/master.m3u8",
+        "country": "CA"
+      },
+      "file": "plugins/radio-cbc-music.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-rai-radio3",
+      "name": "Rai Radio 3",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "Rai Radio 3",
+        "stream": "https://icestreaming.rai.it/3.mp3",
+        "country": "IT"
+      },
+      "file": "plugins/radio-rai-radio3.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-nrk-p3",
+      "name": "NRK P3",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "NRK P3",
+        "stream": "https://lyd.nrk.no/nrk_radio_p3_mp3_h",
+        "country": "NO"
+      },
+      "file": "plugins/radio-nrk-p3.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-sr-p3",
+      "name": "Sveriges Radio P3",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "Sveriges Radio P3",
+        "stream": "https://sverigesradio.se/topsy/direkt/164-hi-mp3.m3u",
+        "country": "SE"
+      },
+      "file": "plugins/radio-sr-p3.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "radio-yle-x",
+      "name": "Yle X3M",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "Yle X3M",
+        "stream": "https://icecast.live.yle.fi/radio/YleX3M/icecast.audio",
+        "country": "FI"
+      },
+      "file": "plugins/radio-yle-x.json",
+      "note": "Official station stream; appears in Radio after installation."
+    },
+    {
+      "id": "podcast-99-percent-invisible",
+      "name": "99% Invisible",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.simplecast.com/BqbsxVfO",
+        "country": "US"
+      },
+      "file": "plugins/podcast-99-percent-invisible.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-radiolab",
+      "name": "Radiolab",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.simplecast.com/EmVW7VGp",
+        "country": "US"
+      },
+      "file": "plugins/podcast-radiolab.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-this-american-life",
+      "name": "This American Life",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://www.thisamericanlife.org/podcast/rss.xml",
+        "country": "US"
+      },
+      "file": "plugins/podcast-this-american-life.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-planet-money",
+      "name": "NPR: Planet Money",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.npr.org/510289/podcast.xml",
+        "country": "US"
+      },
+      "file": "plugins/podcast-planet-money.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-ted-radio-hour",
+      "name": "NPR: TED Radio Hour",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.npr.org/510298/podcast.xml",
+        "country": "US"
+      },
+      "file": "plugins/podcast-ted-radio-hour.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-fresh-air",
+      "name": "NPR: Fresh Air",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.npr.org/381444908/podcast.xml",
+        "country": "US"
+      },
+      "file": "plugins/podcast-fresh-air.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-hidden-brain",
+      "name": "Hidden Brain",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.simplecast.com/kwWc0lhf",
+        "country": "US"
+      },
+      "file": "plugins/podcast-hidden-brain.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-freakonomics",
+      "name": "Freakonomics Radio",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.simplecast.com/Y8lFbOT4",
+        "country": "US"
+      },
+      "file": "plugins/podcast-freakonomics.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-bbc-in-our-time",
+      "name": "BBC: In Our Time",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://podcasts.files.bbci.co.uk/b006qykl.rss",
+        "country": "GB"
+      },
+      "file": "plugins/podcast-bbc-in-our-time.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-bbc-6-minute-english",
+      "name": "BBC: 6 Minute English",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://podcasts.files.bbci.co.uk/p02pc9tn.rss",
+        "country": "GB"
+      },
+      "file": "plugins/podcast-bbc-6-minute-english.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-bbc-documentary",
+      "name": "BBC: The Documentary Podcast",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://podcasts.files.bbci.co.uk/p02nq0lx.rss",
+        "country": "GB"
+      },
+      "file": "plugins/podcast-bbc-documentary.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-darknet-diaries",
+      "name": "Darknet Diaries",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.megaphone.fm/darknetdiaries",
+        "country": "US"
+      },
+      "file": "plugins/podcast-darknet-diaries.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-changelog",
+      "name": "The Changelog",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://changelog.com/podcast/feed",
+        "country": "US"
+      },
+      "file": "plugins/podcast-changelog.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-security-now",
+      "name": "Security Now",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.twit.tv/sn.xml",
+        "country": "US"
+      },
+      "file": "plugins/podcast-security-now.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-hardcore-history",
+      "name": "Dan Carlin's Hardcore History",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.feedburner.com/dancarlin/history",
+        "country": "US"
+      },
+      "file": "plugins/podcast-hardcore-history.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-nasa-curious-universe",
+      "name": "NASA's Curious Universe",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://www.nasa.gov/feeds/podcasts/curious-universe",
+        "country": "US"
+      },
+      "file": "plugins/podcast-nasa-curious-universe.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-startalk",
+      "name": "StarTalk Radio",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.simplecast.com/4T39_jAj",
+        "country": "US"
+      },
+      "file": "plugins/podcast-startalk.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-vergecast",
+      "name": "The Vergecast",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.megaphone.fm/vergecast",
+        "country": "US"
+      },
+      "file": "plugins/podcast-vergecast.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-accidental-tech",
+      "name": "Accidental Tech Podcast",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://atp.fm/rss",
+        "country": "US"
+      },
+      "file": "plugins/podcast-accidental-tech.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-ologies",
+      "name": "Ologies with Alie Ward",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.simplecast.com/FO6kxYGj",
+        "country": "US"
+      },
+      "file": "plugins/podcast-ologies.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-acquired",
+      "name": "Acquired",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.transistor.fm/acquired",
+        "country": "US"
+      },
+      "file": "plugins/podcast-acquired.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-all-in",
+      "name": "All-In Podcast",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://allinchamathjason.libsyn.com/rss",
+        "country": "US"
+      },
+      "file": "plugins/podcast-all-in.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-econtalk",
+      "name": "EconTalk",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.simplecast.com/wgl4xEgL",
+        "country": "US"
+      },
+      "file": "plugins/podcast-econtalk.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-conan",
+      "name": "Conan O'Brien Needs A Friend",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.simplecast.com/dHoohVNH",
+        "country": "US"
+      },
+      "file": "plugins/podcast-conan.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-science-vs",
+      "name": "Science Vs",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.megaphone.fm/sciencevs",
+        "country": "US"
+      },
+      "file": "plugins/podcast-science-vs.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "podcast-reply-all",
+      "name": "Reply All",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.megaphone.fm/replyall",
+        "country": "US"
+      },
+      "file": "plugins/podcast-reply-all.json",
+      "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "xumo-tv",
+      "name": "IPTV - Xumo Play (FAST)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://www.apsattv.com/xumo.m3u"
+      },
+      "file": "plugins/xumo-tv.json"
+    },
+    {
+      "id": "localnow-tv",
+      "name": "IPTV - Local Now (FAST)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://www.apsattv.com/localnow.m3u"
+      },
+      "file": "plugins/localnow-tv.json"
+    },
+    {
+      "id": "lg-channels",
+      "name": "IPTV - LG Channels (FAST)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://www.apsattv.com/lg.m3u"
+      },
+      "file": "plugins/lg-channels.json"
+    },
+    {
+      "id": "vizio-tv",
+      "name": "IPTV - Vizio WatchFree+ (FAST)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://www.apsattv.com/vizio.m3u"
+      },
+      "file": "plugins/vizio-tv.json"
+    },
+    {
+      "id": "tcl-tv",
+      "name": "IPTV - TCL TV+ (FAST)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://www.apsattv.com/tclplus.m3u"
+      },
+      "file": "plugins/tcl-tv.json"
+    },
+    {
+      "id": "kodinerds-de",
+      "name": "IPTV - Kodinerds (Germany)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://raw.githubusercontent.com/jnk22/kodinerds-iptv/master/iptv/clean/clean_tv.m3u"
+      },
+      "file": "plugins/kodinerds-de.json"
+    },
+    {
+      "id": "paratv-fr",
+      "name": "IPTV - ParaTV (France)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://raw.githubusercontent.com/Paradise-91/ParaTV/main/playlists/paratv/main/paratv.m3u"
+      },
+      "file": "plugins/paratv-fr.json"
+    },
+    {
+      "id": "freeview-nz",
+      "name": "IPTV - Freeview (New Zealand)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://i.mjh.nz/nz/raw-tv.m3u8"
+      },
+      "file": "plugins/freeview-nz.json"
+    },
+    {
+      "id": "freeview-au",
+      "name": "IPTV - Freeview (Australia, Sydney)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://i.mjh.nz/au/Sydney/raw-tv.m3u8"
+      },
+      "file": "plugins/freeview-au.json"
+    },
+    {
+      "id": "livemusic",
+      "name": "Internet Archive Live Music Archive",
+      "type": "music",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://archive.org"
+      },
+      "file": "plugins/livemusic.json",
+      "note": "Taper-friendly concert recordings (etree) with per-track MP3 streams; appears in universal search. Requires an Opal build with this connector."
+    },
+    {
+      "id": "madara",
+      "name": "MangaRead (Madara)",
+      "type": "comics",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://www.mangaread.org"
+      },
+      "file": "plugins/madara.json",
+      "note": "Madara-theme manga: search, most-viewed listing, chapter list and image reader. One Madara site is active at a time."
+    },
+    {
+      "id": "mangathemesia",
+      "name": "Rokari Comics (MangaThemesia)",
+      "type": "comics",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://rokaricomics.com"
+      },
+      "file": "plugins/mangathemesia.json",
+      "note": "MangaThemesia-theme manhwa: listing, chapter list and image reader. One MangaThemesia site is active at a time."
+    },
+    {
+      "id": "madara_novel",
+      "name": "WuxiaWorld.site (Madara novels)",
+      "type": "novels",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://wuxiaworld.site"
+      },
+      "file": "plugins/madara_novel.json",
+      "note": "Madara-theme web novels: search, AJAX chapter directory and native text reader."
     }
   ]
 }

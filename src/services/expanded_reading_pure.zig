@@ -72,6 +72,62 @@ test "ReadNovelFull search, stable work identity and numbered chapter archive co
     try std.testing.expect(readNovelFullChapter(&out, "https://rnf.test", "https://rnf.test/story-v1.html", "https://evil.test/story/chapter-1.html") == null);
 }
 
+/// NovelFire moved chapter prose to a sibling reader domain: its own chapter
+/// URL now answers a "Loading..." stub whose script assigns
+/// `window.location.href = "https:\/\/<reader>\/novel\/<slug>\/chapter-N?noti=1"`.
+/// Returns that target (query dropped) only when it is a plain https URL for
+/// the SAME work slug and chapter segment as `chapter`; anything else — another
+/// work, a credentialed or non-https address — is refused.
+pub fn novelFireRelocation(out: []u8, chapter: []const u8, body: []const u8) ?[]const u8 {
+    const marker = "window.location.href";
+    const at = (std.mem.indexOf(u8, body, marker) orelse return null) + marker.len;
+    const open = std.mem.indexOfAnyPos(u8, body, at, "\"'") orelse return null;
+    if (open - at > 8) return null; // must be the assignment itself, not a later string
+    const close = std.mem.indexOfScalarPos(u8, body, open + 1, body[open]) orelse return null;
+    var n: usize = 0;
+    for (body[open + 1 .. close]) |ch| {
+        if (ch == '\\') continue; // JSON-escaped slashes: `\/` → `/`
+        if (ch == '?' or ch == '#') break;
+        if (ch <= ' ' or ch == '@' or ch == '<' or ch == '>' or ch >= 0x7f or n == out.len) return null;
+        out[n] = ch;
+        n += 1;
+    }
+    const target = out[0..n];
+    const scheme = "https://";
+    if (!std.mem.startsWith(u8, target, scheme)) return null;
+    const host_end = std.mem.indexOfScalarPos(u8, target, scheme.len, '/') orelse return null;
+    const host = target[scheme.len..host_end];
+    if (host.len < 4 or std.mem.indexOfScalar(u8, host, '.') == null) return null;
+    for (host) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '.' and ch != '-') return null;
+    // Same `<slug>/chapter-N` tail as the chapter the reader asked for.
+    const want = std.mem.trimEnd(u8, chapter, "/");
+    const leaf = std.mem.lastIndexOfScalar(u8, want, '/') orelse return null;
+    const slug = std.mem.lastIndexOfScalar(u8, want[0..leaf], '/') orelse return null;
+    const tail = want[slug..];
+    if (tail.len < 4 or std.mem.indexOf(u8, tail, "/chapter-") == null or std.mem.indexOf(u8, tail, "..") != null) return null;
+    if (!std.mem.endsWith(u8, std.mem.trimEnd(u8, target, "/"), tail)) return null;
+    return target;
+}
+
+test "NovelFire chapter stub hands over to the reader domain for the same chapter only" {
+    // Captured Nov 2026: novelfire.net/book/<slug>/chapter-1 answers this stub.
+    const stub = "<title>Loading...</title><script>\n    setTimeout(() => {\n        window.location.href = \"https:\\/\\/novelphoenix.com\\/novel\\/my-glitched-world\\/chapter-1?noti=1\";\n    }, 500);</script>";
+    var out: [1024]u8 = undefined;
+    try std.testing.expectEqualStrings("https://novelphoenix.com/novel/my-glitched-world/chapter-1", novelFireRelocation(&out, "https://novelfire.net/book/my-glitched-world/chapter-1", stub).?);
+    // A different work or chapter is not this chapter's prose.
+    try std.testing.expect(novelFireRelocation(&out, "https://novelfire.net/book/other-story/chapter-1", stub) == null);
+    try std.testing.expect(novelFireRelocation(&out, "https://novelfire.net/book/my-glitched-world/chapter-11", stub) == null);
+    // Unsafe targets are refused.
+    try std.testing.expect(novelFireRelocation(&out, "https://novelfire.net/book/s/chapter-1", "window.location.href = \"http://x.test/novel/s/chapter-1\"") == null);
+    try std.testing.expect(novelFireRelocation(&out, "https://novelfire.net/book/s/chapter-1", "window.location.href = \"https://user@x.test/novel/s/chapter-1\"") == null);
+    try std.testing.expect(novelFireRelocation(&out, "https://novelfire.net/book/s/chapter-1", "window.location.href = \"https://localhost/novel/s/chapter-1\"") == null);
+    // An ordinary chapter page (no stub) and truncated input never relocate.
+    try std.testing.expect(novelFireRelocation(&out, "https://novelfire.net/book/s/chapter-1", "<div id=\"chapter-container\"><p>Prose</p></div>") == null);
+    try std.testing.expect(novelFireRelocation(&out, "https://novelfire.net/book/s/chapter-1", "window.location.href = \"https://x.te") == null);
+    var tiny: [8]u8 = undefined;
+    try std.testing.expect(novelFireRelocation(&tiny, "https://novelfire.net/book/my-glitched-world/chapter-1", stub) == null);
+}
+
 pub fn comicSearchUrl(out: []u8, base: []const u8, source: []const u8, query: []const u8, page: u32) ?[]const u8 {
     var enc: [768]u8 = undefined;
     const n = cp.percentEncodeQuery(query, &enc);

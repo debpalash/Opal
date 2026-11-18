@@ -17,9 +17,22 @@ pub fn dedupKey(url: []const u8) []const u8 {
     return url;
 }
 
-/// Magnet hashes ignore case; URL paths and query values preserve case.
+/// BEP 53 file selection (`&so=N`) of a magnet, null when absent. One season
+/// pack surfaces one row per episode, differing only in this index.
+pub fn selectOnly(url: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, url, "magnet:?")) return null;
+    const at = std.mem.indexOf(u8, url, "&so=") orelse return null;
+    const start = at + "&so=".len;
+    var end = start;
+    while (end < url.len and url[end] != '&') end += 1;
+    return if (end > start) url[start..end] else null;
+}
+
+/// Magnet hashes ignore case; URL paths and query values preserve case. Two
+/// magnets of one hash that select different files are different results.
 pub fn sameItem(a: []const u8, b: []const u8) bool {
     if (a.len == 0 or b.len == 0) return false;
+    if (selectOnly(a)) |sa| if (selectOnly(b)) |sb| if (!std.mem.eql(u8, sa, sb)) return false;
     const ka = dedupKey(a);
     const kb = dedupKey(b);
     if (ka.len != kb.len) return false;
@@ -85,6 +98,14 @@ pub fn sameSemantic(a: []const u8, b: []const u8) bool {
     const ka = semanticKey(a, &a_buf);
     const kb = semanticKey(b, &b_buf);
     return ka.len > 0 and std.mem.eql(u8, ka, kb);
+}
+
+test "regression: episodes of one season pack are not folded into one row" {
+    const pack = "magnet:?xt=urn:btih:AAAABBBBCCCCDDDDEEEE&so=";
+    try std.testing.expect(!sameItem(pack ++ "3&tr=x", pack ++ "4&tr=x"));
+    try std.testing.expect(sameItem(pack ++ "3&tr=x", pack ++ "3&tr=y"));
+    // A plain row of the same hash still folds with a selected one.
+    try std.testing.expect(sameItem("magnet:?xt=urn:btih:aaaabbbbccccddddeeee&dn=x", pack ++ "3"));
 }
 
 test "dedupKey extracts the magnet infohash (ignoring trackers)" {

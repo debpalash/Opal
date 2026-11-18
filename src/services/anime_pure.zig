@@ -86,6 +86,19 @@ pub fn sfwSuffix(filter_enabled: bool) []const u8 {
     return "";
 }
 
+/// Request budget for a universal-search catalog provider. Jikan has a
+/// same-search AniList fallback, so a stalled Jikan must hand over quickly
+/// instead of holding the anime rows for the generic 10 s.
+pub fn catalogTimeoutSecs(provider: []const u8) u32 {
+    return if (std.mem.eql(u8, provider, "jikan")) 4 else 10;
+}
+
+test "regression: stalled Jikan yields to the AniList fallback within 4s" {
+    try std.testing.expectEqual(@as(u32, 4), catalogTimeoutSecs("jikan"));
+    try std.testing.expectEqual(@as(u32, 10), catalogTimeoutSecs("mangadex"));
+    try std.testing.expectEqual(@as(u32, 10), catalogTimeoutSecs("openlibrary"));
+}
+
 /// Detail-header metadata extracted from a single Jikan anime object's raw JSON.
 /// `atype` is a slice INTO `obj_json` (copy it before the buffer goes away).
 pub const JikanMeta = struct {

@@ -579,14 +579,16 @@ def test_dead_sources_are_retired():
         "kickass gone from manifest": "kickass" not in by_id,
         "cyberflix gone from manifest": "cyberflix" not in by_id,
         "knightcrawler gone from manifest": "knightcrawler" not in by_id,
+        "readallcomics gone from manifest": "readallcomics" not in by_id,
+        "anidbapp gone from manifest": "anidbapp" not in by_id,
         "cyberflix not offered": '.url = "https://cyberflix' not in st,
         "knightcrawler not offered": '.name = "KnightCrawler"' not in st,
     }
 
-    # The three retired ids in the pure table must be exactly what the docs and
+    # The retired ids in the pure table must be exactly what the docs and
     # the manifest agree are gone — a silent 4th entry would delete user config.
     ids = _re.findall(r'\.id = "([^"]+)", \.field', sp)
-    if sorted(ids) != ["cyberflix", "kickass", "knightcrawler"]:
+    if sorted(ids) != ["anidbapp", "cyberflix", "kickass", "knightcrawler", "readallcomics"]:
         return "fail", f"unexpected RETIRED ids {ids} — each deletes a user's file"
 
     missing = [k for k, v in checks.items() if not v]
@@ -1002,3 +1004,21 @@ def test_bitmagnet_source():
     ids = _between(src, 'const TORZNAB_IDS', ';')
     assert '"bitmagnet"' in ids
     return 'pass', 'installable bitmagnet endpoint dispatched by native resolver'
+
+
+@test("Bundled manifest fits the in-app catalog cap", "Sources")
+def test_manifest_fits_plugin_cap():
+    """REGRESSION (Nov 2026 expansion): plugin_repo.MAX was 128 while the
+    manifest grew past it; parseManifest silently skips entries beyond MAX, so
+    the newest sources never appeared in the Plugins page."""
+    import re as _re3
+    cap = _re3.search(r"^pub const MAX = (\d+);", _src(os.path.join("src", "services", "plugin_repo.zig")), _re3.M)
+    if not cap:
+        return "fail", "plugin_repo.MAX not found"
+    entries = _json.loads(_src(os.path.join("data", "plugins-manifest.json")))["plugins"]
+    ids = [e["id"] for e in entries]
+    if len(ids) != len(set(ids)):
+        return "fail", "duplicate manifest ids: " + ", ".join(sorted({i for i in ids if ids.count(i) > 1}))
+    if len(ids) > int(cap.group(1)):
+        return "fail", f"{len(ids)} manifest entries exceed plugin_repo.MAX={cap.group(1)}"
+    return "pass", f"{len(ids)} entries within MAX={cap.group(1)}"

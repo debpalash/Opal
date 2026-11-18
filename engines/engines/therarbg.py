@@ -1,4 +1,4 @@
-# VERSION: 1.4
+# VERSION: 1.5
 # AUTHORS: BurningMop (burning.mop@yandex.com)
 
 # LICENSING INFORMATION
@@ -20,10 +20,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import json
 import re
 from html.parser import HTMLParser
-import time
-import threading
+from urllib.parse import quote, unquote, urlencode
 from helpers import download_file, retrieve_url
 from novaprinter import prettyPrinter, anySizeToBytes
 
@@ -66,10 +66,6 @@ class therarbg(object):
         'software':'Apps'
         }
     
-    next_page_regex = r'<a.*?>»<\/a>'
-    title_regex = r'<title>Search for.*<\/title>'
-    has_next_page = True
-
     class MyHtmlParser(HTMLParser):
     
         def error(self, message):
@@ -190,38 +186,95 @@ class therarbg(object):
     def download_torrent(self, info):
         print(download_file(info))
 
-    def getPageUrl(self, what, cat, page):
-        if not cat == 'All':
-            return f'{self.url}/get-posts/order:-se:category:{cat}:keywords:{what}/?page={page}'
-        else:
-            return f'{self.url}/get-posts/order:-se:keywords:{what}/?page={page}'
+    TRACKERS = (
+        'udp://tracker.opentrackr.org:1337/announce',
+        'udp://open.stealth.si:80/announce',
+        'udp://tracker.torrent.eu.org:451/announce',
+        'udp://exodus.desync.com:6969/announce',
+    )
+    MAX_PAGES = 2  # 50 rows per JSON page
 
-    def threaded_search(self, page, what, cat):
-        page_url = self.getPageUrl(what, cat, page)
-        retrievedHtml = retrieve_url(page_url)
-        next_page_matches = re.finditer(self.next_page_regex, retrievedHtml, re.MULTILINE)
-        title_matches = re.finditer(self.title_regex, retrievedHtml, re.MULTILINE)
-        is_result_page = [x.group() for x in title_matches]
-        next_page = [x.group() for x in next_page_matches]
-        if len(next_page) == 0:
-            self.has_next_page = False
-        if is_result_page:
+    def getPageUrl(self, what, cat, page, fmt=''):
+        base = self.url.rstrip('/')
+        if not cat == 'All':
+            return f'{base}/get-posts/order:-se:category:{cat}:keywords:{what}{fmt}/?page={page}'
+        else:
+            return f'{base}/get-posts/order:-se:keywords:{what}{fmt}/?page={page}'
+
+    def json_rows(self, body):
+        """Rows from one `:format:json` listing page, plus whether more follow.
+
+        The listing HTML carries no magnet, so the old engine fetched one detail
+        page per row (100 extra requests per page) and gated the whole page on a
+        `<title>Search for` that the site no longer serves -- zero rows. The
+        JSON listing has the info-hash inline: one request per 50 rows.
+        """
+        try:
+            data = json.loads(body)
+        except (TypeError, ValueError):
+            return [], False
+        if not isinstance(data, dict) or not isinstance(data.get('results'), list):
+            return [], False
+        base = self.url.rstrip('/')
+        rows = []
+        for item in data['results']:
+            if not isinstance(item, dict):
+                continue
+            name, digest = item.get('n'), item.get('h')
+            if not isinstance(name, str) or not name.strip():
+                continue
+            if not isinstance(digest, str) or not re.fullmatch(r'[a-fA-F0-9]{40}', digest):
+                continue
+            name = ' '.join(name.split())
+            category = item.get('c')
+            params = [('dn', name)] + [('tr', t) for t in self.TRACKERS]
+            row = {
+                'link': 'magnet:?xt=urn:btih:{}&{}'.format(digest.lower(), urlencode(params)),
+                'name': f'{name} ({category})' if isinstance(category, str) and category else name,
+                'size': self._count(item.get('s')),
+                'seeds': self._count(item.get('se')),
+                'leech': self._count(item.get('le')),
+                'engine_url': self.url,
+                'desc_link': detail_url(base, 'post-detail/{}/'.format(quote(str(item.get('pk', '')), safe=''))),
+            }
+            added = self._count(item.get('a'))
+            if added > 0:
+                row['pub_date'] = added
+            rows.append(row)
+        links = data.get('links')
+        return rows, bool(isinstance(links, dict) and links.get('next'))
+
+    @staticmethod
+    def _count(value):
+        if isinstance(value, bool):
+            return -1
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return -1
+        return number if number >= 0 else -1
+
+    def search(self, what, cat='all'):
+        search_category = self.supported_categories.get(cat, 'All')
+        # nova2 hands the query over percent-encoded; normalise so it is encoded
+        # exactly once whatever the caller did.
+        what = quote(unquote(what), safe='')
+        found = 0
+        for page in range(1, self.MAX_PAGES + 1):
+            body = retrieve_url(self.getPageUrl(what, search_category, page, ':format:json'),
+                                unescape_html_entities=False)
+            rows, more = self.json_rows(body)
+            for row in rows:
+                prettyPrinter(row)
+            found += len(rows)
+            if not rows or not more:
+                break
+        if found:
+            return
+        # JSON listing unavailable (older mirror): one HTML page, magnets
+        # resolved per row by the parser above.
+        retrievedHtml = retrieve_url(self.getPageUrl(what, search_category, 1))
+        if retrievedHtml:
             parser = self.MyHtmlParser(self.url)
             parser.feed(retrievedHtml)
             parser.close()
-
-    def search(self, what, cat = 'all'):
-        page = 1
-        search_category = self.supported_categories[cat]
-
-        threads = []
-        while self.has_next_page:
-            t = threading.Thread(args=(page, what, search_category), target=self.threaded_search)
-            t.start()
-            time.sleep(0.5)
-            threads.append(t)
-    
-            page += 1
-
-        for t in threads:
-            t.join()

@@ -138,7 +138,7 @@ def test_source_table_capacity():
 
     checks = {
         "pure registered": "source_config_pure.zig" in bz,
-        "capacity is a named constant": "pub const MAX_ENTRIES = 512" in sp,
+        "capacity is a named constant": "pub const MAX_ENTRIES = 1024" in sp,
         "table uses it": "const MAX_ENTRIES = pure.MAX_ENTRIES;" in sc,
         # Overflow must be counted and reported, not skipped.
         "counts every field": "fields_seen += 1;" in sc,

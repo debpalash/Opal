@@ -724,6 +724,221 @@ test "gpodder universal search distinguishes empty directory from error JSON" {
     try std.testing.expect(parseGpodderValue(failure.value, &rows) == null);
 }
 
+/// fyyd.de — a third independent, keyless directory. `{"status":1,"data":[…]}`
+/// with the RSS address in `xmlURL`. A non-1 status or a missing `data` array
+/// is an error envelope (null), distinct from a valid empty search (0).
+pub fn parseFyydValue(root: std.json.Value, out: []Podcast) ?usize {
+    if (root != .object) return null;
+    const status = root.object.get("status") orelse return null;
+    if (status != .integer or status.integer != 1) return null;
+    const rows = root.object.get("data") orelse return null;
+    if (rows != .array) return null;
+    var n: usize = 0;
+    for (rows.array.items) |row| {
+        if (n == out.len) break;
+        if (row != .object) continue;
+        const title = jsonValueString(row.object.get("title"));
+        const feed = jsonValueString(row.object.get("xmlURL"));
+        if (title.len == 0 or !isFeedUrl(feed) or feed.len > out[n].feed_url.len) continue;
+        out[n] = .{};
+        out[n].name_len = copyInto(&out[n].name, title);
+        out[n].feed_url_len = copyInto(&out[n].feed_url, feed);
+        out[n].artist_len = copyInto(&out[n].artist, jsonValueString(row.object.get("author")));
+        var art = jsonValueString(row.object.get("imgURL"));
+        if (art.len == 0 or art.len > out[n].artwork.len) art = jsonValueString(row.object.get("layoutImageURL"));
+        if (art.len <= out[n].artwork.len) out[n].artwork_len = copyInto(&out[n].artwork, art);
+        n += 1;
+    }
+    return n;
+}
+
+test "fyyd directory rows carry the RSS address and reject error envelopes" {
+    // Captured 2026-11 from api.fyyd.de/0.2/search/podcast?title=dune&count=8 (trimmed).
+    const body =
+        \\{"status":1,"msg":"ok","meta":{"paging":{"count":8,"page":0}},"data":[
+        \\{"title":"Dune: Prophecy The Official Podcast","id":87264,
+        \\"xmlURL":"https:\/\/feeds.megaphone.fm\/WMHY9760727056","htmlURL":null,
+        \\"imgURL":"https:\/\/megaphone.imgix.net\/podcasts\/b699cd60\/image\/cover.jpg",
+        \\"layoutImageURL":"https:\/\/img-1.fyyd.de\/pd\/layout\/87264.jpg","author":"HBO"},
+        \\{"title":"No feed","xmlURL":null}]}
+    ;
+    var rows: [4]Podcast = undefined;
+    const ok = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, body, .{});
+    defer ok.deinit();
+    try std.testing.expectEqual(@as(?usize, 1), parseFyydValue(ok.value, &rows));
+    try std.testing.expectEqualStrings("https://feeds.megaphone.fm/WMHY9760727056", rows[0].feed_url[0..rows[0].feed_url_len]);
+    try std.testing.expectEqualStrings("HBO", rows[0].artist[0..rows[0].artist_len]);
+    try std.testing.expect(std.mem.startsWith(u8, rows[0].artwork[0..rows[0].artwork_len], "https://megaphone.imgix.net/"));
+    const empty = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, "{\"status\":1,\"data\":[]}", .{});
+    defer empty.deinit();
+    try std.testing.expectEqual(@as(?usize, 0), parseFyydValue(empty.value, &rows));
+    const failure = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, "{\"status\":0,\"msg\":\"error\"}", .{});
+    defer failure.deinit();
+    try std.testing.expect(parseFyydValue(failure.value, &rows) == null);
+}
+
+/// The keyless directories universal search asks, in publication order.
+pub const Directory = enum {
+    apple,
+    gpodder,
+    fyyd,
+
+    pub fn label(self: Directory) []const u8 {
+        return switch (self) {
+            .apple => "Apple Podcasts",
+            .gpodder => "gpodder",
+            .fyyd => "fyyd",
+        };
+    }
+
+    /// `encoded` is the percent-encoded query. Returns "" if `out` is too small.
+    pub fn searchUrl(self: Directory, encoded: []const u8, limit: usize, out: []u8) []const u8 {
+        return switch (self) {
+            .apple => std.fmt.bufPrint(out, "https://itunes.apple.com/search?media=podcast&limit={d}&term={s}", .{ limit, encoded }),
+            .gpodder => std.fmt.bufPrint(out, "https://gpodder.net/search.json?q={s}", .{encoded}),
+            .fyyd => std.fmt.bufPrint(out, "https://api.fyyd.de/0.2/search/podcast?title={s}&count={d}", .{ encoded, limit }),
+        } catch "";
+    }
+
+    pub fn parse(self: Directory, root: std.json.Value, out: []Podcast) ?usize {
+        return switch (self) {
+            .apple => parseItunesValue(root, out),
+            .gpodder => parseGpodderValue(root, out),
+            .fyyd => parseFyydValue(root, out),
+        };
+    }
+};
+
+/// Tally of the independent podcast providers one universal search asked
+/// (directories and installed feeds alike).
+pub const ProviderTally = struct {
+    answered: usize = 0,
+    failed: usize = 0,
+
+    /// The Podcasts source is a transport failure only when NOTHING answered.
+    /// One unreachable directory or one oversized installed feed used to mark
+    /// the whole source `transport_failed`, although the others replied.
+    pub fn transportFailed(self: ProviderTally) bool {
+        return self.answered == 0 and self.failed > 0;
+    }
+};
+
+/// Byte range requested when probing an installed feed for its show header.
+/// Publisher feeds run 1-5 MB (Huberman Lab: 4.5 MB) but the title, author and
+/// artwork sit before the first <item>, inside the first few KB.
+pub const FEED_PROBE_RANGE = "0-131071";
+
+/// Installed feeds probed per universal search. Each probe is a bounded
+/// sequential request, so the count stays fixed; `feedProbeOrder` decides
+/// which feeds spend it.
+pub const FEED_PROBE_LIMIT: usize = 12;
+
+/// True when a query word (3+ alphanumerics) appears in the installed source
+/// id or its feed URL — "lex fridman" against `podcast-lex`.
+pub fn feedLikelyMatches(id: []const u8, url: []const u8, query: []const u8) bool {
+    var i: usize = 0;
+    while (i < query.len) {
+        while (i < query.len and !std.ascii.isAlphanumeric(query[i])) i += 1;
+        const start = i;
+        while (i < query.len and std.ascii.isAlphanumeric(query[i])) i += 1;
+        const word = query[start..i];
+        if (word.len < 3) continue;
+        if (std.ascii.findIgnoreCase(id, word) != null or std.ascii.findIgnoreCase(url, word) != null) return true;
+    }
+    return false;
+}
+
+/// Feed indices to probe, likely matches first. Regression: with more than
+/// twelve feeds installed only the first twelve were ever searched, so a show
+/// installed later could never appear in universal search.
+pub fn feedProbeOrder(likely: []const bool, out: []usize) usize {
+    var n: usize = 0;
+    for ([_]bool{ true, false }) |want| {
+        for (likely, 0..) |hit, index| {
+            if (n == out.len) return n;
+            if (hit == want) {
+                out[n] = index;
+                n += 1;
+            }
+        }
+    }
+    return n;
+}
+
+test "feedProbeOrder: a matching feed past the bound is probed first" {
+    var likely: [37]bool = @splat(false);
+    likely[30] = feedLikelyMatches("podcast-lex", "https://lexfridman.com/feed/podcast/", "Lex Fridman");
+    likely[5] = feedLikelyMatches("bbc-global-news", "https://podcasts.files.bbci.co.uk/p02nq0gn.rss", "lex");
+    var order: [FEED_PROBE_LIMIT]usize = undefined;
+    const n = feedProbeOrder(&likely, &order);
+    try std.testing.expectEqual(FEED_PROBE_LIMIT, n);
+    try std.testing.expectEqual(@as(usize, 30), order[0]);
+    try std.testing.expectEqual(@as(usize, 0), order[1]);
+    try std.testing.expectEqual(@as(usize, 10), order[11]);
+    try std.testing.expect(!likely[5]);
+}
+
+test "feedProbeOrder: fewer feeds than the bound are all probed once" {
+    const likely = [_]bool{ false, true, false };
+    var order: [FEED_PROBE_LIMIT]usize = undefined;
+    try std.testing.expectEqual(@as(usize, 3), feedProbeOrder(&likely, &order));
+    try std.testing.expectEqualSlices(usize, &.{ 1, 0, 2 }, order[0..3]);
+}
+
+test "feedLikelyMatches: short words and punctuation never match everything" {
+    try std.testing.expect(!feedLikelyMatches("podcast-lex", "https://a.test/feed", "a of"));
+    try std.testing.expect(feedLikelyMatches("npr-up-first", "https://feeds.npr.org/510318/podcast.xml", "up first!"));
+    try std.testing.expect(!feedLikelyMatches("x", "https://a.test/feed", ""));
+}
+
+/// Whether a (possibly head-truncated) feed body is a podcast show rather than
+/// a general RSS/torrent feed. YouTube channel Atom feeds carry neither an
+/// itunes namespace nor an audio enclosure, so they are accepted by address.
+pub fn isPodcastFeedBody(xml: []const u8, url: []const u8) bool {
+    if (isYouTubeFeed(url)) return std.mem.indexOf(u8, xml, "<feed") != null;
+    return std.mem.indexOf(u8, xml, "itunes:") != null or
+        std.mem.indexOf(u8, xml, "type=\"audio/") != null or
+        std.mem.indexOf(u8, xml, "type='audio/") != null;
+}
+
+test "regression: one failed or empty podcast directory never fails the whole source" {
+    // gpodder answered `[]` for "dune" while Apple had rows; four oversized
+    // installed feeds had already been reported as transport failures.
+    try std.testing.expect(!(ProviderTally{ .answered = 1, .failed = 4 }).transportFailed());
+    try std.testing.expect(!(ProviderTally{ .answered = 3, .failed = 0 }).transportFailed());
+    try std.testing.expect((ProviderTally{ .answered = 0, .failed = 2 }).transportFailed());
+    try std.testing.expect(!(ProviderTally{}).transportFailed());
+}
+
+test "podcast directory URLs and labels" {
+    var b: [256]u8 = undefined;
+    try std.testing.expectEqualStrings("https://itunes.apple.com/search?media=podcast&limit=5&term=lex%20fridman", Directory.apple.searchUrl("lex%20fridman", 5, &b));
+    try std.testing.expectEqualStrings("https://gpodder.net/search.json?q=dune", Directory.gpodder.searchUrl("dune", 5, &b));
+    try std.testing.expectEqualStrings("https://api.fyyd.de/0.2/search/podcast?title=dune&count=5", Directory.fyyd.searchUrl("dune", 5, &b));
+    var tiny: [8]u8 = undefined;
+    try std.testing.expectEqualStrings("", Directory.fyyd.searchUrl("dune", 5, &tiny));
+    try std.testing.expectEqualStrings("fyyd", Directory.fyyd.label());
+}
+
+test "regression: a head-truncated publisher feed still yields its show, YouTube feeds count" {
+    // First bytes of podcasts.files.bbci.co.uk/p02nq0gn.rss (1.1 MB; 2026-11), cut mid-item.
+    const head =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><rss xmlns:itunes=\"http://www.itunes.com/dtds/podcast-1.0.dtd\" version=\"2.0\"><channel>" ++
+        "<title>Global News Podcast</title><itunes:author>BBC World Service</itunes:author>" ++
+        "<itunes:image href=\"https://ichef.bbci.co.uk/images/ic/3000x3000/p0lc6vkb.jpg\"/>" ++
+        "<item><title>Truncated epis";
+    const url = "https://podcasts.files.bbci.co.uk/p02nq0gn.rss";
+    try std.testing.expect(isPodcastFeedBody(head, url));
+    const show = parseFeedShow(head, url).?;
+    try std.testing.expectEqualStrings("Global News Podcast", show.name[0..show.name_len]);
+    try std.testing.expectEqualStrings("BBC World Service", show.artist[0..show.artist_len]);
+    const yt = "https://www.youtube.com/feeds/videos.xml?channel_id=UCSHZKyawb77ixDdsGog4iWA";
+    const atom = "<feed xmlns:yt=\"http://www.youtube.com/xml/schemas/2015\"><title>Lex Fridman</title><author><name>Lex Fridman</name></author><entry><yt:videoId>abcdefghijk</yt:videoId></entry></feed>";
+    try std.testing.expect(isPodcastFeedBody(atom, yt));
+    try std.testing.expectEqualStrings("Lex Fridman", parseFeedShow(atom, yt).?.name[0..parseFeedShow(atom, yt).?.name_len]);
+    try std.testing.expect(!isPodcastFeedBody("<rss><channel><title>Torrents</title></channel></rss>", "https://tracker.test/rss"));
+}
+
 fn jsonValueString(value: ?std.json.Value) []const u8 {
     const v = value orelse return "";
     return if (v == .string) v.string else "";

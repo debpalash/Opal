@@ -60,20 +60,8 @@
   "lang": "en"
  },
  {
-  "name": "Renascans",
-  "base": "https://renascans.net",
-  "framework": "heancms",
-  "lang": "en"
- },
- {
   "name": "Sana Scans",
   "base": "https://sanascans.com",
-  "framework": "heancms",
-  "lang": "en"
- },
- {
-  "name": "Vanilla Scans",
-  "base": "https://vanillascans.org",
   "framework": "heancms",
   "lang": "en"
  },

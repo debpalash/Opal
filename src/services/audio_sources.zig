@@ -15,6 +15,7 @@ pub fn defaultBase(provider: Provider) []const u8 {
         .openverse => "https://api.openverse.org",
         .netlabels => "https://archive.org",
         .somafm => "https://somafm.com",
+        .livemusic => "https://archive.org",
     };
 }
 fn get(provider: Provider, base: []const u8, url: []const u8, body: []u8, deadline: i64, cancel: ?CancelEpoch) fetch.FetchResult {
@@ -27,7 +28,7 @@ fn get(provider: Provider, base: []const u8, url: []const u8, body: []u8, deadli
         .validate = switch (provider) {
             .openverse => validOpenverse,
             .somafm => validSoma,
-            .netlabels => validArchive,
+            .netlabels, .livemusic => validArchive,
         },
         .transport = .{ .timeout_secs = @intCast(@max(1, @min(4, @divTrunc(left, 1000)))), .impersonate = false, .user_agent = @import("../core/app_meta.zig").user_agent_with_url, .cancel_epoch = cancel },
     });
@@ -63,11 +64,7 @@ pub fn searchIntoWithCancellation(provider: Provider, query: []const u8, out: []
     var encoded: [2048]u8 = undefined;
     const q = pure.encode(&encoded, query) orelse return .{ .status = .failed };
     var url: [4096]u8 = undefined;
-    const target = switch (provider) {
-        .openverse => std.fmt.bufPrint(&url, "{s}/v1/audio/?q={s}&category=music&page_size={d}", .{ endpoint, q, @min(20, out.len) }),
-        .somafm => std.fmt.bufPrint(&url, "{s}/channels.json", .{endpoint}),
-        .netlabels => std.fmt.bufPrint(&url, "{s}/advancedsearch.php?q=collection%3Anetlabels%20AND%20mediatype%3Aaudio%20AND%20%28{s}%29&fl%5B%5D=identifier&rows=2&output=json", .{ endpoint, q }),
-    } catch return .{ .status = .failed };
+    const target = pure.searchUrl(&url, provider, endpoint, q, out.len) orelse return .{ .status = .failed };
     const body = alloc.alloc(u8, MAX_BODY) catch return .{ .status = .failed };
     defer alloc.free(body);
     const deadline = io.monotonicMilliTimestamp() + 8000;
@@ -78,7 +75,7 @@ pub fn searchIntoWithCancellation(provider: Provider, query: []const u8, out: []
     switch (provider) {
         .openverse => return pure.parseOpenverse(parsed.value, out),
         .somafm => return pure.parseSoma(parsed.value, query, out),
-        .netlabels => {
+        .netlabels, .livemusic => {
             const docs = pure.field(pure.field(parsed.value, "response"), "docs");
             if (docs != .array) return .{ .status = .parse_failed };
             var result: Reply = .{};
