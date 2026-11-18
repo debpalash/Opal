@@ -205,9 +205,25 @@ pub fn buildRouteUrl(out: []u8, slug: []const u8) ?[]const u8 {
 /// one, or the slug doesn't validate).
 pub fn slugFromRoute(url: []const u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, url, HC_SCHEME)) return null;
-    const slug = url[HC_SCHEME.len..];
+    const tail = url[HC_SCHEME.len..];
+    const slug = tail[0 .. std.mem.indexOfScalar(u8, tail, '?') orelse tail.len];
+    if (slug.len != tail.len and chapterIdFromRoute(url) == null) return null;
     if (!isValidSlug(slug)) return null;
     return slug;
+}
+
+/// Chapter routes retain the series identity and a stable numeric chapter id.
+pub fn chapterIdFromRoute(url: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, url, HC_SCHEME)) return null;
+    const at = std.mem.indexOf(u8, url, "?chapter=") orelse return null;
+    if (!isValidSlug(url[HC_SCHEME.len..at])) return null;
+    const id = url[at + "?chapter=".len ..];
+    return if (isValidId(id)) id else null;
+}
+
+pub fn buildIkenChapterRoute(out: []u8, slug: []const u8, id: []const u8) ?[]const u8 {
+    if (!isValidSlug(slug) or !isValidId(id)) return null;
+    return std.fmt.bufPrint(out, "{s}{s}?chapter={s}", .{ HC_SCHEME, slug, id }) catch null;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -434,9 +450,13 @@ pub const IKEN_CHAPTER_TAKE = 100;
 
 /// `GET {api}/api/chapters?postId={id}&skip=0&take=100&order=asc`.
 pub fn buildIkenChapterListUrl(out: []u8, api: []const u8, post_id: []const u8) ?[]const u8 {
+    return buildIkenChapterListPageUrl(out, api, post_id, 0);
+}
+
+pub fn buildIkenChapterListPageUrl(out: []u8, api: []const u8, post_id: []const u8, skip: usize) ?[]const u8 {
     if (!std.mem.startsWith(u8, api, "http")) return null;
     if (!isValidId(post_id)) return null;
-    return std.fmt.bufPrint(out, "{s}/api/chapters?postId={s}&skip=0&take={d}&order=asc", .{ api, post_id, IKEN_CHAPTER_TAKE }) catch null;
+    return std.fmt.bufPrint(out, "{s}/api/chapters?postId={s}&skip={d}&take={d}&order=asc", .{ api, post_id, skip, IKEN_CHAPTER_TAKE }) catch null;
 }
 
 /// `GET {api}/api/chapter?postId={id}&chapterId={cid}` — one chapter's images.
@@ -504,6 +524,46 @@ pub fn firstFreeIkenChapter(json: []const u8) ?ChapterEntry {
     }
     return null;
 }
+
+/// Owns chapter metadata across paginated fetch-buffer reuse. Locked chapters
+/// are skipped; a missing requested id never silently opens another chapter.
+pub const IkenNavigation = struct {
+    pub const Chapter = struct {
+        id: [24]u8 = @splat(0),
+        number: [48]u8 = @splat(0),
+        pub fn idSlice(self: *const Chapter) []const u8 {
+            return std.mem.sliceTo(&self.id, 0);
+        }
+        pub fn numberSlice(self: *const Chapter) []const u8 {
+            return std.mem.sliceTo(&self.number, 0);
+        }
+    };
+    previous: ?Chapter = null,
+    current: ?Chapter = null,
+    next: ?Chapter = null,
+
+    pub fn append(self: *IkenNavigation, json: []const u8, requested: ?[]const u8) ?usize {
+        const post = objField(json, "post") orelse return null;
+        const chapters = objField(post, "chapters") orelse return null;
+        if (chapters.len == 0 or chapters[0] != '[') return null;
+        var it = ObjIter{ .buf = chapters };
+        var count: usize = 0;
+        while (it.next()) |obj| {
+            count += 1;
+            const ch = parseIkenChapter(obj) orelse continue;
+            if (!ch.free or ch.id.len >= 24 or ch.number.len >= 48) continue;
+            var owned: Chapter = .{};
+            @memcpy(owned.id[0..ch.id.len], ch.id);
+            @memcpy(owned.number[0..ch.number.len], ch.number);
+            if (self.current != null) {
+                if (self.next == null) self.next = owned;
+            } else if (requested == null or std.mem.eql(u8, requested.?, ch.id)) {
+                self.current = owned;
+            } else self.previous = owned;
+        }
+        return count;
+    }
+};
 
 /// Walks the page-image URLs of an `/api/chapter` body in array order (the API
 /// returns them sorted by `order`). Each `next()` is a raw, still-escaped URL —
@@ -920,4 +980,42 @@ test "IkenImageIter: image objects → url in order; locked/novel/garbage yield 
     try std.testing.expect(junk.next() == null);
     var cut = IkenImageIter.init("{\"chapter\":{\"images\":[{\"url\":\"https://a.test/1.webp\"},{\"url\":\"https://a");
     try std.testing.expect(cut.next() == null);
+}
+
+test "Iken chapter navigation survives pagination and skips locked chapters" {
+    var nav: IkenNavigation = .{};
+    _ = nav.append("{\"post\":{\"chapters\":[{\"id\":1,\"number\":1},{\"id\":2,\"price\":50},{\"id\":3,\"number\":1.5}]}}", "3").?;
+    try std.testing.expectEqualStrings("1", nav.previous.?.idSlice());
+    try std.testing.expectEqualStrings("3", nav.current.?.idSlice());
+    try std.testing.expectEqualStrings("1.5", nav.current.?.numberSlice());
+    try std.testing.expect(nav.next == null);
+    _ = nav.append("{\"post\":{\"chapters\":[{\"id\":4,\"isAccessible\":false},{\"id\":5}]}}", "3").?;
+    try std.testing.expectEqualStrings("5", nav.next.?.idSlice());
+    var first: IkenNavigation = .{};
+    _ = first.append(IKEN_CHAPTERS, null).?;
+    try std.testing.expect(first.previous == null);
+    try std.testing.expect(first.current != null);
+    var absent: IkenNavigation = .{};
+    _ = absent.append(IKEN_CHAPTERS, "999999").?;
+    try std.testing.expect(absent.current == null);
+    var out: [256]u8 = undefined;
+    const route = buildIkenChapterRoute(&out, "series-name", "21777").?;
+    try std.testing.expectEqualStrings("series-name", slugFromRoute(route).?);
+    try std.testing.expectEqualStrings("21777", chapterIdFromRoute(route).?);
+    try std.testing.expect(slugFromRoute("heancms:x?chapter=1&extra=2") == null);
+    try std.testing.expectEqualStrings("https://api.x/api/chapters?postId=1&skip=100&take=100&order=asc", buildIkenChapterListPageUrl(&out, "https://api.x", "1", 100).?);
+}
+
+/// Rebuild the header from series metadata, never from a prior chapter label.
+pub fn readerTitle(out: []u8, series: []const u8, chapter: []const u8) []const u8 {
+    const base = if (series.len > 0) series else "HeanCms";
+    if (chapter.len == 0) return base;
+    return std.fmt.bufPrint(out, "{s} · {s}", .{ base, chapter }) catch base;
+}
+
+test "Iken chapter header replaces the prior chapter label" {
+    var out: [256]u8 = undefined;
+    _ = readerTitle(&out, "Series", "Ch. 1");
+    try std.testing.expectEqualStrings("Series · Ch. 2", readerTitle(&out, "Series", "Ch. 2"));
+    try std.testing.expectEqualStrings("Series", readerTitle(&out, "Series", ""));
 }

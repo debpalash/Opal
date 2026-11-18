@@ -645,7 +645,7 @@ fn fetchComicThread(gen: u32) void {
     // images), so route BEFORE the generic scraper, exactly like MangaDex. Once
     // page_urls are staged, downloadPages() takes over unchanged.
     if (heancms.slugFromRoute(url)) |slug| {
-        const ok = loadHeancmsPages(slug);
+        const ok = loadHeancmsPages(slug, heancms.chapterIdFromRoute(url));
         state.app.comic.is_loading.store(false, .release);
         if (!ok) {
             logs.pushLog("error", "comics", "HeanCms chapter failed to load", true);
@@ -978,7 +978,7 @@ fn heancmsCdn(out: []u8) []const u8 {
 ///   1. /series/{slug}                              → the numeric series id + title
 ///   2. /chapter/query?series_id={id}&perPage=1000  → the first FREE chapter slug
 ///   3. /series/{slug}/{chapterSlug}                → one image URL per page
-fn loadHeancmsPages(slug: []const u8) bool {
+fn loadHeancmsPages(slug: []const u8, chapter_id: ?[]const u8) bool {
     var api_buf: [256]u8 = undefined;
     const api = heancmsApiHost(&api_buf) orelse {
         logs.pushLog("warn", "comics", "HeanCms: source not installed (inert)", false);
@@ -989,7 +989,10 @@ fn loadHeancmsPages(slug: []const u8) bool {
 
     // Iken first — every catalog site that still answers moved to it (Nov 2026).
     // null ⇒ the host did not answer in the Iken shape → legacy HeanCms chain.
-    if (loadIkenPages(api, cdn, slug)) |ok| return ok;
+    if (loadIkenPages(api, cdn, slug, chapter_id)) |ok| return ok;
+
+    // Chapter-specific routes must never fall back to the legacy first chapter.
+    if (chapter_id != null) return false;
 
     // ── 1. Series detail → numeric id (+ title) ──
     var detail_url_buf: [512]u8 = undefined;
@@ -1083,20 +1086,18 @@ fn loadHeancmsPages(slug: []const u8) bool {
 }
 
 /// Reader header: "Series · Chapter N". The card click already staged the
-/// series title; prefer it, else the detail title, else "HeanCms".
+/// series title; prefer the fresh detail title so chapter changes do not append
+/// their label to the previous chapter header.
 fn setHeancmsTitle(series_title: []const u8, chapter_label: []const u8) void {
     var t_buf: [320]u8 = undefined;
     const existing = state.app.comic.title[0..state.app.comic.title_len];
-    const base_title: []const u8 = if (existing.len > 0)
-        existing
-    else if (series_title.len > 0)
+    const base_title: []const u8 = if (series_title.len > 0)
         series_title
+    else if (existing.len > 0)
+        existing
     else
         "HeanCms";
-    const t = if (chapter_label.len > 0)
-        std.fmt.bufPrint(&t_buf, "{s} · {s}", .{ base_title, chapter_label }) catch base_title
-    else
-        base_title;
+    const t = heancms.readerTitle(&t_buf, base_title, chapter_label);
     const tl = @min(t.len, state.app.comic.title.len);
     // `t` may alias comic.title (base_title == existing) — copy is overlap-safe.
     std.mem.copyForwards(u8, state.app.comic.title[0..tl], t[0..tl]);
@@ -1109,7 +1110,7 @@ fn setHeancmsTitle(series_title: []const u8, chapter_label: []const u8) void {
 ///   1. /api/post?postSlug={slug}                       → numeric post id + title
 ///   2. /api/chapters?postId={id}&take=100&order=asc    → first FREE chapter id
 ///   3. /api/chapter?postId={id}&chapterId={cid}        → images[].url
-fn loadIkenPages(api: []const u8, cdn: []const u8, slug: []const u8) ?bool {
+fn loadIkenPages(api: []const u8, cdn: []const u8, slug: []const u8, chapter_id: ?[]const u8) ?bool {
     var url_buf: [512]u8 = undefined;
     const buf = alloc.alloc(u8, 512 * 1024) catch return false;
     defer alloc.free(buf);
@@ -1131,23 +1132,25 @@ fn loadIkenPages(api: []const u8, cdn: []const u8, slug: []const u8) ?bool {
     var title_buf: [256]u8 = undefined;
     const title_len = heancms.jsonUnescape(series.title, &title_buf);
 
-    // ── 2. Chapter list → first FREE chapter (locked / coin-priced skipped) ──
-    const chap_url = heancms.buildIkenChapterListUrl(&url_buf, api, post_id) orelse return false;
-    n = fetchUrl(chap_url, buf);
-    if (n == 0 or workers.isQuitting()) return false;
-    const chapter = heancms.firstFreeIkenChapter(buf[0..n]) orelse {
-        logs.pushLog("warn", "comics", "Iken: no free chapter (all locked?)", false);
+    // Walk ascending pages until the requested chapter and its free successor
+    // are known. Metadata is owned across fetch-buffer reuse.
+    var nav: heancms.IkenNavigation = .{};
+    var skip: usize = 0;
+    while (skip < 100_000) {
+        const chap_url = heancms.buildIkenChapterListPageUrl(&url_buf, api, post_id, skip) orelse return false;
+        n = fetchUrl(chap_url, buf);
+        if (n == 0 or workers.isQuitting()) return false;
+        const count = nav.append(buf[0..n], chapter_id) orelse return false;
+        if (nav.next != null or count < heancms.IKEN_CHAPTER_TAKE) break;
+        skip += count;
+    }
+    const chapter = nav.current orelse {
+        logs.pushLog("warn", "comics", "Iken: requested chapter unavailable or locked", false);
         return false;
     };
-    var chap_id_buf: [24]u8 = undefined;
-    if (chapter.id.len > chap_id_buf.len) return false;
-    @memcpy(chap_id_buf[0..chapter.id.len], chapter.id);
-    const chap_id = chap_id_buf[0..chapter.id.len];
-    var label_buf: [48]u8 = undefined;
-    const label: []const u8 = if (chapter.number.len > 0)
-        (std.fmt.bufPrint(&label_buf, "Ch. {s}", .{chapter.number}) catch "")
-    else
-        "";
+    const chap_id = chapter.idSlice();
+    var label_buf: [64]u8 = undefined;
+    const label = std.fmt.bufPrint(&label_buf, "Ch. {s}", .{chapter.numberSlice()}) catch "";
 
     // ── 3. Page images ──
     const pages_url = heancms.buildIkenPagesUrl(&url_buf, api, post_id, chap_id) orelse return false;
@@ -1173,6 +1176,14 @@ fn loadIkenPages(api: []const u8, cdn: []const u8, slug: []const u8) ?bool {
         return false;
     }
     state.app.comic.page_count = count;
+    if (nav.previous) |previous| {
+        const route = heancms.buildIkenChapterRoute(&state.app.comic.prev_url, slug, previous.idSlice()) orelse "";
+        state.app.comic.prev_url_len = route.len;
+    }
+    if (nav.next) |next| {
+        const route = heancms.buildIkenChapterRoute(&state.app.comic.next_url, slug, next.idSlice()) orelse "";
+        state.app.comic.next_url_len = route.len;
+    }
     setHeancmsTitle(title_buf[0..title_len], label);
     return true;
 }

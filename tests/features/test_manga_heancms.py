@@ -73,7 +73,7 @@ def test_manga_heancms_engine():
     #     shared downloadPages) via the pseudo-URL scheme, like mangadex:.
     if "fn loadHeancmsPages" not in comics:
         problems.append("loadHeancmsPages reader-chain loader missing")
-    if not (comics.count("downloadPages(gen)") >= 1 and "loadHeancmsPages(slug)" in comics):
+    if not (comics.count("downloadPages(gen)") >= 1 and "loadHeancmsPages(slug, heancms.chapterIdFromRoute(url))" in comics):
         problems.append("HeanCms pages not routed into the shared downloadPages pipeline")
 
     # 11) Iken flavour (the API the catalog's sites migrated to): pure builders +
@@ -85,8 +85,9 @@ def test_manga_heancms_engine():
         if fn not in pure:
             problems.append(f"pure module missing {fn}")
     for call in ("heancms.buildIkenQueryUrl", "heancms.isIkenQuery", "heancms.parseIkenPost",
-                 "heancms.buildIkenPostUrl", "heancms.isIkenPost", "heancms.firstFreeIkenChapter",
-                 "heancms.buildIkenPagesUrl", "heancms.IkenImageIter", "loadIkenPages(api, cdn, slug)"):
+                 "heancms.buildIkenPostUrl", "heancms.isIkenPost", "heancms.IkenNavigation",
+                 "heancms.buildIkenChapterListPageUrl", "heancms.buildIkenChapterRoute",
+                 "heancms.buildIkenPagesUrl", "heancms.IkenImageIter", "loadIkenPages(api, cdn, slug, chapter_id)"):
         if call not in comics:
             problems.append(f"comics.zig does not route through {call}")
 
