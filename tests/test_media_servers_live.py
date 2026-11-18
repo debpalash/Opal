@@ -31,15 +31,28 @@ class MediaServersLive(unittest.TestCase):
                 self.send_response(code); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(data)));self.end_headers()
                 try:self.wfile.write(data)
                 except (BrokenPipeError,ConnectionResetError):pass
+            def jellyfin_authorized(self, token_required=True):
+                auth = self.headers.get('Authorization', '')
+                return (auth.startswith('MediaBrowser ')
+                        and (not token_required or 'Token="fixture-jelly-token"' in auth)
+                        and not self.headers.get('X-Emby-Token')
+                        and not self.headers.get('X-Emby-Authorization'))
+
             def do_POST(self):
                 body=self.rfile.read(int(self.headers.get('Content-Length','0')))
                 owner.events.append((self.path,dict(self.headers),body.decode()))
-                if self.path=='/Users/AuthenticateByName':
+                if self.path == '/Users/AuthenticateByName':
+                    if not self.jellyfin_authorized(token_required=False):
+                        self.send({}, 401)
+                        return
                     if owner.delay_auth:
                         owner.auth_started.set(); owner.auth_release.wait(10)
                     self.send({'AccessToken':'fixture-jelly-token','User':{'Id':'user-a'}})
                     owner.auth_response_done.set()
                 elif self.path.startswith('/Sessions/Playing'):
+                    if not self.jellyfin_authorized():
+                        self.send({}, 401)
+                        return
                     if self.path.endswith('/Progress'):
                         owner.resume_secs = json.loads(body).get('PositionTicks',0)/10000000
                     self.send({})
@@ -51,6 +64,9 @@ class MediaServersLive(unittest.TestCase):
                 owner.events.append((self.path,dict(self.headers),''))
                 path=urlsplit(self.path).path
                 if owner.expired: self.send({},401); return
+                if path.startswith(('/Users/', '/Videos/')) and not self.jellyfin_authorized():
+                    self.send({}, 401)
+                    return
                 if path.startswith('/Videos/') or path.startswith('/library/parts/'):
                     data=owner.media.read_bytes(); start=0; end=len(data)-1
                     raw=self.headers.get('Range','')
@@ -110,8 +126,10 @@ class MediaServersLive(unittest.TestCase):
             streams=[event for event in self.events if event[0].startswith(prefix)]
             if len(streams)>previous_count:
                 headers={key.lower():value for key,value in streams[-1][1].items()}
-                field='x-emby-token' if prefix.startswith('/Videos') else 'x-plex-token'
-                self.assertEqual(headers.get(field),token)
+                if prefix.startswith('/Videos'):
+                    self.assertIn(f'Token="{token}"', headers.get('authorization', ''))
+                else:
+                    self.assertEqual(headers.get('x-plex-token'), token)
                 return
             time.sleep(.05)
         self.fail('reconnected playback did not issue a fresh authenticated stream request')
@@ -148,7 +166,10 @@ class MediaServersLive(unittest.TestCase):
         streams=[event for event in self.events if event[0].startswith('/Videos/' if provider=='jellyfin' else '/library/parts/')]
         self.assertTrue(streams,'direct stream must reach owned provider')
         headers={k.lower():v for k,v in streams[-1][1].items()}
-        self.assertEqual(headers.get('x-emby-token' if provider=='jellyfin' else 'x-plex-token'), 'fixture-jelly-token' if provider=='jellyfin' else 'fixture-plex-server')
+        if provider == 'jellyfin':
+            self.assertIn('Token="fixture-jelly-token"', headers.get('authorization', ''))
+        else:
+            self.assertEqual(headers.get('x-plex-token'), 'fixture-plex-server')
         self.assertNotIn('fixture-',streams[-1][0],'stream URL must not carry authentication tokens')
 
     def test_jellyfin_login_library_play_resume_tracks_expiry_reconnect(self):

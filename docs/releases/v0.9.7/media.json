@@ -1,0 +1,10 @@
+{
+  "tag": "v0.9.7",
+  "items": [
+    {
+      "path": "assets/releases/v0.9.7/downloads.png",
+      "alt": "Opal Activity shows a completed 18 KB HTTPS download and a test magnet in the torrent list.",
+      "caption": "Opal downloaded Git’s public COPYING file and accepted a fixture magnet without an active player."
+    }
+  ]
+}
