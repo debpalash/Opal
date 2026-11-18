@@ -577,3 +577,11 @@ Limits measured on 2026-11-18:
   redirects to a different site. Both ids were removed from the catalog and are
   uninstalled at startup while the installed endpoint still names the dead host.
 - AnimeTosho stopped indexing in May 2026; EZTV answers TV-show queries only.
+
+
+### Streaming without torrents
+
+Open **Plugins → Sources** and install **Internet Archive** to search for
+streamable video. Use **All content** to search, then choose an Internet Archive
+result. Opal also supports Stremio add-ons that return direct HTTP video streams.
+An add-on that only supplies catalogs or metadata still needs a playback source.

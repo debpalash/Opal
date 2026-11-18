@@ -334,7 +334,23 @@ fn unregisterGroupBlocking(mimes: []const []const u8) void {
 fn ensureDesktopFileBlocking() void {
     const home = @import("../core/paths.zig").homeDir();
     var exb: [512]u8 = undefined;
-    const exe = @import("../core/io_global.zig").selfExePath(&exb) catch return;
+    const io = @import("../core/io_global.zig");
+    const appimage = io.getenv("APPIMAGE") orelse "";
+    const exe = if (std.fs.path.isAbsolute(appimage)) appimage else io.selfExePath(&exb) catch return;
+    var escaped: [2048]u8 = undefined;
+    var exec = std.Io.Writer.fixed(&escaped);
+    for (exe) |byte| {
+        switch (byte) {
+            '\n', '\r' => return,
+            '%' => exec.writeAll("%%") catch return,
+            '\\' => exec.splatByteAll('\\', 4) catch return,
+            '"', '`', '$' => {
+                exec.splatByteAll('\\', 2) catch return;
+                exec.writeByte(byte) catch return;
+            },
+            else => exec.writeByte(byte) catch return,
+        }
+    }
     var db: [512]u8 = undefined;
     const dp = @import("opal-fmt").bufPrintZ(&db, "{s}/.local/share/applications", .{home}) catch return;
     @import("../core/io_global.zig").cwdMakePath(dp) catch {};
@@ -346,7 +362,7 @@ fn ensureDesktopFileBlocking() void {
         "audio/x-mpegurl;application/x-mpegurl;audio/mpegurl;application/vnd.apple.mpegurl;audio/x-scpls;" ++
         "application/x-cbz;application/x-cbr;application/x-cb7;application/x-cbt;application/vnd.comicbook+zip;application/vnd.comicbook-rar;";
     var cb: [2560]u8 = undefined;
-    const ct = std.fmt.bufPrint(&cb, "[Desktop Entry]\nName=Opal\nComment=Opal — Play everything\nExec={s} %U\nIcon=opal\nTerminal=false\nType=Application\nCategories=AudioVideo;Video;Audio;Player;\nMimeType={s}\nStartupNotify=true\n", .{ exe, ml }) catch return;
+    const ct = std.fmt.bufPrint(&cb, "[Desktop Entry]\nName=Opal\nComment=Opal — Play everything\nExec=\"{s}\" %U\nIcon=opal\nTerminal=false\nType=Application\nCategories=AudioVideo;Video;Audio;Player;\nMimeType={s}\nStartupNotify=true\n", .{ exec.buffered(), ml }) catch return;
     @import("../core/io_global.zig").cwdWriteFile(.{ .sub_path = fp, .data = ct }) catch {};
 }
 

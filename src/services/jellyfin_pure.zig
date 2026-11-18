@@ -70,7 +70,7 @@ fn appendQueryPiece(out: []u8, used: *usize, piece: []const u8, separator: u8) b
 }
 
 /// Remove the legacy query credential Jellyfin includes in generated stream
-/// URLs. The player supplies X-Emby-Token instead, so every other transcode
+/// URLs. The player supplies Authorization instead, so every other transcode
 /// parameter remains byte-for-byte intact.
 pub fn stripApiKey(url: []const u8, out: []u8) ?[]const u8 {
     if (std.mem.indexOfAny(u8, url, "\r\n\x00") != null) return null;
@@ -264,4 +264,15 @@ test "primaryImageUrl embeds token, cache key omits it" {
     try std.testing.expectEqualStrings("https://jf.example/Items/ITEM1/Images/Primary?maxWidth=200", key);
     // The cache key must not contain the api_key (token-rotation safety).
     try std.testing.expect(std.mem.indexOf(u8, key, "api_key") == null);
+}
+
+pub fn authorizationValue(out: []u8, token: []const u8) ?[]const u8 {
+    if (token.len == 0 or std.mem.indexOfAny(u8, token, "\"\\\r\n") != null) return null;
+    return std.fmt.bufPrint(out, "MediaBrowser Client=\"Opal\", Device=\"Desktop\", Token=\"{s}\"", .{token}) catch null;
+}
+
+test "Jellyfin playback uses MediaBrowser authorization" {
+    var out: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("MediaBrowser Client=\"Opal\", Device=\"Desktop\", Token=\"abc\"", authorizationValue(&out, "abc").?);
+    try std.testing.expect(authorizationValue(&out, "a\r\nb") == null);
 }

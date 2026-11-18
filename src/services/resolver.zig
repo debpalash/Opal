@@ -750,6 +750,11 @@ pub fn requestRemoteAction(generation: u32, key: u64, kind: RemoteActionKind, pi
     lifecycle_mutex.unlock();
 
     const item = found orelse return .not_found;
+    if (kind == .queue) {
+        if (!isRemoteQueueable(&item)) return .not_found;
+        const title = @import("../core/text.zig").safeUtf8(item.name[0..@min(item.name_len, 255)]);
+        return if (@import("queue.zig").enqueueRemote(item.url[0..item.url_len], title, @tagName(item.source))) .accepted else .full;
+    }
     remote_action_mutex.lock();
     defer remote_action_mutex.unlock();
     if (remote_action_count >= REMOTE_ACTION_CAP) return .full;
@@ -783,11 +788,7 @@ pub fn drainRemoteAction() void {
         },
         .prefer => rememberProvider(&action.item, true),
         .clear_preference => rememberProvider(&action.item, false),
-        .queue => @import("queue.zig").addToQueue(
-            action.item.url[0..action.item.url_len],
-            action.item.name[0..action.item.name_len],
-            @tagName(action.item.source),
-        ),
+        .queue => unreachable, // Queued before the HTTP response.
     }
 }
 
@@ -2244,7 +2245,9 @@ fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
         noteWorkerOutcome(.failed);
         return;
     };
-    const headers = [_]std.http.Header{.{ .name = "X-Emby-Token", .value = connection.token[0..connection.token_len] }};
+    var auth_buffer: [512]u8 = undefined;
+    const authorization = @import("jellyfin_pure.zig").authorizationValue(&auth_buffer, connection.token[0..connection.token_len]) orelse return;
+    const headers = [_]std.http.Header{.{ .name = "Authorization", .value = authorization }};
     const buf = alloc.alloc(u8, 256 * 1024) catch {
         noteWorkerOutcome(.failed);
         return;
@@ -2372,7 +2375,7 @@ fn resolveInstalledPlugins(query_buf: [256]u8, qlen: usize) void {
             const source = &entry.row.transport;
             const kind: []const u8 = if (std.mem.startsWith(u8, entry.row.stream_url[0..entry.row.stream_url_len], "magnet:?")) "Torrent" else "Direct stream";
             const direct_detail = std.fmt.bufPrint(&item.detail, "{s} · {s}{s}{s}{s}{s}", .{
-                kind, entry.plugin_name[0..entry.plugin_name_len],
+                kind,                                    entry.plugin_name[0..entry.plugin_name_len],
                 if (source.quality_len > 0) " · " else "",
                 source.quality[0..source.quality_len],
                 if (source.language_len > 0) " · " else "",
@@ -4568,7 +4571,10 @@ pub fn isPreferred(item: *const ResolvedItem) bool {
 }
 
 pub fn rememberProvider(item: *const ResolvedItem, remember: bool) void {
-    if (state.app.incognito_mode) { state.showToast("Source preferences are not saved in private mode"); return; }
+    if (state.app.incognito_mode) {
+        state.showToast("Source preferences are not saved in private mode");
+        return;
+    }
     const db = @import("../core/db.zig");
     var key_buf: [64]u8 = undefined;
     const key = @import("source_preference_pure.zig").key(item.preference_query[0..item.preference_query_len], &key_buf) orelse return;

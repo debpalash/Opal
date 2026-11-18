@@ -65,7 +65,7 @@ pub fn init() void {
     exec("PRAGMA synchronous=NORMAL");
     exec("PRAGMA cache_size=-8000"); // 8MB
     exec("PRAGMA temp_store=MEMORY");
-    exec("PRAGMA mmap_size=268435456"); // 256MB mmap
+    exec("PRAGMA mmap_size=0"); // Avoid faults if an external SQLite client changes the file.
     // Without a busy timeout a contended writer fails INSTANTLY with SQLITE_BUSY
     // instead of waiting, and every `exec`/`_ = step` caller in this codebase
     // discards that error. A UI-thread config.save() racing a worker write then
@@ -138,7 +138,7 @@ fn openReader() ?*Sqlite3 {
     }
     const h = handle orelse return null;
     _ = c.sqlite3_busy_timeout(h, 5000);
-    _ = c.sqlite3_exec(h, "PRAGMA mmap_size=268435456", null, null, null);
+    _ = c.sqlite3_exec(h, "PRAGMA mmap_size=0", null, null, null);
     return h;
 }
 

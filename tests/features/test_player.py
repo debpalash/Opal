@@ -1832,7 +1832,7 @@ def self_hosted_playback_version_fallback():
             and "applyServerRecovery" in jf,
         "generated URL drops legacy query token": "stripApiKey" in jfp
             and "transcodingUrl" in jfp,
-        "Jellyfin playback token is a header": "X-Emby-Token" in jf_play
+        "Jellyfin playback token is a header": "authorizationValue" in jf_play and "Authorization" in jf_play
             and "api_key=" not in jf_play,
         "Plex walks versions": "for (media.array.items) |version|" in plex
             and "fallback_part" in plex,

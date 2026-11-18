@@ -86,6 +86,23 @@ const DarwinEnvironment = struct {
     extern "c" fn _NSGetEnviron() *[*:null]?[*:0]u8;
 };
 
+// SDL's Wayland backend can unset the activation token after I/O starts.
+// Own both the pointer array and the strings for the process lifetime.
+fn environmentSnapshot() [:null]const ?[*:0]u8 {
+    const live = std.mem.span(if (builtin.os.tag == .macos) DarwinEnvironment._NSGetEnviron().* else std.c.environ);
+    const allocator = std.heap.page_allocator;
+    const entries = allocator.allocSentinel(?[*:0]u8, live.len, null) catch @panic("cannot copy process environment");
+    var count: usize = 0;
+    for (live) |entry| {
+        const value = std.mem.span(entry.?);
+        if (std.mem.startsWith(u8, value, "XDG_ACTIVATION_TOKEN=")) continue;
+        entries[count] = (allocator.dupeSentinel(u8, value, 0) catch @panic("cannot copy process environment")).ptr;
+        count += 1;
+    }
+    entries[count] = null;
+    return entries[0..count :null];
+}
+
 pub fn io() std.Io {
     if (!ready.load(.acquire)) {
         if (constructing.cmpxchgStrong(false, true, .acq_rel, .acquire) == null) {
@@ -108,7 +125,7 @@ pub fn io() std.Io {
                 std.Io.Threaded.init(alloc, .{ .environ = .{ .block = .global }, .async_limit = .unlimited })
             else
                 std.Io.Threaded.init(alloc, .{
-                    .environ = .{ .block = .{ .slice = std.mem.span(if (builtin.os.tag == .macos) DarwinEnvironment._NSGetEnviron().* else std.c.environ) } },
+                    .environ = .{ .block = .{ .slice = environmentSnapshot() } },
                     .async_limit = .unlimited,
                 });
             ready.store(true, .release);

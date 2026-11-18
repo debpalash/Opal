@@ -16,12 +16,13 @@ depends=(
     'libtorrent-rasterbar'
     'curl'
     'ffmpeg'
+    'libwebp'
 )
 makedepends=(
     'zig>=0.17.0'
     'gcc'
     'pkgconf'
-    'libwebp'
+    'boost'
 )
 optdepends=(
     'yt-dlp: YouTube playback and downloads'
@@ -39,12 +40,12 @@ build() {
     g++ -std=c++17 -O3 -shared -fPIC \
         src/torrent_wrapper.cpp \
         -o libtorrent_wrapper.so \
-        -ltorrent-rasterbar
+        $(pkg-config --cflags --libs libtorrent-rasterbar)
 
     # 2. The app. -fsys=sdl2 links the system SDL2 (Wayland support);
     #    the binary carries $ORIGIN/../lib/opal in its rpath, matching the
     #    install layout below. Pin x86_64_v2 so AUR builds stay portable.
-    zig build -Doptimize=safe -fsys=sdl2 -Dcpu=x86_64_v2
+    zig build -Doptimize=ReleaseSafe -Dsystem-webp=true -fsys=sdl2 -Dcpu=x86_64_v2
 }
 
 package() {

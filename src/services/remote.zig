@@ -1335,6 +1335,24 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
         if (getQueryParam(query, "url")) |raw| {
             var dec: [2048]u8 = undefined;
             const u = urlDecode(raw, &dec) orelse raw;
+            if (std.mem.startsWith(u8, u, "magnet:")) {
+                const session = state.torrentSession() orelse {
+                    sendJsonStatus(stream, "503 Service Unavailable", "{\"ok\":false,\"error\":\"torrent engine is starting\"}");
+                    return;
+                };
+                var magnet_buf: [2048]u8 = undefined;
+                if (u.len >= magnet_buf.len or std.mem.indexOfScalar(u8, u, 0) != null) {
+                    sendJsonStatus(stream, "400 Bad Request", "{\"ok\":false,\"error\":\"invalid magnet URL\"}");
+                    return;
+                }
+                @memcpy(magnet_buf[0..u.len], u);
+                magnet_buf[u.len] = 0;
+                const id = c.mpv.torrent_add_magnet(session, @ptrCast(&magnet_buf), state.getSavePath());
+                if (id < 0) {
+                    sendJsonStatus(stream, "400 Bad Request", "{\"ok\":false,\"error\":\"torrent engine rejected magnet\"}");
+                } else sendJson(stream, "{\"ok\":true}");
+                return;
+            }
             const ok = @import("downloads.zig").startUrl(u);
             sendJson(stream, if (ok) "{\"ok\":true}" else "{\"ok\":false}");
         } else {
@@ -3533,7 +3551,7 @@ fn settingApply(k: sap.Key, raw: []const u8) bool {
                 // rather than silently leaving the theme unchanged.
                 const th = @import("../ui/theme.zig");
                 inline for (comptime @import("opal-reflect").fields(th.ThemePreset)) |f| {
-                    const preset: th.ThemePreset = @enumFromInt(f.value);
+                    const preset: th.ThemePreset = @fromBackingInt(@intCast(f.value));
                     if (std.mem.eql(u8, th.presetName(preset), t)) {
                         th.setPreset(preset);
                         return true;

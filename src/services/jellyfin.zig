@@ -387,7 +387,7 @@ pub fn authenticate() void {
 
             var auth_hdr: [256]u8 = undefined;
             const device_id = if (state.app.install_id[0] != 0) state.app.install_id[0..] else "opal";
-            const auth_val = std.fmt.bufPrint(&auth_hdr, "X-Emby-Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"{s}\", Version=\"{s}\"", .{ device_id, @import("../core/app_meta.zig").version }) catch return;
+            const auth_val = std.fmt.bufPrint(&auth_hdr, "Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"{s}\", Version=\"{s}\"", .{ device_id, @import("../core/app_meta.zig").version }) catch return;
 
             var resp_buf: [16384]u8 = undefined;
             var response_status: ?std.http.Status = null;
@@ -401,7 +401,7 @@ pub fn authenticate() void {
                 .status_out = &response_status,
             }) orelse {
                 if (response_status) |status| {
-                    if (@import("jellyfin_pure.zig").authRejected(@intFromEnum(status))) {
+                    if (@import("jellyfin_pure.zig").authRejected(@backingInt(status))) {
                         setLoginErrorExpected(my_gen, "Sign-in rejected — check credentials");
                         return;
                     }
@@ -815,7 +815,7 @@ pub fn requestTranscodeRecovery(identity: []const u8, player_idx: usize) bool {
                     user_id[0..user_id_len],
                 }) catch break :request_block;
                 const device_id = if (state.app.install_id[0] != 0) state.app.install_id[0..] else "opal";
-                const auth = std.fmt.bufPrint(&auth_buf, "X-Emby-Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"{s}\", Version=\"{s}\", Token=\"{s}\"", .{
+                const auth = std.fmt.bufPrint(&auth_buf, "Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"{s}\", Version=\"{s}\", Token=\"{s}\"", .{
                     device_id,
                     @import("../core/app_meta.zig").version,
                     connection.token[0..connection.token_len],
@@ -834,7 +834,7 @@ pub fn requestTranscodeRecovery(identity: []const u8, player_idx: usize) bool {
                     .timeout_secs = 12,
                     .status_out = &response_status,
                 }) orelse {
-                    if (response_status) |status| if (@import("jellyfin_pure.zig").authRejected(@intFromEnum(status))) {
+                    if (response_status) |status| if (@import("jellyfin_pure.zig").authRejected(@backingInt(status))) {
                         expireAuthSession();
                         failure = "Jellyfin session expired — reconnect to play";
                     };
@@ -892,7 +892,9 @@ pub fn playItem(item_id: []const u8) void {
     const url = jp.videoStreamUrl(server, item_id, source_id, &url_buf) orelse return;
     var fallback_buf: [1024]u8 = undefined;
     const fallback = if (source_id.len > 0) (jp.videoStreamUrl(server, item_id, "", &fallback_buf) orelse "") else "";
-    const headers = [_]player.HttpHeader{.{ .name = "X-Emby-Token", .value = token }};
+    var auth_buffer: [512]u8 = undefined;
+    const authorization = @import("jellyfin_pure.zig").authorizationValue(&auth_buffer, token) orelse return;
+    const headers = [_]player.HttpHeader{.{ .name = "Authorization", .value = authorization }};
 
     var deep_buf: [128]u8 = undefined;
     const deep = std.fmt.bufPrint(&deep_buf, "opal://jellyfin/video/{s}", .{item_id}) catch return;
@@ -939,7 +941,9 @@ pub fn playAudioItem(item_id: []const u8) void {
         item_id,
         state.app.jf.user_id[0..state.app.jf.user_id_len],
     }) catch return;
-    const headers = [_]player.HttpHeader{.{ .name = "X-Emby-Token", .value = token }};
+    var auth_buffer: [512]u8 = undefined;
+    const authorization = @import("jellyfin_pure.zig").authorizationValue(&auth_buffer, token) orelse return;
+    const headers = [_]player.HttpHeader{.{ .name = "Authorization", .value = authorization }};
 
     var deep_buf: [128]u8 = undefined;
     const deep = std.fmt.bufPrint(&deep_buf, "opal://jellyfin/audio/{s}", .{item_id}) catch return;
@@ -1232,7 +1236,7 @@ fn jfGet(url: []const u8) ?[]u8 {
 
     var auth_buf: [600]u8 = undefined;
     const device_id = if (state.app.install_id[0] != 0) state.app.install_id[0..] else "opal";
-    const auth = std.fmt.bufPrint(&auth_buf, "X-Emby-Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"{s}\", Version=\"{s}\", Token=\"{s}\"", .{ device_id, @import("../core/app_meta.zig").version, token }) catch return null;
+    const auth = std.fmt.bufPrint(&auth_buf, "Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"{s}\", Version=\"{s}\", Token=\"{s}\"", .{ device_id, @import("../core/app_meta.zig").version, token }) catch return null;
 
     const resp_buf = alloc.alloc(u8, 256 * 1024) catch return null;
     defer alloc.free(resp_buf);
@@ -1244,7 +1248,7 @@ fn jfGet(url: []const u8) ?[]u8 {
         .status_out = &response_status,
     }) orelse {
         if (response_status) |status| {
-            if (@import("jellyfin_pure.zig").authRejected(@intFromEnum(status))) expireAuthSession();
+            if (@import("jellyfin_pure.zig").authRejected(@backingInt(status))) expireAuthSession();
         }
         return null;
     };
@@ -1401,7 +1405,7 @@ fn runUserDataMutation(request: UserDataMutation) void {
     };
     var auth_buf: [600]u8 = undefined;
     const device_id = if (state.app.install_id[0] != 0) state.app.install_id[0..] else "opal";
-    const auth = std.fmt.bufPrint(&auth_buf, "X-Emby-Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"{s}\", Version=\"{s}\", Token=\"{s}\"", .{
+    const auth = std.fmt.bufPrint(&auth_buf, "Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"{s}\", Version=\"{s}\", Token=\"{s}\"", .{
         device_id, @import("../core/app_meta.zig").version, connection.token[0..connection.token_len],
     }) catch {
         rollbackUserDataMutation(request);
@@ -1415,7 +1419,7 @@ fn runUserDataMutation(request: UserDataMutation) void {
         .timeout_secs = 10,
         .status_out = &status,
     }) orelse {
-        if (status) |code| if (@import("jellyfin_pure.zig").authRejected(@intFromEnum(code))) expireAuthSession();
+        if (status) |code| if (@import("jellyfin_pure.zig").authRejected(@backingInt(code))) expireAuthSession();
         rollbackUserDataMutation(request);
         return;
     };

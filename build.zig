@@ -562,7 +562,8 @@ fn buildSupported(b: *std.Build) void {
             break;
         }
     }
-    exe.root_module.linkSystemLibrary("webp", .{ .preferred_link_mode = .static, .search_strategy = .no_fallback });
+    const shared_webp = b.option(bool, "system-webp", "Link the distro's shared libwebp") orelse false;
+    exe.root_module.linkSystemLibrary("webp", if (shared_webp) .{} else .{ .preferred_link_mode = .static, .search_strategy = .no_fallback });
 
     // SQLite Vector DB. -DSQLITE_CORE makes sqlite-vec call the linked
     // sqlite3 directly instead of going through the extension API pointer —
