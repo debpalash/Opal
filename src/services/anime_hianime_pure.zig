@@ -24,6 +24,53 @@ pub fn showSlug(body: []const u8, name: []const u8, alias: []const u8) ?[]const 
     return null;
 }
 
+/// Show titles on a search page, in page order, for universal search rows.
+/// Only result cards (`film-name` links ending in a numeric show id) before
+/// the sidebar; `out` receives entity-decoded text. Returns the count.
+pub fn searchTitles(body: []const u8, out: [][256]u8, lens: []usize) usize {
+    const end = std.mem.indexOf(u8, body, "id=\"main-sidebar\"") orelse body.len;
+    var it = html.AnchorIter{ .html = body[0..end], .path = "-" };
+    var count: usize = 0;
+    while (it.next()) |a| {
+        if (count == out.len or count == lens.len) break;
+        if (std.mem.indexOf(u8, a.url, "/watch/") != null) continue; // poster link duplicates the card
+        const slash = std.mem.lastIndexOfScalar(u8, a.url, '/') orelse continue;
+        const slug = a.url[slash + 1 ..];
+        const dash = std.mem.lastIndexOfScalar(u8, slug, '-') orelse continue;
+        _ = std.fmt.parseInt(u32, slug[dash + 1 ..], 10) catch continue;
+        const n = decodeEntities(std.mem.trim(u8, a.title, " \t\r\n"), &out[count]);
+        if (n < 2 or std.mem.indexOfScalar(u8, out[count][0..n], '<') != null) continue;
+        var dup = false;
+        for (0..count) |i| {
+            if (std.mem.eql(u8, out[i][0..lens[i]], out[count][0..n])) dup = true;
+        }
+        if (dup) continue;
+        lens[count] = n;
+        count += 1;
+    }
+    return count;
+}
+
+fn decodeEntities(text: []const u8, out: []u8) usize {
+    const table = [_][2][]const u8{ .{ "&amp;", "&" }, .{ "&#039;", "'" }, .{ "&#39;", "'" }, .{ "&quot;", "\"" }, .{ "&lt;", "<" }, .{ "&gt;", ">" } };
+    var i: usize = 0;
+    var n: usize = 0;
+    outer: while (i < text.len and n < out.len) {
+        if (text[i] == '&') for (table) |pair| {
+            if (std.mem.startsWith(u8, text[i..], pair[0])) {
+                out[n] = pair[1][0];
+                n += 1;
+                i += pair[0].len;
+                continue :outer;
+            }
+        };
+        out[n] = text[i];
+        n += 1;
+        i += 1;
+    }
+    return n;
+}
+
 pub fn episodeId(body: []const u8, ep: usize) ?[]const u8 {
     var pos: usize = 0;
     while (std.mem.indexOfPos(u8, body, pos, "<a")) |at| {
@@ -91,4 +138,24 @@ test "HiAnime rejects unknown servers bad encoded data and webpage streams" {
     const doc = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, "{\"src\":\"https://site.test/watch/1\"}", .{});
     defer doc.deinit();
     try std.testing.expect(streamUrl(doc.value) == null);
+}
+
+test "HiAnime search lists each result card once with decoded titles" {
+    // Card markup captured from hianime.fm/search?keyword=naruto (2026-11).
+    const page =
+        \\<a href="https://hianime.fm/home" title="Home">Home</a>
+        \\<div class="flw-item"><a href="https://hianime.fm/watch/naruto-1335" class="film-poster-ahref item-qtip" title="Naruto" data-id="1335"><i></i></a>
+        \\<h3 class="film-name"> <a href="https://hianime.fm/naruto-1335" title="Naruto" class="dynamic-name" data-jname="Naruto"> Naruto </a> </h3></div>
+        \\<h3 class="film-name"> <a href="https://hianime.fm/boruto-naruto-next-generations-650" title="Boruto: Naruto Next Generations" class="dynamic-name">x</a> </h3>
+        \\<h3 class="film-name"> <a href="https://hianime.fm/rock-lee-amp-his-ninja-pals-99" title="Rock Lee &amp; His Ninja Pals&#039;" class="dynamic-name">x</a> </h3>
+        \\<h3 class="film-name"> <a href="https://hianime.fm/naruto-1335" title="Naruto" class="dynamic-name">dup</a> </h3>
+        \\<div id="main-sidebar"><a href="/one-piece-100" title="One Piece">x</a></div>
+    ;
+    var titles: [6][256]u8 = undefined;
+    var lens: [6]usize = undefined;
+    try std.testing.expectEqual(@as(usize, 3), searchTitles(page, &titles, &lens));
+    try std.testing.expectEqualStrings("Naruto", titles[0][0..lens[0]]);
+    try std.testing.expectEqualStrings("Boruto: Naruto Next Generations", titles[1][0..lens[1]]);
+    try std.testing.expectEqualStrings("Rock Lee & His Ninja Pals'", titles[2][0..lens[2]]);
+    try std.testing.expectEqual(@as(usize, 0), searchTitles("<title>Just a moment...</title>", &titles, &lens));
 }

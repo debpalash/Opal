@@ -149,7 +149,6 @@ fn setup() !void {
         search.setUniversalQuery(fixture_query);
         search.setSearchScope(current.scope orelse .all);
     } else @memset(&state.app.magnet_buf, 0);
-    if (current.submit_query) @memcpy(state.app.magnet_buf[0..4], "test");
 }
 fn texture(index: usize) !dvui.Texture {
     var rgba: [64 * 96 * 4]u8 = undefined;
@@ -206,7 +205,11 @@ fn draw() !void {
         _ = try window.addEventMouseMotion(.{ .pt = bounds.center() });
         _ = try window.addEventMouseButton(.left, .press);
         _ = try window.addEventMouseButton(.left, .release);
-        _ = try window.addEventKey(.{ .code = .enter, .action = .down, .mod = .none });
+    }
+    if (current.submit_query and frames == 5) {
+        try std.testing.expect(@import("shell.zig").queryFocusedForTest());
+        @memcpy(state.app.magnet_buf[0..5], "test\x00");
+        _ = try dvui.currentWindow().addEventKey(.{ .code = .enter, .action = .down, .mod = .none });
     }
     if (current.remove_scope and frames == 4) {
         const bounds = @import("shell.zig").scopeRemoveBoundsForTest();
@@ -371,8 +374,9 @@ fn draw() !void {
     }
     if (current.novels_empty) try std.testing.expect(@import("../services/novels.zig").landingRequestedForTest());
     try std.testing.expectEqual(provider_mask, resolver.source_mask.load(.acquire));
-    if (current.submit_query and frames >= 5) {
+    if (current.submit_query and frames >= 6) {
         const expected = search.scope_model.forTab(@tagName(current.tab));
+        errdefer std.debug.print("Search submission fixture: {s}\n", .{current.name});
         try std.testing.expectEqual(if (current.tab == .Wallpapers) router.Route.browse else router.Route.search, state.app.router.current);
         try std.testing.expectEqual(expected, search.currentScope());
         if (current.tab != .Wallpapers) try std.testing.expectEqual(expected, resolver.requestScopeForTest());

@@ -543,3 +543,45 @@ per catalog id in `movie_external_ids`) and keep TMDB ids for keyed ones.
 Stream addons and the EZTV source resolve the IMDb id of a search through
 Cinemeta (exact title, year when given, episode token ignored) when there is no
 TMDB key.
+
+### Source repair and expansion (2026-11-18)
+
+The bundled catalog now holds **191 entries** (was 111). The in-app catalog cap
+is 256 entries and the installed-field table 1,024, so a fully installed catalog
+fits. Checks ran from one network in India through the CLI (`engines/nova2.py`,
+`curl`) and unit tests; that connection resets TLS to several torrent hosts, so
+row counts for LimeTorrents and EZTV vary between runs.
+
+| Area | Change |
+| --- | --- |
+| Torrent indexes | Bitsearch, SolidTorrents (now the Bitsearch index), LimeTorrents, AnimeTosho, EZTV, TheRARBG, Tokyo Toshokan, TorrentGalaxy, TorrentProject, Mikan, Knaben and Academic Torrents repaired. New: AniRena, Kisssub, AniLibria, FitGirl, AudioBook Bay, NNM-Club, TorrentKitty, LinuxTracker, FOSS Torrents. |
+| Stremio | Comet, MediaFusion and Peerflix repointed; TorrentsDB and StremThru Torz added; add-ons that do not serve streams are skipped; up to 32 installed add-ons. |
+| Anime | HiAnime moved to `hianime.fm`; AniList answers when Jikan has not replied within four seconds. |
+| Reading | Madara, MangaThemesia, Madara novels and ReadNovelFull are installable; NovelFire follows its relocated chapter pages; SMBC and Poorly Drawn Lines readers repaired. |
+| Podcasts | fyyd directory added; installed feeds are probed by a 128 KiB range request. Twelve feeds are probed per search, those whose id or URL names a query word first. 26 feeds added. |
+| Live TV, radio, music | Every installed playlist is searchable; nine playlists, 32 stations and the Internet Archive Live Music Archive added. |
+
+Limits measured on 2026-11-18:
+
+- 1337x, Torlock, TorrentFunk and UIndex return HTTP 403 to both plain curl and
+  `curl-impersonate` (Chrome 131): a JavaScript challenge, not a TLS fingerprint
+  wall. AnimePahe serves a DDoS-Guard redirect page and the AllAnime API returns
+  403 in both transports.
+- Royal Road returns 403 to plain curl and 200 with 20 listing rows through
+  `curl-impersonate`. Its universal-search request now asks for the browser
+  transport, which is used when `curl-impersonate-chrome` is bundled or present
+  in the config `bin` directory, and falls back to plain curl otherwise.
+- GloTorrents did not accept connections and Il Corsaro Nero returned HTTP 502.
+  Both stay in the catalog because the failure may be local to this network.
+- `readallcomics.com` now serves an unrelated storefront and `anidb.app`
+  redirects to a different site. Both ids were removed from the catalog and are
+  uninstalled at startup while the installed endpoint still names the dead host.
+- AnimeTosho stopped indexing in May 2026; EZTV answers TV-show queries only.
+
+
+### Streaming without torrents
+
+Open **Plugins → Sources** and install **Internet Archive** to search for
+streamable video. Use **All content** to search, then choose an Internet Archive
+result. Opal also supports Stremio add-ons that return direct HTTP video streams.
+An add-on that only supplies catalogs or metadata still needs a playback source.

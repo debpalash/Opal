@@ -25,7 +25,7 @@ pub const Addon = struct {
 
 pub var addons: [32]Addon = undefined;
 pub var addon_count: usize = 0;
-pub var installed_addons: [16]Addon = undefined;
+pub var installed_addons: [32]Addon = undefined;
 pub var installed_count: usize = 0;
 pub var is_loading: bool = false;
 pub var catalog_loaded: bool = false;
@@ -207,7 +207,7 @@ pub fn ensureDefaultAddons() void {
     if (installed_count > 0) return;
     if (addon_count == 0) addKnownAddons();
     for (0..addon_count) |i| {
-        if (installed_count >= 16) break;
+        if (installed_count >= installed_addons.len) break;
         var inst = &installed_addons[installed_count];
         inst.* = addons[i];
         inst.installed = true;
@@ -222,15 +222,21 @@ pub fn ensureDefaultAddons() void {
 /// of 2026-07 cyberflix.elfhosted.com/manifest.json returns 404 and
 /// knightcrawler.elfhosted.com redirects to a page literally titled
 /// "KnightCrawler is deprecated". A dead entry here is worse than a missing
-/// one — it is offered to the user as a working addon.
+/// one — it is offered to the user as a working addon. ThePirateBay+ went the
+/// same way (2026-11: thepiratebay-plus.strem.fun refuses connections).
 fn addKnownAddons() void {
     const known = [_]struct { name: []const u8, desc: []const u8, url: []const u8, types: []const u8 }{
         .{ .name = "Torrentio", .desc = "Torrent streams from multiple indexers", .url = "https://torrentio.strem.fun/manifest.json", .types = "movie,series" },
-        .{ .name = "MediaFusion", .desc = "Combined torrent and DDL streams", .url = "https://mediafusion.elfhosted.com/manifest.json", .types = "movie,series" },
-        .{ .name = "Comet", .desc = "Debrid streaming via Real-Debrid/AllDebrid", .url = "https://comet.elfhosted.com/manifest.json", .types = "movie,series" },
+        // 2026-11: mediafusion.elfhosted.com answers {"streams":[]} and
+        // comet.elfhosted.com 403 without a per-user config; these public
+        // instances return torrent streams unconfigured.
+        .{ .name = "MediaFusion", .desc = "Combined torrent and DDL streams", .url = "https://mediafusionfortheweebs.midnightignite.me/manifest.json", .types = "movie,series" },
+        .{ .name = "Comet", .desc = "Large torrent stream index", .url = "https://comet.feels.legal/manifest.json", .types = "movie,series" },
+        .{ .name = "TorrentsDB", .desc = "Torrent streams from scraped indexers", .url = "https://torrentsdb.com/manifest.json", .types = "movie,series" },
+        .{ .name = "StremThru Torz", .desc = "Crowdsourced torrent streams (P2P)", .url = "https://stremthru.elfhosted.com/stremio/torz/eyJzdG9yZXMiOlt7ImMiOiJwMnAiLCJ0IjoiIn1dfQ==/manifest.json", .types = "movie,series" },
+        .{ .name = "Peerflix", .desc = "Spanish and English torrent streams", .url = "https://addon.peerflix.mov/manifest.json", .types = "movie,series" },
         .{ .name = "Anime Kitsu", .desc = "Anime catalog with Kitsu integration", .url = "https://anime-kitsu.strem.fun/manifest.json", .types = "anime" },
         .{ .name = "OpenSubtitles", .desc = "Subtitles from OpenSubtitles.com", .url = "https://opensubtitles-v3.strem.io/manifest.json", .types = "movie,series" },
-        .{ .name = "ThePirateBay+", .desc = "ThePirateBay streams (debrid-capable)", .url = "https://thepiratebay-plus.strem.fun/manifest.json", .types = "movie,series" },
         .{ .name = "TMDB", .desc = "Rich movie/series catalog + metadata", .url = "https://tmdb.elfhosted.com/manifest.json", .types = "movie,series" },
         .{ .name = "USA TV Next", .desc = "Live US TV channels", .url = "https://raw.githubusercontent.com/yowmamasita/usa-tv-next/main/manifest.json", .types = "tv" },
         .{ .name = "Streaming Catalogs", .desc = "Trending on Netflix/Disney+/HBO/Prime", .url = "https://7a82163c306e-stremio-netflix-catalog-addon.baby-beamup.club/manifest.json", .types = "movie,series" },
@@ -269,7 +275,7 @@ fn isInstalled(name: []const u8) bool {
 
 /// Install an addon (store its URL for stream queries)
 pub fn installAddon(idx: usize) void {
-    if (idx >= addon_count or installed_count >= 16) return;
+    if (idx >= addon_count or installed_count >= installed_addons.len) return;
     const addon = &addons[idx];
     if (addon.installed) return;
 
@@ -302,6 +308,41 @@ pub fn removeAddon(idx: usize) void {
         installed_addons[i] = installed_addons[i + 1];
     }
     installed_count -= 1;
+}
+
+const CapabilityEntry = struct { key: u64 = 0, serves: bool = false };
+var capability_cache: [64]CapabilityEntry = @splat(.{});
+var capability_next: usize = 0;
+var capability_mutex: @import("../core/sync.zig").Mutex = .{};
+
+/// Whether the addon at `manifest_url` declares a stream resource for this
+/// type/id (stremio_pure.servesStream), fetched once per process. null = the
+/// manifest could not be fetched or parsed (not cached: the addon may recover).
+pub fn servesStream(manifest_url: []const u8, media_type: []const u8, id: []const u8) ?bool {
+    const pure = @import("stremio_pure.zig");
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(manifest_url);
+    hasher.update("\x00");
+    hasher.update(media_type);
+    hasher.update("\x00");
+    hasher.update(id[0..@min(id.len, 2)]); // id family: "tt", "ki"(tsu), …
+    const key = hasher.final() | 1;
+    {
+        capability_mutex.lock();
+        defer capability_mutex.unlock();
+        for (capability_cache) |entry| if (entry.key == key) return entry.serves;
+    }
+    var url_buf: [320]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/manifest.json", .{pure.addonBase(manifest_url)}) catch return null;
+    const buf = alloc.alloc(u8, 256 * 1024) catch return null;
+    defer alloc.free(buf);
+    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 6, .max_response = buf.len }) orelse return null;
+    const serves = pure.servesStream(alloc, body, media_type, id) orelse return null;
+    capability_mutex.lock();
+    defer capability_mutex.unlock();
+    capability_cache[capability_next % capability_cache.len] = .{ .key = key, .serves = serves };
+    capability_next += 1;
+    return serves;
 }
 
 /// Query all installed addons for streams matching an IMDB ID
@@ -345,8 +386,12 @@ pub fn queryStreams(imdb_id: []const u8, media_type: []const u8) void {
                     base_url[0..blen], mtype, imdb,
                 }) catch continue;
 
-                var resp_buf: [64 * 1024]u8 = undefined;
-                const rn = if (@import("reliable_fetch.zig").fetch(url, &resp_buf, .{ .keep_head_on_overflow = true, .timeout_secs = 10, .impersonate = false })) |b| b.len else 0;
+                if (servesStream(base, mtype, imdb) != true) continue;
+                // Heap, and sized for Torrentio's ~300 KB lists: a truncated
+                // head is not parseable JSON.
+                const resp_buf = alloc.alloc(u8, @import("stremio_pure.zig").max_stream_response) catch continue;
+                defer alloc.free(resp_buf);
+                const rn = if (@import("reliable_fetch.zig").fetch(url, resp_buf, .{ .timeout_secs = 10, .impersonate = false })) |b| b.len else 0;
 
                 if (rn < 10) continue;
 

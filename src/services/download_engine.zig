@@ -618,7 +618,7 @@ fn probeOwned(url: []const u8, guard: *StreamGuard) ?ProbeResult {
         .{ .name = "Accept", .value = "*/*" },
     };
     var req = client.request(.GET, uri, .{
-        .redirect_behavior = @enumFromInt(5),
+        .redirect_behavior = @fromBackingInt(@intCast(5)),
         .headers = .{ .accept_encoding = .{ .override = "identity" } },
         .extra_headers = &headers,
     }) catch return null;
@@ -1000,7 +1000,7 @@ fn segmentAttempt(d: *Download, token: u32, si: usize, client: *std.http.Client,
     }
 
     var req = client.request(.GET, uri, .{
-        .redirect_behavior = @enumFromInt(5),
+        .redirect_behavior = @fromBackingInt(@intCast(5)),
         .headers = .{ .accept_encoding = .{ .override = "identity" } },
         .extra_headers = headers_buf[0..hn],
     }) catch {
@@ -1060,12 +1060,12 @@ fn segmentAttempt(d: *Download, token: u32, si: usize, client: *std.http.Client,
         // A single stream operation publishes trickling progress immediately.
         // readSliceShort waits to fill; readVec may return zero after buffering.
         var writer = std.Io.Writer.fixed(buf[0..want]);
-        const n = reader.stream(&writer, .limited(want)) catch |err| switch (err) {
-            error.EndOfStream => 0,
+        const streamed: ?usize = reader.stream(&writer, .limited(want)) catch |err| switch (err) {
+            error.EndOfStream => null,
             else => return .retry,
         };
         guard.stage_ms.store(0, .release);
-        if (n == 0) {
+        const n = streamed orelse {
             // EOF.
             if (seg.len == 0) {
                 // Unknown-size single stream finished: stamp the final size
@@ -1080,7 +1080,8 @@ fn segmentAttempt(d: *Download, token: u32, si: usize, client: *std.http.Client,
             }
             // Short body — server closed early; retry the remainder.
             return .retry;
-        }
+        };
+        if (n == 0) continue;
 
         file.writePositionalAll(io_global.io(), buf[0..n], seg.offset + done) catch {
             d.seg_failed[si].store(true, .release);

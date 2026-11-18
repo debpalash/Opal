@@ -1,4 +1,4 @@
-# VERSION: 4.14
+# VERSION: 4.15
 # AUTHORS: Lima66
 # CONTRIBUTORS: Diego de las Heras (ngosang@hotmail.es)
 
@@ -13,7 +13,9 @@ from novaprinter import prettyPrinter
 
 
 class limetorrents:
-    url = "https://www.limetorrents.cc"
+    # limetorrents.cc / .lol / .info 301 here (2026-11); limetorrents.pro is a parked
+    # look-alike, not a mirror.
+    url = "https://www.limetorrents.fun"
     name = "LimeTorrents"
     supported_categories = {'all': 'all',
                             'anime': 'anime',
@@ -77,6 +79,12 @@ class limetorrents:
 
             if self.column_name == "name" and tag == self.A and self.HREF in params:
                 link = params["href"]
+                # The row's .torrent cache link carries the info-hash, so the
+                # row can be a real magnet instead of a detail-page URL that
+                # needs a second fetch (download_torrent) to become playable.
+                digest = re.search(r"/torrent/([A-Fa-f0-9]{40})\.torrent", link or "")
+                if digest:
+                    self.current_item["btih"] = digest.group(1).lower()
                 if link is not None and link.endswith(".html"):
                     try:
                         safe_link = quote(self.url + link, safe='/:')
@@ -108,6 +116,10 @@ class limetorrents:
                 self.inside_tr = False
                 self.column_name = None
                 if "link" in self.current_item:
+                    btih = self.current_item.pop("btih", None)
+                    if btih:
+                        self.current_item["link"] = "magnet:?xt=urn:btih:{0}&dn={1}".format(
+                            btih, quote(str(self.current_item.get("name", ""))))
                     prettyPrinter(self.current_item)  # type: ignore[arg-type] # refactor later
                     self.page_items += 1
 

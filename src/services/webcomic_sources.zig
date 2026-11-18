@@ -35,7 +35,11 @@ fn get(provider: Provider, base: []const u8, path: []const u8, out: []u8, deadli
     const url = std.fmt.bufPrint(&address, "{s}{s}", .{ std.mem.trimEnd(u8, base, "/"), path }) catch return null;
     var headers: [4096]u8 = undefined;
     const response = request.request(@tagName(provider), url, out, &headers, .{ .base = base, .ttl_ms = 120_000, .validate = if (provider == .poorlydrawnlines) validWordpress else if (provider == .xkcd) (if (std.mem.endsWith(u8, path, "info.0.json")) validJson else validArchive) else (if (std.mem.eql(u8, path, "/comic/rss")) validRss else validPage), .transport = .{ .timeout_secs = @intCast(@max(1, @min(4, @divTrunc(left, 1000)))), .cancel_epoch = cancel, .user_agent = @import("../core/app_meta.zig").user_agent_with_url } });
-    return if (response.ok()) response.body else null;
+    if (response.ok()) return response.body;
+    // SMBC answers its comic pages with HTTP 500 and the real page; accept only
+    // that case, and only when the body is the validated comic page.
+    if (response.failure == .none and pure.readableErrorPage(provider, path, response.status) and validPage(response.body)) return response.body;
+    return null;
 }
 pub fn searchInto(provider: Provider, base: []const u8, query: []const u8, out: []Item, cancel: ?epoch) Reply {
     if (!@import("audio_sources_pure.zig").safeUrl(base)) return .{ .status = .unavailable };

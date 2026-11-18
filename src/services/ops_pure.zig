@@ -684,11 +684,11 @@ pub const ops = [_]Op{
     },
     .{
         .name = "downloads_add_url",
-        .summary = "Download an http(s) URL into the download folder.",
+        .summary = "Download an HTTP(S) file or add a magnet to the torrent engine.",
         .tier = .spend,
         .method = .POST,
         .path = "/download/url",
-        .params = &.{.{ .name = "url", .kind = .string, .desc = "http(s) URL of the file.", .required = true, .max_len = 2048, .url = true }},
+        .params = &.{.{ .name = "url", .kind = .string, .desc = "HTTP(S) file URL or magnet link.", .required = true, .max_len = 2048, .url = true }},
     },
 
     .{

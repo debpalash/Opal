@@ -27,7 +27,7 @@ def test_manga_madara_engine():
     # 2) Pure module exposes the contract: builders, image-attr rule, resolve,
     #    the grid/chapter/page scanners, details + data-id, and the route scheme.
     needed = (
-        "pub fn buildPopularUrl", "pub fn buildSearchUrl", "pub fn buildAjaxBody",
+        "pub fn buildPopularUrl", "pub fn buildSearchUrl", "pub fn buildListingUrl", "pub fn buildAjaxBody",
         "pub fn pickImageAttr", "pub fn resolveUrl", "pub fn parseDetails",
         "pub fn dataIdFromHolder", "pub const SearchIter", "pub const ChapterIter",
         "pub const PageIter", "pub fn parsePages", "pub fn mangaUrlFromRoute",
@@ -48,7 +48,8 @@ def test_manga_madara_engine():
         problems.append("comics.zig does not import manga_madara_pure")
     for call in ("madara.SearchIter", "madara.parseDetails", "madara.ChapterIter",
                  "madara.PageIter", "madara.resolveUrl", "madara.mangaUrlFromRoute",
-                 "madara.buildSearchUrl"):
+                 # search with a query, most-viewed listing for the default feed
+                 "madara.buildListingUrl"):
         if call not in comics:
             problems.append(f"comics.zig does not route through {call}")
 

@@ -25,8 +25,22 @@ optdepends=(
     'onnxruntime: OCR bubble detection'
     'python: voice helper scripts (STT/TTS servers)'
 )
-source=("https://github.com/debpalash/Opal/releases/download/v$pkgver/opal-$pkgver-linux-x86_64.tar.gz")
-sha256sums=('SKIP') # filled by updpkgsums at submission time
+makedepends=('gcc' 'boost' 'pkgconf')
+source=(
+    "https://github.com/debpalash/Opal/releases/download/v$pkgver/opal-$pkgver-linux-x86_64.tar.gz"
+    "Opal-$pkgver.tar.gz::https://github.com/debpalash/Opal/archive/refs/tags/v$pkgver.tar.gz"
+)
+sha256sums=('SKIP' 'SKIP') # filled by updpkgsums at submission time
+
+build() {
+    # The wrapper owns the C++ ABI. Rebuild it against the Arch libtorrent
+    # installed at package build time, without rebuilding the Opal binary.
+    cd "Opal-$pkgver"
+    g++ -std=c++17 -O3 -shared -fPIC -Wl,-soname,libtorrent_wrapper.so \
+        $(pkg-config --cflags libtorrent-rasterbar) src/torrent_wrapper.cpp \
+        -o "$srcdir/opal-$pkgver-linux-x86_64/libtorrent_wrapper.so" \
+        $(pkg-config --libs libtorrent-rasterbar)
+}
 
 package() {
     cd "opal-$pkgver-linux-x86_64"

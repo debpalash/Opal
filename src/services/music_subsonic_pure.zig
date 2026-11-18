@@ -26,6 +26,25 @@ pub const SCHEME = "subsonic:";
 /// Provider rows consumed by a page, before filtering unavailable tracks.
 /// null distinguishes malformed/error responses from a successful empty page.
 pub const SearchResponseKind = enum { jiosaavn, subsonic, jellyfin, plex, audius };
+
+/// Transport for a universal-search request. Public internet catalogs use the
+/// curl seam, exactly as their Music-tab workers do: the in-process std.http
+/// client left Audius silent in universal search (JioSaavn, already on curl,
+/// answered in the same run). Private servers stay on the pooled client.
+pub fn universalUsesCurl(kind: SearchResponseKind) bool {
+    return switch (kind) {
+        .jiosaavn, .audius => true,
+        .subsonic, .jellyfin, .plex => false,
+    };
+}
+
+test "regression: Audius universal search shares the public-catalog transport" {
+    try std.testing.expect(universalUsesCurl(.audius));
+    try std.testing.expect(universalUsesCurl(.jiosaavn));
+    try std.testing.expect(!universalUsesCurl(.subsonic));
+    try std.testing.expect(!universalUsesCurl(.jellyfin));
+    try std.testing.expect(!universalUsesCurl(.plex));
+}
 pub fn pageRowCount(a: std.mem.Allocator, body: []const u8, kind: SearchResponseKind) ?usize {
     var parsed = std.json.parseFromSlice(std.json.Value, a, body, .{}) catch return null;
     defer parsed.deinit();

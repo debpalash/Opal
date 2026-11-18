@@ -106,12 +106,21 @@ fn innerText(scope: []const u8, open: usize) []const u8 {
 /// element carrying the same marker (or end of HTML) — same "needle + next needle
 /// bound" scheme comics/madara use so blocks never bleed together.
 fn classBlock(html: []const u8, from: usize, marker: []const u8) ?struct { block: []const u8, next: usize } {
-    const at = std.mem.indexOfPos(u8, html, from, marker) orelse return null;
-    const open = std.mem.lastIndexOfScalar(u8, html[0..at], '<') orelse return null;
-    const after = at + marker.len;
-    const next_rel = std.mem.indexOfPos(u8, html, after, marker);
-    const block_end = if (next_rel) |nr| (std.mem.lastIndexOfScalar(u8, html[0..nr], '<') orelse html.len) else html.len;
-    return .{ .block = html[open..block_end], .next = block_end };
+    var search = from;
+    while (std.mem.indexOfPos(u8, html, search, marker)) |at| {
+        const after = at + marker.len;
+        // Only an element's own class attribute opens a block (a stylesheet or
+        // script naming the class does not), and a block always ends past its
+        // marker so an iterator can never re-find the same occurrence.
+        const open = madara.classOwner(html, at) orelse {
+            search = after;
+            continue;
+        };
+        const next_rel = std.mem.indexOfPos(u8, html, after, marker);
+        const block_end = if (next_rel) |nr| @max(after, std.mem.lastIndexOfScalar(u8, html[0..nr], '<') orelse html.len) else html.len;
+        return .{ .block = html[open..block_end], .next = block_end };
+    }
+    return null;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -280,6 +289,83 @@ pub const ReadwnIter = struct {
             return .{ .title = title, .url = url, .cover = cover };
         }
         return null;
+    }
+};
+
+/// lightnovelwp listing / search grid: each result is an `article.maindet`
+/// whose `.mdthumb a` carries the work href + `title` and wraps the cover.
+/// (The manga MangaThemesia grid — `.bsx` — is absent on these novel sites, so
+/// reusing its iterator alone returned only the site-logo anchor.)
+pub const LightnovelwpIter = struct {
+    html: []const u8,
+    pos: usize = 0,
+
+    pub fn next(self: *LightnovelwpIter) ?NovelItem {
+        while (classBlock(self.html, self.pos, "maindet")) |blk| {
+            self.pos = blk.next;
+            // `<a` followed by whitespace: the block itself opens with `<article`.
+            var a: usize = 0;
+            while (std.mem.indexOfPos(u8, blk.block, a, "<a")) |at| : (a = at + 2) {
+                if (at + 2 < blk.block.len and isWs(blk.block[at + 2])) {
+                    a = at;
+                    break;
+                }
+            } else continue;
+            const a_end = std.mem.indexOfScalarPos(u8, blk.block, a, '>') orelse continue;
+            const tag = blk.block[a .. a_end + 1];
+            const url = attrVal(tag, "href=") orelse continue;
+            if (url.len == 0) continue;
+            var title = attrVal(tag, "title=") orelse "";
+            if (title.len == 0) {
+                if (std.mem.indexOf(u8, blk.block, "<h2")) |h| title = innerText(blk.block, h);
+            }
+            if (title.len == 0) continue;
+            var cover: []const u8 = "";
+            if (std.mem.indexOfPos(u8, blk.block, a_end, "<img")) |im| {
+                const gt = std.mem.indexOfScalarPos(u8, blk.block, im, '>') orelse blk.block.len;
+                const img = blk.block[im..@min(gt + 1, blk.block.len)];
+                cover = attrVal(img, "data-src=") orelse attrVal(img, "src=") orelse "";
+            }
+            return .{ .title = title, .url = url, .cover = cover };
+        }
+        return null;
+    }
+};
+
+/// lightnovelwp chapter directory: the `div.eplister` list (rows carry
+/// `.epl-num` / `.epl-title`). The manga iterator anchors on the first
+/// "chapterlist"/"bxcl" mention, which on these sites is a stylesheet rule, so
+/// it walked the navigation menu instead. Falls back to the manga container
+/// for older installs without an `.eplister`.
+pub fn lightnovelwpChapters(html: []const u8) themesia.ChapterIter {
+    var from: usize = 0;
+    while (std.mem.indexOfPos(u8, html, from, "eplister")) |at| : (from = at + 8) {
+        if (madara.classOwner(html, at) == null) continue;
+        const end = std.mem.indexOfPos(u8, html, at, "</ul>") orelse html.len;
+        return .{ .html = html, .pos = at, .end = end };
+    }
+    return themesia.chapterIter(html);
+}
+
+/// lightnovelwp search rows: the novel grid when the page has one, otherwise
+/// the legacy MangaThemesia `.bsx` grid some older installs still render.
+pub const LightnovelwpSearch = struct {
+    grid: LightnovelwpIter,
+    legacy: themesia.SearchIter,
+    grid_rows: usize = 0,
+
+    pub fn init(html: []const u8) LightnovelwpSearch {
+        return .{ .grid = .{ .html = html }, .legacy = .{ .html = html } };
+    }
+
+    pub fn next(self: *LightnovelwpSearch) ?NovelItem {
+        if (self.grid.next()) |item| {
+            self.grid_rows += 1;
+            return item;
+        }
+        if (self.grid_rows > 0) return null;
+        const item = self.legacy.next() orelse return null;
+        return .{ .title = item.title, .url = item.url };
     }
 };
 
@@ -476,6 +562,67 @@ const READWN_DETAIL =
     \\  <li><a href="/novel/sample-one/chapter-2.html"><span class="chapter-title">Chapter 2</span><span class="chapter-update">1 day ago</span></a></li>
     \\</ul>
 ;
+
+test "LightnovelwpIter: novel grid rows, not the site logo" {
+    // Shape captured from a live lightnovelwp listing (Nov 2026).
+    const html =
+        \\<style>.maindet .inmain{margin:0}.maindet .mdthumb{float:left}</style>
+        \\<div class="bsx"><a href="https://ln.test/" title="LN Site - Novels"><img src="/logo.png"></a></div>
+        \\<div class="listupd">
+        \\<article class="maindet" itemscope="itemscope"><div class="inmain"><div class="mdthumb">
+        \\<a href="https://ln.test/hero-saves-beauty/" title="Hero saves Beauty" class="tip" rel="2372">
+        \\<img src="https://i2.wp.com/ln.test/up/hero.png?resize=151,215" class="ts-post-image"/></a></div>
+        \\<div class="mdinfo"><h2 itemprop="headline"><a href="https://ln.test/hero-saves-beauty/">Hero saves Beauty</a></h2></div></div></article>
+        \\<article class="maindet"><div class="mdthumb"><a href="/second/"><img data-src="/c2.jpg" src="/lazy.gif"></a></div>
+        \\<h2><a href="/second/">Second Work</a></h2></article>
+        \\</div>
+    ;
+    var it = LightnovelwpSearch.init(html);
+    const a = it.next().?;
+    try std.testing.expectEqualStrings("Hero saves Beauty", a.title);
+    try std.testing.expectEqualStrings("https://ln.test/hero-saves-beauty/", a.url);
+    try std.testing.expectEqualStrings("https://i2.wp.com/ln.test/up/hero.png?resize=151,215", a.cover);
+    const b = it.next().?;
+    try std.testing.expectEqualStrings("Second Work", b.title);
+    try std.testing.expectEqualStrings("/second/", b.url);
+    try std.testing.expectEqualStrings("/c2.jpg", b.cover);
+    try std.testing.expect(it.next() == null); // the .bsx logo anchor is never a result
+}
+
+test "lightnovelwpChapters: the eplister rows, not the stylesheet or the nav menu" {
+    // Shape captured from a live lightnovelwp work page (Nov 2026).
+    const html =
+        \\<style>.bxcl ul li{margin:0}.eplister ul li a{display:flex}</style>
+        \\<ul class="menu"><li><a href="https://ln.test/genre/action/">Action</a></li></ul>
+        \\<div class="eplister eplisterfull"><div class="ephead"><div class="eph-num">Vol/Ch</div></div><ul>
+        \\<li data-ID="9259"><a href="https://ln.test/hero-chapter-5/"><div class="epl-num">Ch. 5</div><div class="epl-title">Hero chapter 5</div><div class="epl-date">October 31, 2021</div></a></li>
+        \\<li data-ID="7396"><a href="https://ln.test/hero-chapter-4/"><div class="epl-num">Ch. 4</div><div class="epl-title">Hero chapter 4</div></a></li>
+        \\</ul></div><ul><li><a href="/footer">Footer</a></li></ul>
+    ;
+    var it = lightnovelwpChapters(html);
+    const a = it.next().?;
+    try std.testing.expectEqualStrings("https://ln.test/hero-chapter-5/", a.url);
+    try std.testing.expectEqualStrings("Hero chapter 5", a.name);
+    try std.testing.expectEqualStrings("https://ln.test/hero-chapter-4/", it.next().?.url);
+    try std.testing.expect(it.next() == null);
+    // No eplister → the shared manga container still applies.
+    var legacy = lightnovelwpChapters("<div id=\"chapterlist\"><ul><li><a href=\"/c1/\"><span class=\"chapternum\">Chapter 1</span></a></li></ul></div>");
+    try std.testing.expectEqualStrings("/c1/", legacy.next().?.url);
+}
+
+test "LightnovelwpSearch: legacy .bsx grid still works when there is no novel grid" {
+    var it = LightnovelwpSearch.init("<div class=\"bsx\"><a href=\"/series/old/\" title=\"Old Theme\"><img src=\"/o.jpg\"></a></div>");
+    const a = it.next().?;
+    try std.testing.expectEqualStrings("Old Theme", a.title);
+    try std.testing.expectEqualStrings("/series/old/", a.url);
+    try std.testing.expect(it.next() == null);
+}
+
+test "regression: stylesheet mentions cannot stall or fake a readwn row" {
+    var it = ReadwnIter{ .html = "<style>.novel-item a{x:1}.novel-item img{y:2}</style><a href='/nav'>Nav</a><li class=\"novel-item\"><a href=\"/novel/a.html\" title=\"A\"><h4 class=\"novel-title\">A</h4></a></li>" };
+    try std.testing.expectEqualStrings("/novel/a.html", it.next().?.url);
+    try std.testing.expect(it.next() == null);
+}
 
 test "readwnDetails: title / author / summary" {
     const d = readwnDetails(READWN_DETAIL);

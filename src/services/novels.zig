@@ -918,7 +918,8 @@ fn fetchLightnovelwp(query: []const u8, my_gen: u32, start_hint: usize, page: u3
     const start = novelAppendStart(my_gen, start_hint);
     if (search_request.current() != my_gen) return 0;
 
-    var it = nsp.themesia.SearchIter{ .html = body };
+    // Novel grid (`article.maindet`) first; legacy `.bsx` grid only without one.
+    var it = nsp.LightnovelwpSearch.init(body);
     var n: usize = 0;
     while (it.next()) |item| {
         if (start + n >= @min(MAX_RESULTS, start + PAGE_SIZE)) break;
@@ -1475,7 +1476,7 @@ fn chaptersLightnovelwp(job: ReaderJob) void {
     defer parse_mutex.unlock();
     if (chapters_gen.load(.acquire) != my_gen) return;
 
-    var it = nsp.themesia.chapterIter(body);
+    var it = nsp.lightnovelwpChapters(body);
     var probe = it;
     var total: usize = 0;
     while (probe.next()) |ch| {
@@ -1891,12 +1892,25 @@ fn textSourced(job: ReaderJob) void {
         return;
     }
 
-    const body = scrapeHtml(chapter_url, 2 * 1024 * 1024) orelse {
+    var body = scrapeHtml(chapter_url, 2 * 1024 * 1024) orelse {
         if (text_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
         return;
     };
     defer alloc.free(body);
     if (text_gen.load(.acquire) != my_gen) return;
+
+    // NovelFire's chapter URL now answers a stub that hands the reader to a
+    // sibling domain; follow it for the same chapter (validated in the pure fn).
+    if (job.source == .novelfire and nsp.chapterContentHtml(body, .novelfire) == null) {
+        var moved_buf: [1024]u8 = undefined;
+        if (expanded.novelFireRelocation(&moved_buf, chapter_url, body)) |moved| {
+            if (scrapeHtml(moved, 2 * 1024 * 1024)) |relocated| {
+                alloc.free(body);
+                body = relocated;
+            }
+            if (text_gen.load(.acquire) != my_gen) return;
+        }
+    }
 
     const content = nsp.chapterContentHtml(body, job.source) orelse {
         if (text_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;

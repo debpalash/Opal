@@ -1,4 +1,4 @@
-# VERSION: 1.6
+# VERSION: 1.7
 # AUTHORS: LightDestory (https://github.com/LightDestory) achernet (https://github.com/achernet)
 import concurrent.futures
 import re
@@ -12,6 +12,9 @@ from helpers import retrieve_url, download_file
 from novaprinter import prettyPrinter, SearchResults
 
 DATABASE_URL = "https://academictorrents.com/database.xml"
+MAX_RESULTS = 40       # rows per search; each costs one detail-page fetch
+DETAIL_WORKERS = 8
+DETAIL_DEADLINE = 12   # seconds for all detail fetches together
 home = str(Path.home())
 system_paths = {
     "win32": f"{home}/AppData/Roaming",
@@ -92,7 +95,8 @@ class academictorrents(object):
             "engine_url": self.url,
             "desc_link": torrent.findtext("link"),
         }
-        torrent_desc = retrieve_url(f"{data['desc_link']}/tech")
+        # attempts=1: one fetch per row, so a retry multiplies the whole search.
+        torrent_desc = retrieve_url(f"{data['desc_link']}/tech", attempts=1)
         peer_data = re.search(
             "<tr><td>Mirrors</td><td>(\\d+)\\s*complete,\\s*(\\d+)\\s*downloading",
             torrent_desc,
@@ -106,9 +110,35 @@ class academictorrents(object):
         added_date_data = re.search(
             "<tr><td>Added</td><td>([^<]+)</td></tr>", torrent_desc
         )
-        date_str = added_date_data.group(1)
-        data["pub_date"] = int(datetime.fromisoformat(date_str).timestamp())
+        try:
+            data["pub_date"] = int(datetime.fromisoformat(added_date_data.group(1)).timestamp())
+        except (AttributeError, ValueError):
+            data["pub_date"] = -1  # detail page missing or reshaped: keep the row
         return SearchResults(**data)
+
+    def basic_result(self, torrent) -> SearchResults:
+        """The row the catalogue alone supports, for when the detail page is slow."""
+        return SearchResults(
+            link=f"{self.url}download/{torrent.findtext('infohash')}.torrent",
+            name=torrent.findtext("title"), size=torrent.findtext("size"),
+            seeds=-1, leech=-1, engine_url=self.url,
+            desc_link=torrent.findtext("link"), pub_date=-1)
+
+    def select(self, items):
+        """At most MAX_RESULTS matches, title matches before description-only.
+
+        Every match used to get its own detail-page fetch with no cap: a broad
+        term matched hundreds of datasets and the engine ran until nova2 killed
+        it at the timeout.
+        """
+        terms = [f for f in self.filters if f]
+        in_title, in_desc = [], []
+        for item in items:
+            if not self._torrent_filter(item):
+                continue
+            title = (item.findtext("title") or "").lower()
+            (in_title if all(f in title for f in terms) else in_desc).append(item)
+        return (in_title + in_desc)[:MAX_RESULTS]
 
     def download_torrent(self, info):
         print(download_file(info))
@@ -116,12 +146,20 @@ class academictorrents(object):
     def search(self, what, cat="all"):
         self.filters = [f.lower() for f in re.split("%20|\\s", str(what))]
         db = self._retrieve_database()
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = []
-            for torrent in db.findall("channel/item"):
-                if self._torrent_filter(torrent):
-                    futures.append(executor.submit(self.resolve_search_result, torrent))
-            for future in concurrent.futures.as_completed(futures):
-                result = future.result()
-                if self.output:
-                    prettyPrinter(result)
+        chosen = self.select(db.findall("channel/item"))
+        if not chosen:
+            return
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=DETAIL_WORKERS)
+        futures = {executor.submit(self.resolve_search_result, t): t for t in chosen}
+        done, pending = concurrent.futures.wait(futures, timeout=DETAIL_DEADLINE)
+        for future in futures:  # catalogue order, not completion order
+            torrent = futures[future]
+            try:
+                result = future.result() if future in done else self.basic_result(torrent)
+            except Exception:
+                result = self.basic_result(torrent)
+            if self.output and result.get("name") and result.get("size"):
+                prettyPrinter(result)
+        for future in pending:
+            future.cancel()
+        executor.shutdown(wait=False)

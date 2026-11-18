@@ -95,6 +95,16 @@ pub fn buildSearchUrl(out: []u8, base: []const u8, query: []const u8, page: u32)
     return std.fmt.bufPrint(out, "{s}/page/{d}/?s={s}&post_type=wp-manga", .{ b, page, enc[0..n] }) catch null;
 }
 
+/// The listing a grid page asks for: text search when there is a query,
+/// otherwise the most-viewed listing — so an installed Madara source also
+/// fills the default (empty-query) Browse feed instead of staying blank until
+/// the user types something.
+pub fn buildListingUrl(out: []u8, base: []const u8, sub: []const u8, query: []const u8, page: u32) ?[]const u8 {
+    if (query.len > 0) return buildSearchUrl(out, base, query, page);
+    if (sub.len == 0 or std.mem.indexOfAny(u8, sub, "/?#& \r\n") != null) return null;
+    return buildPopularUrl(out, base, sub, page, .views);
+}
+
 /// The `admin-ajax.php` form body that fetches the chapter list for a manga whose
 /// `data-id` came from `dataIdFromHolder`. The id is a numeric WordPress post id;
 /// reject anything with a control/`&` char so it can't smuggle an extra field.
@@ -211,12 +221,39 @@ fn innerText(scope: []const u8, open: usize) []const u8 {
 /// element carrying the same class (or end of HTML) — matching the readallcomics
 /// scanner's "needle + next needle bound" so blocks never bleed together.
 fn classBlock(html: []const u8, from: usize, class_sub: []const u8) ?struct { block: []const u8, next: usize } {
-    const at = std.mem.indexOfPos(u8, html, from, class_sub) orelse return null;
+    var search = from;
+    while (std.mem.indexOfPos(u8, html, search, class_sub)) |at| {
+        const after = at + class_sub.len;
+        const open = classOwner(html, at) orelse {
+            search = after;
+            continue;
+        };
+        const next_rel = std.mem.indexOfPos(u8, html, after, class_sub);
+        // Never end before this occurrence: two mentions with no `<` between
+        // them (a stylesheet rule list) used to yield `next <= from`, so the
+        // iterators re-found the same mention forever and hung the worker.
+        const block_end = if (next_rel) |nr| @max(after, std.mem.lastIndexOfScalar(u8, html[0..nr], '<') orelse html.len) else html.len;
+        return .{ .block = html[open..block_end], .next = block_end };
+    }
+    return null;
+}
+
+/// The opening `<` of the element whose `class` attribute value contains the
+/// byte at `at`, or null when `at` is a mention somewhere else: a stylesheet
+/// rule, a script, or another attribute (`href=".../wp-manga-chapter-report/…"`,
+/// `name="wp-manga-chapter"`). Those mentions used to count as result/chapter
+/// blocks, so a details page with no inline chapters looked like it had some
+/// and the real AJAX chapter list was never requested.
+pub fn classOwner(html: []const u8, at: usize) ?usize {
     const open = std.mem.lastIndexOfScalar(u8, html[0..at], '<') orelse return null;
-    const after = at + class_sub.len;
-    const next_rel = std.mem.indexOfPos(u8, html, after, class_sub);
-    const block_end = if (next_rel) |nr| (std.mem.lastIndexOfScalar(u8, html[0..nr], '<') orelse html.len) else html.len;
-    return .{ .block = html[open..block_end], .next = block_end };
+    const tag = html[open..at];
+    if (std.mem.indexOfScalar(u8, tag, '>') != null) return null;
+    const attr = std.mem.lastIndexOf(u8, tag, "class=") orelse return null;
+    const value = tag[attr + "class=".len ..];
+    if (value.len == 0) return open; // unquoted value starting at `at`
+    const quote = value[0];
+    if (quote != '"' and quote != '\'') return if (std.mem.indexOfAny(u8, value, " \t\r\n") == null) open else null;
+    return if (std.mem.indexOfScalar(u8, value[1..], quote) == null) open else null;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -287,25 +324,47 @@ pub const SearchItem = struct {
     cover: []const u8,
 };
 
-/// Iterate a Madara search/listing grid. Each result is a `div.page-item-detail`
-/// (or `.manga__item`) block carrying `div.post-title a` (href + title) and an
-/// `<img>` cover.
+/// Class markers that open one result block: listing grids use
+/// `page-item-detail`, WordPress search results `c-tabs-item__content` (which
+/// carry no `page-item-detail` on stock Madara), alternate themes `manga__item`.
+const ITEM_CLASSES = [_][]const u8{ "page-item-detail", "c-tabs-item__content", "manga__item" };
+
+const ItemMarker = struct { at: usize, len: usize };
+
+fn nextItemMarker(html: []const u8, from: usize) ?ItemMarker {
+    var best: ?ItemMarker = null;
+    for (ITEM_CLASSES) |cls| {
+        const at = std.mem.indexOfPos(u8, html, from, cls) orelse continue;
+        if (best == null or at < best.?.at) best = .{ .at = at, .len = cls.len };
+    }
+    return best;
+}
+
+/// Iterate a Madara search/listing grid. Each result is a `div.page-item-detail`,
+/// a search-page `div.c-tabs-item__content`, or a `.manga__item` block carrying
+/// `div.post-title a` (href + title) and an `<img>` cover. A block ends at the
+/// next result marker of any kind; every step advances past its marker.
 pub const SearchIter = struct {
     html: []const u8,
     pos: usize = 0,
 
     pub fn next(self: *SearchIter) ?SearchItem {
-        while (true) {
-            const blk = classBlock(self.html, self.pos, "page-item-detail") orelse {
-                // Fall back to the alternate item class if the primary isn't present.
-                const alt = classBlock(self.html, self.pos, "manga__item") orelse return null;
-                self.pos = alt.next;
-                if (parseItem(alt.block)) |it| return it;
+        while (nextItemMarker(self.html, self.pos)) |m| {
+            const after = m.at + m.len;
+            // Only an element's own class attribute opens a block; a stylesheet
+            // or script that merely names the class does not.
+            const open = classOwner(self.html, m.at) orelse {
+                self.pos = after;
                 continue;
             };
-            self.pos = blk.next;
-            if (parseItem(blk.block)) |it| return it;
+            const end = if (nextItemMarker(self.html, after)) |n|
+                @max(after, std.mem.lastIndexOfScalar(u8, self.html[0..n.at], '<') orelse after)
+            else
+                self.html.len;
+            self.pos = end;
+            if (parseItem(self.html[open..end])) |it| return it;
         }
+        return null;
     }
 };
 
@@ -575,6 +634,16 @@ test "buildSearchUrl: page 1 omits /page/1/, query form-encoded" {
     try std.testing.expect(buildSearchUrl(&buf, "https://s.test", "", 1) == null);
 }
 
+test "buildListingUrl: query searches, empty query browses most-viewed" {
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings("https://s.test/?s=one+piece&post_type=wp-manga", buildListingUrl(&buf, "https://s.test/", "manga", "one piece", 1).?);
+    try std.testing.expectEqualStrings("https://s.test/manga/?m_orderby=views", buildListingUrl(&buf, "https://s.test/", "manga", "", 1).?);
+    try std.testing.expectEqualStrings("https://s.test/manga/page/3/?m_orderby=views", buildListingUrl(&buf, "https://s.test", "manga", "", 3).?);
+    // A configured sub-path cannot smuggle a query or another path.
+    try std.testing.expect(buildListingUrl(&buf, "https://s.test", "manga/?x=1", "", 1) == null);
+    try std.testing.expect(buildListingUrl(&buf, "https://s.test", "", "", 1) == null);
+}
+
 test "buildAjaxBody / buildAjaxUrl" {
     var buf: [128]u8 = undefined;
     try std.testing.expectEqualStrings("action=manga_get_chapters&manga=1234", buildAjaxBody(&buf, "1234").?);
@@ -708,6 +777,57 @@ test "SearchIter: alternate .manga__item class + relative cover resolves" {
     try std.testing.expectEqualStrings("https://s.test/manga/x/", resolveUrl("https://s.test", a.url, &out));
     try std.testing.expectEqualStrings("https://s.test/covers/x.jpg", resolveUrl("https://s.test", a.cover, &out));
     try std.testing.expect(it.next() == null);
+}
+
+test "SearchIter: stock WordPress search rows (c-tabs-item__content) are results" {
+    // Captured shape from a live Madara search page (Nov 2026): the search
+    // template has no `page-item-detail`, so search returned zero rows.
+    const html =
+        \\<div class="row c-tabs-item__content">
+        \\  <div class="tab-thumb c-image-hover"><a href="https://s.test/manga/one-piece-episode-a/" title="One Piece Episode A">
+        \\    <img src="https://s.test/up/a-193x278.jpg" srcset="https://s.test/up/a-193x278.jpg 193w, https://s.test/up/a-125x180.jpg 125w" class="img-responsive"/></a></div>
+        \\  <div class="tab-summary"><div class="post-title"><h3 class="h4"><a href="https://s.test/manga/one-piece-episode-a/">One Piece Episode A</a></h3></div></div>
+        \\</div>
+        \\<div class="row c-tabs-item__content">
+        \\  <div class="tab-summary"><div class="post-title"><h3 class="h4"><a href="https://s.test/manga/one-piece-party/">One Piece Party</a></h3></div></div>
+        \\</div>
+    ;
+    var it = SearchIter{ .html = html };
+    const a = it.next().?;
+    try std.testing.expectEqualStrings("One Piece Episode A", a.title);
+    try std.testing.expectEqualStrings("https://s.test/manga/one-piece-episode-a/", a.url);
+    try std.testing.expectEqualStrings("https://s.test/up/a-193x278.jpg", a.cover);
+    try std.testing.expectEqualStrings("https://s.test/manga/one-piece-party/", it.next().?.url);
+    try std.testing.expect(it.next() == null);
+}
+
+test "regression: stylesheet mentions of the item class cannot stall or swallow results" {
+    // Live Madara pages name `.page-item-detail` several times inside one
+    // <style> rule with no `<` between mentions. The block iterator then made
+    // no progress and spun forever (search worker hang).
+    const html =
+        \\<style>.page-listing-item .page-item-detail .item-summary{margin:0}.page-listing-item .page-item-detail .chapter{x:1}
+        \\.wp-manga-chapter a{color:red}.wp-manga-chapter span{color:blue}</style>
+        \\<div class="row c-tabs-item__content"><div class="post-title"><h3><a href="/manga/real/">Real</a></h3></div></div>
+        \\<link href='https://s.test/plugins/wp-manga-chapter-report/report.css'><a href='#decoy'>Info</a>
+        \\<input type="hidden" name="wp-manga-chapter" value=""/><a href="#decoy2">x</a>
+        \\<ul><li class="wp-manga-chapter"><a href="/manga/real/chapter-1/">Chapter 1</a></li></ul>
+    ;
+    var it = SearchIter{ .html = html };
+    try std.testing.expectEqualStrings("/manga/real/", it.next().?.url);
+    try std.testing.expect(it.next() == null);
+    // Non-class mentions (plugin asset URL, form field name) are not chapters:
+    // without real inline chapters the caller must fall through to the AJAX list.
+    var none = ChapterIter{ .html = "<link href='/plugins/wp-manga-chapter-report/a.css'><a href='#decoy'>Info</a><input name=\"wp-manga-chapter\"><a href='#d2'>x</a>" };
+    try std.testing.expect(none.next() == null);
+    var chapters = ChapterIter{ .html = html };
+    var steps: usize = 0;
+    var last: []const u8 = "";
+    while (chapters.next()) |ch| : (steps += 1) {
+        try std.testing.expect(steps < 8);
+        last = ch.url;
+    }
+    try std.testing.expectEqualStrings("/manga/real/chapter-1/", last);
 }
 
 const DETAILS_HTML =

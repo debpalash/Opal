@@ -645,7 +645,7 @@ fn fetchComicThread(gen: u32) void {
     // images), so route BEFORE the generic scraper, exactly like MangaDex. Once
     // page_urls are staged, downloadPages() takes over unchanged.
     if (heancms.slugFromRoute(url)) |slug| {
-        const ok = loadHeancmsPages(slug);
+        const ok = loadHeancmsPages(slug, heancms.chapterIdFromRoute(url));
         state.app.comic.is_loading.store(false, .release);
         if (!ok) {
             logs.pushLog("error", "comics", "HeanCms chapter failed to load", true);
@@ -978,7 +978,7 @@ fn heancmsCdn(out: []u8) []const u8 {
 ///   1. /series/{slug}                              → the numeric series id + title
 ///   2. /chapter/query?series_id={id}&perPage=1000  → the first FREE chapter slug
 ///   3. /series/{slug}/{chapterSlug}                → one image URL per page
-fn loadHeancmsPages(slug: []const u8) bool {
+fn loadHeancmsPages(slug: []const u8, chapter_id: ?[]const u8) bool {
     var api_buf: [256]u8 = undefined;
     const api = heancmsApiHost(&api_buf) orelse {
         logs.pushLog("warn", "comics", "HeanCms: source not installed (inert)", false);
@@ -986,6 +986,13 @@ fn loadHeancmsPages(slug: []const u8) bool {
     };
     var cdn_buf: [512]u8 = undefined;
     const cdn = heancmsCdn(&cdn_buf);
+
+    // Iken first — every catalog site that still answers moved to it (Nov 2026).
+    // null ⇒ the host did not answer in the Iken shape → legacy HeanCms chain.
+    if (loadIkenPages(api, cdn, slug, chapter_id)) |ok| return ok;
+
+    // Chapter-specific routes must never fall back to the legacy first chapter.
+    if (chapter_id != null) return false;
 
     // ── 1. Series detail → numeric id (+ title) ──
     var detail_url_buf: [512]u8 = undefined;
@@ -1074,24 +1081,110 @@ fn loadHeancmsPages(slug: []const u8) bool {
     }
     if (count == 0) return false;
     state.app.comic.page_count = count;
+    setHeancmsTitle(series_title_buf[0..series_title_len], chap_name_buf[0..chap_name_len]);
+    return true;
+}
 
-    // Reader header: "Series · Chapter N". The card click already staged the
-    // series title; prefer it, else the detail title, else "HeanCms".
+/// Reader header: "Series · Chapter N". The card click already staged the
+/// series title; prefer the fresh detail title so chapter changes do not append
+/// their label to the previous chapter header.
+fn setHeancmsTitle(series_title: []const u8, chapter_label: []const u8) void {
     var t_buf: [320]u8 = undefined;
     const existing = state.app.comic.title[0..state.app.comic.title_len];
-    const base_title: []const u8 = if (existing.len > 0)
+    const base_title: []const u8 = if (series_title.len > 0)
+        series_title
+    else if (existing.len > 0)
         existing
-    else if (series_title_len > 0)
-        series_title_buf[0..series_title_len]
     else
         "HeanCms";
-    const t = if (chap_name_len > 0)
-        std.fmt.bufPrint(&t_buf, "{s} · {s}", .{ base_title, chap_name_buf[0..chap_name_len] }) catch base_title
-    else
-        base_title;
+    const t = heancms.readerTitle(&t_buf, base_title, chapter_label);
     const tl = @min(t.len, state.app.comic.title.len);
-    @memcpy(state.app.comic.title[0..tl], t[0..tl]);
+    // `t` may alias comic.title (base_title == existing) — copy is overlap-safe.
+    std.mem.copyForwards(u8, state.app.comic.title[0..tl], t[0..tl]);
     state.app.comic.title_len = tl;
+}
+
+/// Iken reader chain (the API the HeanCms sites migrated to), same contract as
+/// loadHeancmsPages. Returns null when the host does not speak Iken (caller
+/// falls back to the legacy chain), else whether pages were staged.
+///   1. /api/post?postSlug={slug}                       → numeric post id + title
+///   2. /api/chapters?postId={id}&take=100&order=asc    → first FREE chapter id
+///   3. /api/chapter?postId={id}&chapterId={cid}        → images[].url
+fn loadIkenPages(api: []const u8, cdn: []const u8, slug: []const u8, chapter_id: ?[]const u8) ?bool {
+    var url_buf: [512]u8 = undefined;
+    const buf = alloc.alloc(u8, 512 * 1024) catch return false;
+    defer alloc.free(buf);
+
+    // ── 1. Post detail → numeric id (+ title) ──
+    const post_url = heancms.buildIkenPostUrl(&url_buf, api, slug) orelse return null;
+    var n = fetchUrl(post_url, buf);
+    if (workers.isQuitting()) return false;
+    if (n == 0 or !heancms.isIkenPost(buf[0..n])) return null;
+    const series = heancms.parseIkenDetail(buf[0..n]) orelse {
+        logs.pushLog("warn", "comics", "Iken: series is a novel or unparseable", false);
+        return false;
+    };
+    // Copy id + title out before `buf` is reused.
+    var id_buf: [24]u8 = undefined;
+    if (series.id.len > id_buf.len) return false;
+    @memcpy(id_buf[0..series.id.len], series.id);
+    const post_id = id_buf[0..series.id.len];
+    var title_buf: [256]u8 = undefined;
+    const title_len = heancms.jsonUnescape(series.title, &title_buf);
+
+    // Walk ascending pages until the requested chapter and its free successor
+    // are known. Metadata is owned across fetch-buffer reuse.
+    var nav: heancms.IkenNavigation = .{};
+    var skip: usize = 0;
+    while (skip < 100_000) {
+        const chap_url = heancms.buildIkenChapterListPageUrl(&url_buf, api, post_id, skip) orelse return false;
+        n = fetchUrl(chap_url, buf);
+        if (n == 0 or workers.isQuitting()) return false;
+        const count = nav.append(buf[0..n], chapter_id) orelse return false;
+        if (nav.next != null or count < heancms.IKEN_CHAPTER_TAKE) break;
+        skip += count;
+    }
+    const chapter = nav.current orelse {
+        logs.pushLog("warn", "comics", "Iken: requested chapter unavailable or locked", false);
+        return false;
+    };
+    const chap_id = chapter.idSlice();
+    var label_buf: [64]u8 = undefined;
+    const label = std.fmt.bufPrint(&label_buf, "Ch. {s}", .{chapter.numberSlice()}) catch "";
+
+    // ── 3. Page images ──
+    const pages_url = heancms.buildIkenPagesUrl(&url_buf, api, post_id, chap_id) orelse return false;
+    n = fetchUrl(pages_url, buf);
+    if (n == 0 or workers.isQuitting()) return false;
+
+    const max_pages = state.app.comic.page_urls.len; // 128
+    var count: usize = 0;
+    var it = heancms.IkenImageIter.init(buf[0..n]);
+    while (it.next()) |raw_img| {
+        if (count >= max_pages) break;
+        var un_buf: [640]u8 = undefined;
+        const un = heancms.jsonUnescape(raw_img, &un_buf);
+        var page_buf: [640]u8 = undefined;
+        const page_url = heancms.absolutizeCover(cdn, un_buf[0..un], &page_buf) orelse continue;
+        if (page_url.len >= state.app.comic.page_urls[count].len) continue;
+        @memcpy(state.app.comic.page_urls[count][0..page_url.len], page_url);
+        state.app.comic.page_url_lens[count] = page_url.len;
+        count += 1;
+    }
+    if (count == 0) {
+        logs.pushLog("warn", "comics", "Iken: chapter has no readable pages", false);
+        return false;
+    }
+    state.app.comic.page_count = count;
+    if (nav.previous) |previous| {
+        const route = heancms.buildIkenChapterRoute(&state.app.comic.prev_url, slug, previous.idSlice()) orelse "";
+        state.app.comic.prev_url_len = route.len;
+    }
+    if (nav.next) |next| {
+        const route = heancms.buildIkenChapterRoute(&state.app.comic.next_url, slug, next.idSlice()) orelse "";
+        state.app.comic.next_url_len = route.len;
+    }
+    setHeancmsTitle(title_buf[0..title_len], label);
     return true;
 }
 /// The MangaThemesia base URL for a site, or null when the source is not
@@ -1239,8 +1332,9 @@ fn loadMadaraPages(manga_url: []const u8) bool {
     @memcpy(base_buf[0..base.len], base);
     const b = base_buf[0..base.len];
 
-    // ── 1. Details page ──
-    const details_buf = alloc.alloc(u8, 512 * 1024) catch return false;
+    // ── 1. Details page ── (a long-running series lists 1000+ inline chapters:
+    // ~750 KB observed, which overflowed 512 KB into a failed fetch)
+    const details_buf = alloc.alloc(u8, 2 * 1024 * 1024) catch return false;
     defer alloc.free(details_buf);
     const dn = fetchMaybeUnblocked(manga_url, details_buf);
     if (dn == 0 or workers.isQuitting()) return false;
@@ -2489,11 +2583,20 @@ fn fetchHeancmsPage(query: []const u8, page: u32, gen: u32, start: usize) usize 
     var api_buf: [256]u8 = undefined;
     const api = heancmsApiHost(&api_buf) orelse return 0; // inert (not installed)
 
-    var url_buf: [1024]u8 = undefined;
-    const url = heancms.buildQueryUrl(&url_buf, api, query, page, heancms.ORDER_POPULAR) orelse return 0;
-
     const json_buf = alloc.alloc(u8, 512 * 1024) catch return 0;
     defer alloc.free(json_buf);
+    var url_buf: [1024]u8 = undefined;
+
+    // Iken first — the catalog's sites moved to it and 404 the HeanCms /query.
+    // An Iken-shaped body (even with zero hits) is final; anything else falls
+    // through to the legacy endpoint.
+    if (heancms.buildIkenQueryUrl(&url_buf, api, query, page)) |iken_url| {
+        const in = fetchUrl(iken_url, json_buf);
+        if (search_gen.load(.acquire) != gen) return 0;
+        if (in > 0 and heancms.isIkenQuery(json_buf[0..in])) return parseHeancmsResults(json_buf[0..in], gen, start);
+    }
+
+    const url = heancms.buildQueryUrl(&url_buf, api, query, page, heancms.ORDER_POPULAR) orelse return 0;
     const n = fetchUrl(url, json_buf);
     if (n == 0) return 0;
 
@@ -2501,7 +2604,7 @@ fn fetchHeancmsPage(query: []const u8, page: u32, gen: u32, start: usize) usize 
     return parseHeancmsResults(json_buf[0..n], gen, start);
 }
 
-/// Parse a HeanCms `/query` response into sr_* from slot `start`. Returns the
+/// Parse a HeanCms `/query` or Iken `/api/query` response into sr_* from slot `start`. Returns the
 /// number of NEW rows appended. Mirrors parseMangadexResults exactly: worker-
 /// thread only, it NEVER frees textures/pixels — it stamps each slot with `gen`
 /// and writes the cover URL, leaving reclaimStaleCovers() the sole texture owner.
@@ -2513,7 +2616,9 @@ fn parseHeancmsResults(json: []const u8, gen: u32, start_hint: usize) usize {
     defer search_rows_mutex.unlock();
     if (search_gen.load(.acquire) != gen) return 0;
     const start = comicAppendStart(gen, start_hint);
-    const data = heancms.findJsonNode(json, "\"data\"") orelse return 0;
+    // Iken `posts[]` or HeanCms `data[]` — same card pipeline either way.
+    const iken_posts = heancms.ikenPostsNode(json);
+    const data = iken_posts orelse (heancms.findJsonNode(json, "\"data\"") orelse return 0);
     if (data.len == 0 or data[0] != '[') return 0;
 
     // Cover CDN resolved once for the whole page (absolute thumbnails ignore it).
@@ -2524,7 +2629,7 @@ fn parseHeancmsResults(json: []const u8, gen: u32, start_hint: usize) usize {
     var it = heancms.ObjIter{ .buf = data };
     while (it.next()) |obj| {
         if (count >= @min(MAX_SEARCH_RESULTS, start + RESULTS_PER_PAGE)) break;
-        const entry = heancms.parseSeriesEntry(obj) orelse continue;
+        const entry = (if (iken_posts != null) heancms.parseIkenPost(obj) else heancms.parseSeriesEntry(obj)) orelse continue;
 
         var url_buf: [160]u8 = undefined;
         const route = heancms.buildRouteUrl(&url_buf, entry.slug) orelse continue;
@@ -2613,11 +2718,12 @@ fn fetchThemesiaPage(query: []const u8, page: u32, gen: u32, start: usize) usize
 fn fetchMadaraPage(query: []const u8, page: u32, gen: u32, start: usize) usize {
     const base = madaraBase() orelse return 0; // inert (not installed)
     var url_buf: [768]u8 = undefined;
-    const url = madara.buildSearchUrl(&url_buf, base, query, page) orelse return 0;
+    // Search with a query; the most-viewed listing fills the default feed.
+    const url = madara.buildListingUrl(&url_buf, base, madaraSub(), query, page) orelse return 0;
 
     const html_buf = alloc.alloc(u8, 512 * 1024) catch return 0;
     defer alloc.free(html_buf);
-    // buildSearchUrl returns a plain slice; fetchUrl takes one too.
+    // buildListingUrl returns a plain slice; fetchUrl takes one too.
     const n = fetchUrl(url, html_buf);
     if (n == 0) return 0;
 

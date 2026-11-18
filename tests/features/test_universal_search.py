@@ -47,7 +47,9 @@ def test_universal_search_fanout():
             and "Plex search projection keeps playable identity resume and alternate" in plex_pure
             and 'b.path("src/services/plex_pure.zig")' in build,
         # The tab entry point mutates state.app.iptv; the fan-out must not.
-        "live tv uses tab-independent entry": "iptv.searchInto(" in res and "searchIptv(" not in res,
+        "live tv uses tab-independent entry": "iptv.searchUniversal(" in res and "searchIptv(" not in res
+            and "catalog_pure.universalRoute(" in _src("src/services/iptv.zig")
+            and "regression: universal Live TV search covers every installed playlist" in _src("src/services/iptv_catalog_pure.zig"),
         "live tv carries play hints": "item.http_ua" in res and "item.http_referrer" in res,
         "play hints survive the cache": res.count("http_ua") >= 5,
         "routes through pure parsers": all(m in res for m in ("music_subsonic.zig", "radio_pure.zig", "podcasts_pure.zig"))
@@ -310,7 +312,8 @@ def test_public_audio_supervised_transport():
     checks = {
         "compatible independent music API": "return searchIntoWithCancellation(source, query, out, null);" in music,
         "resolver supplies music epoch": "music.searchIntoWithCancellation(source, query, songs[0..quota], workerCancellation())" in resolver,
-        "public JioSaavn supervised four-second request": "if (source == SRC_JIOSAAVN)" in independent
+        "public JioSaavn supervised four-second request": "if (pure.universalUsesCurl(response_kind))" in independent
+            and ".jiosaavn, .audius => true" in _src("src/services/music_subsonic_pure.zig")
             and "reliable_fetch.request(" in independent and ".timeout_secs = 4" in independent
             and ".cancel_epoch = cancel" in independent,
         "private music retains native HTTP": 'else @import("../core/http.zig").fetch(' in independent
@@ -402,3 +405,36 @@ def test_poster_card_polish():
     assert 'if (!active) button.drawFocus();' in shell, 'active sidebar row must not draw focus ring'
     assert 'omnibox_prev_route == .search' in shell, 'stale query must clear when returning to browse'
     return 'pass', 'Card title/NR + sidebar focus + stale-query clear present (GUI boundary)'
+
+
+@test("Universal audio/live sources: resilient podcast fan-out and wider catalogs", "Search")
+def test_audio_live_source_abundance():
+    resolver = _src("src/services/resolver.zig")
+    podcasts = resolver[resolver.index("fn resolvePodcasts("):resolver.index("// Backend: Stremio (query installed addons")]
+    pods_pure = _src("src/services/podcasts_pure.zig")
+    audio_pure = _src("src/services/audio_sources_pure.zig")
+    playlist = _src("src/services/iptv_playlist_pure.zig")
+    sources = _src("src/services/iptv_sources.zig")
+    checks = {
+        # One failed/oversized provider used to mark Podcasts transport_failed.
+        "podcast failure needs every provider down": "tally.transportFailed()" in podcasts
+            and "noteWorkerOutcome(.transport_failed);\n            continue;" not in podcasts
+            and "regression: one failed or empty podcast directory never fails the whole source" in pods_pure,
+        "podcast directories come from the pure registry": "std.enums.values(pp.Directory)" in podcasts
+            and "directory.parse(parsed.value" in podcasts and "fyyd directory rows carry the RSS address" in pods_pure,
+        "installed feeds are probed by head, on the curl seam": ".range = pp.FEED_PROBE_RANGE" in podcasts
+            and ".keep_head_on_overflow = true" in podcasts and "pp.isPodcastFeedBody(body, url)" in podcasts
+            and "http.fetch(" not in podcasts,
+        "live music archive shares the netlabel flow": ".netlabels, .livemusic => {" in _src("src/services/audio_sources.zig")
+            and "resolveInstalledAudio(.livemusic, query)" in resolver
+            and "Live Music Archive concerts reuse the per-track MP3 projection" in audio_pure,
+        "long FAST urls cut at a parameter boundary": "fitUrl(line, c.url.len)" in playlist
+            and "regression: long FAST stream URLs are cut at a parameter boundary" in playlist,
+        "playlist play hints parsed": 'vlcOpt(line, "http-user-agent")' in playlist,
+        "new live tv catalogs registered": all(f'.id = "{i}"' in sources for i in (
+            "xumo-tv", "localnow-tv", "lg-channels", "vizio-tv", "tcl-tv", "kodinerds-de", "paratv-fr", "freeview-nz", "freeview-au")),
+    }
+    failed = [k for k, v in checks.items() if not v]
+    if failed:
+        return "fail", f"Incomplete: {', '.join(failed)}"
+    return "pass", "Podcast fan-out tolerates a failed provider; fyyd, Live Music Archive and 9 Live TV catalogs wired"

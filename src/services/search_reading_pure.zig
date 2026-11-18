@@ -6,6 +6,44 @@ pub const Source = enum { royalroad, novelfire, readnovelfull, standardebooks, w
 pub const MAX_ITEMS = 12;
 pub const Item = @import("reading_provider_pure.zig").Item;
 pub const Result = struct { count: usize = 0, valid_listing: bool = false };
+
+/// Budget for one keyless reading-catalog request from universal search
+/// (Wikisource, Internet Archive texts, VNDB). VNDB was measured answering a
+/// valid 200 after ~10 s on a slow route, which the previous 8 s cap reported
+/// as a transport failure.
+pub const CATALOG_TIMEOUT_SECS: u32 = 15;
+
+/// Sources whose listing sits behind a TLS-fingerprint wall. Royal Road
+/// answered plain curl with HTTP 403 and curl-impersonate with 200, so its
+/// request asks for the browser transport; the rest keep plain curl.
+pub fn wantsBrowserTransport(source: Source) bool {
+    return source == .royalroad;
+}
+
+test "Royal Road asks for the browser transport; open catalogs do not" {
+    try std.testing.expect(wantsBrowserTransport(.royalroad));
+    try std.testing.expect(!wantsBrowserTransport(.standardebooks));
+    try std.testing.expect(!wantsBrowserTransport(.novelfire));
+}
+
+/// How a keyless reading-catalog request that produced no usable body is
+/// reported. A deadline is `timed_out` (slow route, worth retrying), a refusal
+/// is `unavailable` (retrying will not help), anything else is transport.
+pub fn catalogFailure(timed_out: bool, http_status: u16) @import("resolver_lifecycle_pure.zig").SourceStatus {
+    if (timed_out) return .timed_out;
+    if (http_status == 401 or http_status == 403 or http_status == 451) return .unavailable;
+    return .transport_failed;
+}
+test "keyless reading catalog failures keep their real cause" {
+    try std.testing.expectEqual(.timed_out, catalogFailure(true, 0));
+    try std.testing.expectEqual(.timed_out, catalogFailure(true, 200)); // slow body after a 200 head
+    try std.testing.expectEqual(.unavailable, catalogFailure(false, 403));
+    try std.testing.expectEqual(.unavailable, catalogFailure(false, 401));
+    try std.testing.expectEqual(.transport_failed, catalogFailure(false, 0)); // DNS / connect / TLS
+    try std.testing.expectEqual(.transport_failed, catalogFailure(false, 503)); // provider maintenance
+    try std.testing.expectEqual(.transport_failed, catalogFailure(false, 429));
+    try std.testing.expect(CATALOG_TIMEOUT_SECS > 10 and CATALOG_TIMEOUT_SECS <= 20);
+}
 pub fn searchUrl(out: []u8, base: []const u8, source: Source, query: []const u8, page: u32) ?[]const u8 {
     return switch (source) {
         .royalroad, .novelfire, .readnovelfull => expanded.novelSearchUrl(out, base, @tagName(source), query, page),

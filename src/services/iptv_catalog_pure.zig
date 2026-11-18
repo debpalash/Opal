@@ -108,6 +108,71 @@ pub fn qualityBounds(index: u8) QBounds {
     };
 }
 
+/// Where the universal (omnibox) Live TV search reads from.
+pub const UniversalRoute = enum {
+    /// No Live TV source installed at all.
+    unavailable,
+    /// The ingested SQLite catalog — every installed playlist, 36k+ channels.
+    catalog,
+    /// Catalog not ingested yet: iptv-org's streams.json directly.
+    directory,
+    /// Sources are installed but nothing is searchable until the first ingest.
+    pending,
+};
+
+/// The omnibox used to search ONLY iptv-org's streams.json and report
+/// `unavailable` unless that one plugin was installed — the other installed
+/// playlists (Pluto, Samsung TV Plus, Plex, Free-TV, …) were invisible to it.
+pub fn universalRoute(any_installed: bool, has_directory: bool, catalog_rows: usize) UniversalRoute {
+    if (catalog_rows > 0) return .catalog;
+    if (has_directory) return .directory;
+    return if (any_installed) .pending else .unavailable;
+}
+
+fn startsWordCI(name: []const u8, query: []const u8) bool {
+    if (query.len == 0 or query.len > name.len) return false;
+    var i: usize = 0;
+    while (i + query.len <= name.len) : (i += 1) {
+        if (i > 0 and std.ascii.isAlphanumeric(name[i - 1])) continue;
+        if (std.ascii.eqlIgnoreCase(name[i..][0..query.len], query)) return true;
+    }
+    return false;
+}
+
+/// Match strength of a channel name: 0 = starts with the query, 1 = a word
+/// starts with it, 2 = substring only. The catalog page is alphabetical, so
+/// without this "news" lists "ABC Kids News-ish" rows ahead of "News 12".
+pub fn matchRank(name: []const u8, query: []const u8) u8 {
+    if (query.len <= name.len and std.ascii.eqlIgnoreCase(name[0..query.len], query)) return 0;
+    return if (startsWordCI(name, query)) 1 else 2;
+}
+
+/// Collapse a catalog page for the omnibox: drop rows whose stream URL already
+/// appeared (iptv-org and its full index list the same stream), then order by
+/// matchRank, stable within a rank. Returns the kept count (≤ rows.len).
+pub fn rankUniversal(rows: []p.IptvChannel, query: []const u8) usize {
+    var n: usize = 0;
+    outer: for (rows) |row| {
+        const url = row.url[0..row.url_len];
+        if (url.len == 0) continue;
+        for (rows[0..n]) |kept| {
+            if (std.mem.eql(u8, kept.url[0..kept.url_len], url)) continue :outer;
+        }
+        rows[n] = row;
+        n += 1;
+    }
+    // Stable insertion sort by rank; a page is a few dozen rows.
+    var i: usize = 1;
+    while (i < n) : (i += 1) {
+        const row = rows[i];
+        const rank = matchRank(row.name[0..row.name_len], query);
+        var j = i;
+        while (j > 0 and matchRank(rows[j - 1].name[0..rows[j - 1].name_len], query) > rank) : (j -= 1) rows[j] = rows[j - 1];
+        rows[j] = row;
+    }
+    return n;
+}
+
 fn containsCI(haystack: []const u8, needle: []const u8) bool {
     if (needle.len == 0) return false;
     if (needle.len > haystack.len) return false;
@@ -190,4 +255,43 @@ test "column count matches the COLS list" {
         if (ch == ',') n += 1;
     }
     try std.testing.expectEqual(COL_COUNT, n);
+}
+
+fn testChannel(name: []const u8, url: []const u8) p.IptvChannel {
+    var c: p.IptvChannel = .{};
+    @memcpy(c.name[0..name.len], name);
+    c.name_len = name.len;
+    @memcpy(c.url[0..url.len], url);
+    c.url_len = url.len;
+    return c;
+}
+
+test "regression: universal Live TV search covers every installed playlist, not only iptv-org" {
+    // An ingested catalog always wins — it holds all installed sources.
+    try std.testing.expectEqual(UniversalRoute.catalog, universalRoute(true, true, 36000));
+    try std.testing.expectEqual(UniversalRoute.catalog, universalRoute(true, false, 12));
+    // Before the first ingest the iptv-org directory still answers.
+    try std.testing.expectEqual(UniversalRoute.directory, universalRoute(true, true, 0));
+    // Playlists installed without iptv-org are pending, never "unavailable".
+    try std.testing.expectEqual(UniversalRoute.pending, universalRoute(true, false, 0));
+    try std.testing.expectEqual(UniversalRoute.unavailable, universalRoute(false, false, 0));
+}
+
+test "universal ranking dedupes mirrored streams and puts name-prefix matches first" {
+    var rows = [_]p.IptvChannel{
+        testChannel("ABC Kids Newsroom", "https://a/1.m3u8"),
+        testChannel("BBC News", "https://a/2.m3u8"),
+        testChannel("BBC News", "https://a/2.m3u8"), // same stream from a second source
+        testChannel("News 12 New York", "https://a/3.m3u8"),
+        testChannel("", "https://a/4.m3u8"),
+        testChannel("No URL News", ""),
+    };
+    const n = rankUniversal(&rows, "news");
+    try std.testing.expectEqual(@as(usize, 4), n);
+    try std.testing.expectEqualStrings("News 12 New York", rows[0].name[0..rows[0].name_len]);
+    try std.testing.expectEqualStrings("ABC Kids Newsroom", rows[1].name[0..rows[1].name_len]);
+    try std.testing.expectEqualStrings("BBC News", rows[2].name[0..rows[2].name_len]);
+    try std.testing.expectEqual(@as(u8, 0), matchRank("News 12", "NEWS"));
+    try std.testing.expectEqual(@as(u8, 1), matchRank("BBC News", "news"));
+    try std.testing.expectEqual(@as(u8, 2), matchRank("Renews", "news"));
 }

@@ -250,6 +250,42 @@ pub fn searchInto(query: []const u8, out: []pure.IptvChannel) usize {
     return pure.fillRanked(body, out, filters, ctx);
 }
 
+pub const UniversalSearch = struct { count: usize = 0, route: catalog_pure.UniversalRoute = .unavailable };
+
+/// Tab-independent omnibox search over EVERY installed Live TV source.
+///
+/// `searchInto` only knows iptv-org's streams.json, so Pluto / Samsung TV Plus /
+/// Plex / Free-TV and the other installed playlists never reached universal
+/// search. The ingested catalog holds all of them; read it when it has rows and
+/// fall back to the directory only before the first ingest (which this kicks,
+/// exactly as opening the Live TV tab would — the catalog is empty, so there is
+/// no browsing state to disturb). Worker-thread only.
+pub fn searchUniversal(query: []const u8, out: []pure.IptvChannel) UniversalSearch {
+    if (query.len == 0 or out.len == 0) return .{};
+    const route = catalog_pure.universalRoute(anySourceInstalled(), iptvBase() != null, catalog.count(.{ .nsfw_allowed = true }));
+    switch (route) {
+        .unavailable => return .{},
+        .pending => {
+            refreshAllSources(false);
+            return .{ .route = route };
+        },
+        .directory => {
+            refreshAllSources(false);
+            return .{ .count = searchInto(query, out), .route = route };
+        },
+        .catalog => {
+            // Over-read one alphabetical page so mirrored streams can collapse
+            // and prefix matches can rise before the caller's cap applies.
+            const page = alloc.alloc(pure.IptvChannel, out.len * 4) catch return .{ .route = route };
+            defer alloc.free(page);
+            const got = catalog.queryPage(page, 0, .{ .text = query, .nsfw_allowed = !state.app.nsfw_filter_enabled });
+            const kept = @min(catalog_pure.rankUniversal(page[0..got], query), out.len);
+            @memcpy(out[0..kept], page[0..kept]);
+            return .{ .count = kept, .route = route };
+        },
+    }
+}
+
 pub fn searchIptv(query: []const u8) void {
     if (query.len == 0) return;
     // A search satisfies "page opens with content" — never let the one-shot

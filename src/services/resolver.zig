@@ -750,6 +750,11 @@ pub fn requestRemoteAction(generation: u32, key: u64, kind: RemoteActionKind, pi
     lifecycle_mutex.unlock();
 
     const item = found orelse return .not_found;
+    if (kind == .queue) {
+        if (!isRemoteQueueable(&item)) return .not_found;
+        const title = @import("../core/text.zig").safeUtf8(item.name[0..@min(item.name_len, 255)]);
+        return if (@import("queue.zig").enqueueRemote(item.url[0..item.url_len], title, @tagName(item.source))) .accepted else .full;
+    }
     remote_action_mutex.lock();
     defer remote_action_mutex.unlock();
     if (remote_action_count >= REMOTE_ACTION_CAP) return .full;
@@ -783,11 +788,7 @@ pub fn drainRemoteAction() void {
         },
         .prefer => rememberProvider(&action.item, true),
         .clear_preference => rememberProvider(&action.item, false),
-        .queue => @import("queue.zig").addToQueue(
-            action.item.url[0..action.item.url_len],
-            action.item.name[0..action.item.name_len],
-            @tagName(action.item.source),
-        ),
+        .queue => unreachable, // Queued before the HTTP response.
     }
 }
 
@@ -2021,6 +2022,30 @@ fn resolveAudiobooks(query_buf: [256]u8, qlen: usize) void {
     }
 }
 
+/// One keyless reading-catalog request (Wikisource, Internet Archive texts,
+/// VNDB) through the same bounded curl seam their own tabs and the other
+/// catalog workers use. These three were the only reading workers still on the
+/// in-process client with an 8 s cap; under the search fan-out they reported
+/// transport failures for endpoints that answer 200. A null return has already
+/// recorded the worker outcome. `post_json` switches to a JSON POST.
+fn fetchReadingCatalog(url: []const u8, buf: []u8, post_json: ?[]const u8) ?[]const u8 {
+    const policy = @import("search_reading_pure.zig");
+    const fetch = @import("reliable_fetch.zig");
+    var headers: [8 * 1024]u8 = undefined;
+    const json_header = [_]fetch.Header{.{ .name = "Content-Type", .value = "application/json" }};
+    const result = fetch.request(url, buf, &headers, .{
+        .timeout_secs = policy.CATALOG_TIMEOUT_SECS,
+        .user_agent = @import("../core/app_meta.zig").user_agent_with_url,
+        .impersonate = false,
+        .post_body = post_json,
+        .headers = if (post_json != null) &json_header else &.{},
+        .cancel_epoch = workerCancellation(),
+    });
+    if (result.ok()) return result.body;
+    if (result.failure != .cancelled) noteWorkerOutcome(policy.catalogFailure(result.failure == .timed_out, result.status));
+    return null;
+}
+
 fn resolveVisualNovels(query_buf: [256]u8, qlen: usize) void {
     defer finishWorker(&status_vndb, .done);
     const pure = @import("vndb_pure.zig");
@@ -2036,15 +2061,7 @@ fn resolveVisualNovels(query_buf: [256]u8, qlen: usize) void {
     };
     defer alloc.free(buf);
     @import("../core/rate_limit.zig").acquire("vndb", 1.0);
-    const body = @import("../core/http.zig").fetch("https://api.vndb.org/kana/vn", buf, .{
-        .timeout_secs = 8,
-        .method = .POST,
-        .content_type = "application/json",
-        .payload = request,
-    }) orelse {
-        noteWorkerOutcome(.transport_failed);
-        return;
-    };
+    const body = fetchReadingCatalog("https://api.vndb.org/kana/vn", buf, request) orelse return;
     var schema = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
         noteWorkerOutcome(.parse_failed);
         return;
@@ -2105,10 +2122,7 @@ fn resolveWikiNovels(query_buf: [256]u8, qlen: usize) void {
     };
     defer alloc.free(buf);
     @import("../core/rate_limit.zig").acquire("wikisource", 2.0);
-    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 }) orelse {
-        noteWorkerOutcome(.transport_failed);
-        return;
-    };
+    const body = fetchReadingCatalog(url, buf, null) orelse return;
     var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
         noteWorkerOutcome(.parse_failed);
         return;
@@ -2167,10 +2181,7 @@ fn resolveArchiveNovels(query_buf: [256]u8, qlen: usize) void {
     };
     defer alloc.free(buf);
     @import("../core/rate_limit.zig").acquire("archive", 1.0);
-    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 }) orelse {
-        noteWorkerOutcome(.transport_failed);
-        return;
-    };
+    const body = fetchReadingCatalog(url, buf, null) orelse return;
     var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
         noteWorkerOutcome(.parse_failed);
         return;
@@ -2234,7 +2245,9 @@ fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
         noteWorkerOutcome(.failed);
         return;
     };
-    const headers = [_]std.http.Header{.{ .name = "X-Emby-Token", .value = connection.token[0..connection.token_len] }};
+    var auth_buffer: [512]u8 = undefined;
+    const authorization = @import("jellyfin_pure.zig").authorizationValue(&auth_buffer, connection.token[0..connection.token_len]) orelse return;
+    const headers = [_]std.http.Header{.{ .name = "Authorization", .value = authorization }};
     const buf = alloc.alloc(u8, 256 * 1024) catch {
         noteWorkerOutcome(.failed);
         return;
@@ -2362,7 +2375,7 @@ fn resolveInstalledPlugins(query_buf: [256]u8, qlen: usize) void {
             const source = &entry.row.transport;
             const kind: []const u8 = if (std.mem.startsWith(u8, entry.row.stream_url[0..entry.row.stream_url_len], "magnet:?")) "Torrent" else "Direct stream";
             const direct_detail = std.fmt.bufPrint(&item.detail, "{s} · {s}{s}{s}{s}{s}", .{
-                kind, entry.plugin_name[0..entry.plugin_name_len],
+                kind,                                    entry.plugin_name[0..entry.plugin_name_len],
                 if (source.quality_len > 0) " · " else "",
                 source.quality[0..source.quality_len],
                 if (source.language_len > 0) " · " else "",
@@ -3456,8 +3469,41 @@ fn resolveCommons(query_buf: [256]u8, qlen: usize) void {
 // Backend: Anime (ani-cli search)
 // ══════════════════════════════════════════════════════════
 
+/// Universal-search title rows from the installed HiAnime source. AllAnime's
+/// API sits behind a Cloudflare challenge on many networks; without this the
+/// anime source contributed nothing even though HiAnime could play the show.
+fn resolveHiAnimeTitles(query: []const u8) void {
+    const sc = @import("../core/source_config.zig");
+    var base_buf: [256]u8 = undefined;
+    const base = std.mem.trimEnd(u8, sc.copyValue("hianime", "base", &base_buf) orelse return, "/");
+    if (base.len == 0 or query.len == 0) return;
+    var enc: [1024]u8 = undefined;
+    var url_buf: [1400]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/search?keyword={s}", .{ base, @import("../core/http.zig").urlEncode(query, &enc) }) catch return;
+    const buf = alloc.alloc(u8, 1024 * 1024) catch return;
+    defer alloc.free(buf);
+    @import("../core/rate_limit.zig").acquire("hianime", 1.0);
+    const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .timeout_secs = 8, .referer = base, .cancel_epoch = workerCancellation() }) orelse {
+        noteWorkerOutcome(.transport_failed);
+        return;
+    };
+    var titles: [6][256]u8 = undefined;
+    var lens: [6]usize = undefined;
+    const count = @import("anime_hianime_pure.zig").searchTitles(body, &titles, &lens);
+    for (0..count) |i| {
+        var item = std.mem.zeroes(ResolvedItem);
+        item.source = .anime;
+        copyField(&item.name, &item.name_len, titles[i][0..lens[i]]);
+        // anime.playEpisode resolves by show name, as for AllAnime rows.
+        copyField(&item.url, &item.url_len, titles[i][0..lens[i]]);
+        copyField(&item.detail, &item.detail_len, "Anime - hianime");
+        _ = pushResult(item);
+    }
+}
+
 fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
     defer finishWorker(&status_anime, .done);
+    defer if (!worker_produced and generationIsCurrent(worker_gen)) resolveHiAnimeTitles(query_buf[0..qlen]);
 
     const query = query_buf[0..qlen];
 
@@ -3467,7 +3513,7 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
     // (unlike the Jikan/AniList metadata APIs). No install → no allanime results.
     const sc = @import("../core/source_config.zig");
     const aa_base = sc.get("allanime", "base") orelse {
-        noteWorkerOutcome(.unavailable);
+        if (sc.get("hianime", "base") == null) noteWorkerOutcome(.unavailable);
         return;
     };
     const aa_referer = sc.get("allanime", "referer") orelse aa_base;
@@ -3704,20 +3750,18 @@ fn resolveLiveTv(query_buf: [256]u8, qlen: usize) void {
 
     const iptv = @import("iptv.zig");
     const ipure = @import("iptv_pure.zig");
-    if (@import("../core/source_config.zig").get("iptv-org", "base") == null) {
-        noteWorkerOutcome(.unavailable);
-        return;
-    }
     // IptvChannel is a large fixed-buffer record — heap, not the worker stack.
     const chans = alloc.alloc(ipure.IptvChannel, AUDIO_MAX) catch {
         noteWorkerOutcome(.failed);
         return;
     };
     defer alloc.free(chans);
-    // searchInto is tab-INDEPENDENT: it parses into `chans` and never touches
-    // state.app.iptv, so searching from the omnibox can't hijack the Live TV
-    // tab the user may be browsing. Returns 0 when the plugin isn't installed.
-    const n = iptv.searchInto(query, chans);
+    // searchUniversal is tab-INDEPENDENT: it fills `chans` from the ingested
+    // catalog (every installed playlist), or from iptv-org's directory before
+    // the first ingest, and never touches the Live TV tab's visible rows.
+    const found = iptv.searchUniversal(query, chans);
+    if (found.route == .unavailable or found.route == .pending) noteWorkerOutcome(.unavailable);
+    const n = found.count;
 
     var i: usize = 0;
     while (i < n) : (i += 1) {
@@ -3732,6 +3776,7 @@ fn resolveLiveTv(query_buf: [256]u8, qlen: usize) void {
         // Carry the channel's play hints — some CDNs 403 without them.
         copyField(&item.http_ua, &item.http_ua_len, ch.user_agent[0..ch.user_agent_len]);
         copyField(&item.http_referrer, &item.http_referrer_len, ch.referrer[0..ch.referrer_len]);
+        copyField(&item.poster_url, &item.poster_url_len, ch.logo[0..ch.logo_len]);
         var d: [128]u8 = undefined;
         const detail = if (ch.country_len > 0)
             std.fmt.bufPrint(&d, "Live TV - {s}", .{ch.country[0..ch.country_len]}) catch "Live TV"
@@ -3749,6 +3794,7 @@ fn resolveMusic(query_buf: [256]u8, qlen: usize) void {
     defer if (query.len > 0 and generationIsCurrent(worker_gen)) {
         resolveInstalledAudio(.openverse, query);
         resolveInstalledAudio(.netlabels, query);
+        resolveInstalledAudio(.livemusic, query);
     };
     const music = @import("music_subsonic.zig");
     const mp = @import("music_subsonic_pure.zig");
@@ -3895,6 +3941,7 @@ fn resolveInstalledAudio(provider: @import("audio_sources_pure.zig").Provider, q
             .openverse => "Openverse · Licensed full audio",
             .netlabels => "Archive Netlabels · Full track",
             .somafm => "SomaFM · Live radio",
+            .livemusic => "Live Music Archive · Concert recording",
         });
         if (item.url_len > 0) _ = pushResult(item);
     }
@@ -3939,21 +3986,75 @@ fn resolvePodcasts(query_buf: [256]u8, qlen: usize) void {
     };
     defer alloc.free(feeds);
     const feed_count = cfg.copyFields("feed", feeds);
-    // Bound total network work. An explicit partial state exposes skipped
-    // installed feeds rather than reporting a complete search of every feed.
-    const feed_limit: usize = 4;
-    if (feed_count > feed_limit) noteWorkerOutcome(.partial);
-    var installed_count: usize = 0;
-    for (feeds[0..@min(feed_count, feed_limit)]) |feed| {
+    const rf = @import("reliable_fetch.zig");
+    var tally: pp.ProviderTally = .{};
+    // A lone unreachable provider is not a source failure; see ProviderTally.
+    defer if (tally.transportFailed()) noteWorkerOutcome(.transport_failed);
+
+    // Public directories first: they answer in one request each, so rows paint
+    // while the installed feeds are still being probed. curl transport, as the
+    // Podcasts tab uses — Apple's hosts do not answer the std.http client.
+    var enc_buf: [768]u8 = undefined;
+    const encoded = http.urlEncode(query, &enc_buf);
+    var url_buf: [1200]u8 = undefined;
+    const directories = std.enums.values(pp.Directory);
+    // Divide the audio quota fairly across independent public catalogs.
+    const directory_quota = AUDIO_MAX / directories.len;
+    for (directories) |directory| {
         if (thread_sink == null and run_gen.load(.acquire) != worker_gen) return;
-        const url = feed.value[0..feed.value_len];
-        if (!pp.isFeedUrl(url)) continue;
-        const body = http.fetch(url, buffer, .{ .timeout_secs = 2 }) orelse {
-            noteWorkerOutcome(.transport_failed);
+        const url = directory.searchUrl(encoded, directory_quota, &url_buf);
+        if (url.len == 0) continue;
+        const body = rf.fetch(url, buffer, .{ .timeout_secs = 5, .impersonate = false, .cancel_epoch = workerCancellation() }) orelse {
+            tally.failed += 1;
             continue;
         };
+        tally.answered += 1;
+        var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
+            noteWorkerOutcome(.parse_failed);
+            continue;
+        };
+        defer parsed.deinit();
+        const count = directory.parse(parsed.value, shows[0..directory_quota]) orelse {
+            noteWorkerOutcome(.parse_failed);
+            continue;
+        };
+        publishPodcastRows(shows[0..count], directory.label());
+    }
+
+    // Installed feeds: only the show header is needed, so ask for the first
+    // 128 KB and keep the head when a server ignores Range. Whole publisher
+    // feeds (1-5 MB) overflowed the buffer and every one counted as a transport
+    // failure. An explicit partial state exposes feeds skipped by the bound.
+    // Feeds whose id or URL names a query word go first, so a show installed
+    // beyond the bound is still found; see pp.feedProbeOrder.
+    if (feed_count > pp.FEED_PROBE_LIMIT) noteWorkerOutcome(.partial);
+    var likely: [256]bool = undefined;
+    for (feeds[0..feed_count], 0..) |feed, index| likely[index] = pp.feedLikelyMatches(feed.id[0..feed.id_len], feed.value[0..feed.value_len], query);
+    var probe_order: [pp.FEED_PROBE_LIMIT]usize = undefined;
+    const probe_count = pp.feedProbeOrder(likely[0..feed_count], &probe_order);
+    var installed_count: usize = 0;
+    for (probe_order[0..probe_count]) |feed_index| {
+        const feed = feeds[feed_index];
+        if (thread_sink == null and run_gen.load(.acquire) != worker_gen) return;
+        if (installed_count == shows.len) break;
+        const url = feed.value[0..feed.value_len];
+        if (!pp.isFeedUrl(url)) continue;
+        var feed_headers: [16 * 1024]u8 = undefined;
+        const reply = rf.request(url, buffer, &feed_headers, .{
+            .timeout_secs = 4,
+            .impersonate = false,
+            .range = pp.FEED_PROBE_RANGE,
+            .keep_head_on_overflow = true,
+            .cancel_epoch = workerCancellation(),
+        });
+        if (!reply.ok()) {
+            tally.failed += 1;
+            continue;
+        }
+        tally.answered += 1;
+        const body = reply.body;
         // General RSS/torrent feeds are not podcast directories.
-        if (std.mem.indexOf(u8, body, "itunes:") == null and std.mem.indexOf(u8, body, "type=\"audio/") == null and std.mem.indexOf(u8, body, "type='audio/") == null) continue;
+        if (!pp.isPodcastFeedBody(body, url)) continue;
         const show = pp.parseFeedShow(body, url) orelse {
             noteWorkerOutcome(.parse_failed);
             continue;
@@ -3963,32 +4064,6 @@ fn resolvePodcasts(query_buf: [256]u8, qlen: usize) void {
         installed_count += 1;
     }
     publishPodcastRows(shows[0..installed_count], "Installed RSS");
-    var enc_buf: [768]u8 = undefined;
-    const encoded = http.urlEncode(query, &enc_buf);
-    var url_buf: [1200]u8 = undefined;
-    // Divide remaining audio quota fairly across independent public catalogs.
-    const directory_quota = (AUDIO_MAX - installed_count) / 2;
-    for (0..2) |directory| {
-        if (thread_sink == null and run_gen.load(.acquire) != worker_gen) return;
-        const url = if (directory == 0)
-            std.fmt.bufPrint(&url_buf, "https://gpodder.net/search.json?q={s}", .{encoded}) catch continue
-        else
-            std.fmt.bufPrint(&url_buf, "https://itunes.apple.com/search?media=podcast&limit={d}&term={s}", .{ directory_quota, encoded }) catch continue;
-        const body = http.fetch(url, buffer, .{ .timeout_secs = 4 }) orelse {
-            noteWorkerOutcome(.transport_failed);
-            continue;
-        };
-        var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
-            noteWorkerOutcome(.parse_failed);
-            continue;
-        };
-        defer parsed.deinit();
-        const count = (if (directory == 0) pp.parseGpodderValue(parsed.value, shows[0..directory_quota]) else pp.parseItunesValue(parsed.value, shows[0..directory_quota])) orelse {
-            noteWorkerOutcome(.parse_failed);
-            continue;
-        };
-        publishPodcastRows(shows[0..count], if (directory == 0) "gpodder" else "Apple Podcasts");
-    }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -4234,6 +4309,7 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
     defer finishWorker(&status_stremio, .done);
 
     const stremio = @import("stremio.zig");
+    const stremio_pure = @import("stremio_pure.zig");
     // Neutral: query only the Stremio addons the user has installed via the
     // plugin manager (re-read each search so installs/uninstalls take effect).
     stremio.loadInstalledAddons();
@@ -4256,41 +4332,130 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
     var is_series = false;
     var imdb_outcome: SourceStatus = .no_results;
     const imdb_len = resolveImdbId(query, api_key, &imdb_id, &is_series, &imdb_outcome);
-    const stremio_type: []const u8 = if (is_series) "series" else "movie";
+
+    // Anime with no IMDb id (or an explicit anime intent) is addressed by Kitsu
+    // id instead. A query that did resolve to tt… never pays for this lookup.
+    var kitsu_tried = false;
+    if (stremio_pure.wantsKitsu(imdb_len > 0, resolver_intent[0..resolver_intent_len])) {
+        kitsu_tried = true;
+        if (resolveStremioKitsu(query, ep_season, ep_episode)) return;
+    }
 
     if (imdb_len == 0) {
         noteWorkerOutcome(imdb_outcome);
         return;
     }
 
-    // ── Query each installed addon ──
+    // Stremio series streams need {imdb_id}:{season}:{episode} per the protocol
+    var id_buf: [48]u8 = undefined;
+    const stream_id = stremio_pure.imdbStreamId(&id_buf, imdb_id[0..imdb_len], is_series, ep_season, ep_episode) orelse return;
+    const types = [_][]const u8{if (is_series) "series" else "movie"};
+    const rows = queryStremioAddons(&types, stream_id);
+    // An anime the IMDb route found but no addon had streams for is retried by
+    // Kitsu id; see stremio_pure.wantsKitsuFallback.
+    if (stremio_pure.wantsKitsuFallback(rows, kitsu_tried)) _ = resolveStremioKitsu(query, ep_season, ep_episode);
+}
+
+/// Kitsu route: one catalog lookup turns the title into `kitsu:<id>[:<episode>]`,
+/// then the addons that declare the kitsu prefix are queried. Returns true when
+/// the Kitsu id was resolved and the addons were asked (or the search was
+/// superseded) — the caller then skips the IMDb route.
+fn resolveStremioKitsu(query: []const u8, season: i32, episode: i32) bool {
+    const stremio = @import("stremio.zig");
+    const sp = @import("stremio_pure.zig");
+    const kl = @import("keyless_tv_pure.zig");
+
+    // No installed addon speaks kitsu ids → no lookup request at all.
+    // (Manifest answers are cached per process by stremio.servesStream.)
+    var any_kitsu = false;
+    probe: for (0..stremio.installed_count) |ai| {
+        const addon = &stremio.installed_addons[ai];
+        for ([_][]const u8{ "anime", "series", "movie" }) |media_type| {
+            const serves = stremio.servesStream(addon.url[0..addon.url_len], media_type, sp.kitsu_probe_id) orelse break;
+            if (serves) {
+                any_kitsu = true;
+                break :probe;
+            }
+        }
+    }
+    if (!any_kitsu) return false;
+    if (thread_sink == null and run_gen.load(.acquire) != worker_gen) return true;
+
+    // "Title s02e05" → "Title Season 2"; a trailing year is tried both ways
+    // against the one response ("Akira 1988" vs a title that ends in a number).
+    const full = kl.queryTitle(query);
+    const split = kl.splitTitleYear(full);
+    var lookup_buf: [300]u8 = undefined;
+    const lookup = sp.kitsuLookupTitle(&lookup_buf, split.title, season) orelse return false;
+    var url_buf: [1024]u8 = undefined;
+    const url = sp.kitsuSearchUrl(&url_buf, lookup) orelse return false;
+
+    const buf = alloc.alloc(u8, sp.max_kitsu_response) catch return false;
+    defer alloc.free(buf);
+    @import("../core/rate_limit.zig").acquire("kitsu", 2.0);
+    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = sp.kitsu_timeout_secs, .max_response = buf.len }) orelse return false;
+    if (thread_sink == null and run_gen.load(.acquire) != worker_gen) return true;
+
+    var full_buf: [300]u8 = undefined;
+    const full_title = sp.kitsuLookupTitle(&full_buf, full, season) orelse return false;
+    var match_found = sp.pickKitsu(alloc, body, full_title) orelse sp.pickKitsu(alloc, body, lookup);
+    var variant: usize = 1; // variant 0 is the lookup title itself
+    while (match_found == null) : (variant += 1) {
+        var variant_buf: [300]u8 = undefined;
+        const name = sp.kitsuSeasonVariant(&variant_buf, split.title, season, variant) orelse break;
+        match_found = sp.pickKitsu(alloc, body, name);
+    }
+    const match = match_found orelse return false;
+
+    var id_buf: [32]u8 = undefined;
+    const stream_id = sp.kitsuStreamId(&id_buf, match, episode) orelse return false;
+    const types = sp.kitsuTypes(match.is_movie);
+    _ = queryStremioAddons(&types, stream_id);
+    return true;
+}
+
+/// Ask every installed addon that declares a stream resource for `stream_id`
+/// (under the first of `types` it serves) and publish its rows.
+fn queryStremioAddons(types: []const []const u8, stream_id: []const u8) usize {
+    var published: usize = 0;
+    const stremio = @import("stremio.zig");
+    const stremio_pure = @import("stremio_pure.zig");
     for (0..stremio.installed_count) |ai| {
+        if (thread_sink == null and run_gen.load(.acquire) != worker_gen) return published;
         const addon = &stremio.installed_addons[ai];
         const base = addon.url[0..addon.url_len];
 
-        // Remove /manifest.json to get base URL
-        var base_url: [256]u8 = undefined;
-        const blen = if (std.mem.indexOf(u8, base, "/manifest.json")) |mp|
-            @min(mp, 255)
-        else
-            @min(base.len, 255);
-        @memcpy(base_url[0..blen], base[0..blen]);
+        // Catalog/meta/subtitle addons have no stream endpoint; asking them
+        // returned 404 and branded the whole source a transport failure.
+        var media_type: ?[]const u8 = null;
+        var manifest_down = false;
+        for (types) |candidate| {
+            const serves = stremio.servesStream(base, candidate, stream_id) orelse {
+                manifest_down = true;
+                break;
+            };
+            if (serves) {
+                media_type = candidate;
+                break;
+            }
+        }
+        if (manifest_down) {
+            noteWorkerOutcome(.transport_failed); // manifest unreachable: addon is down
+            continue;
+        }
 
-        // Stremio series streams need {imdb_id}:{season}:{episode} per the protocol
         var stream_url: [512]u8 = undefined;
-        const surl: []u8 = if (std.mem.eql(u8, stremio_type, "series") and ep_season > 0 and ep_episode > 0)
-            std.fmt.bufPrint(&stream_url, "{s}/stream/{s}/{s}:{d}:{d}.json", .{
-                base_url[0..blen], stremio_type, imdb_id[0..imdb_len], ep_season, ep_episode,
-            }) catch continue
-        else
-            std.fmt.bufPrint(&stream_url, "{s}/stream/{s}/{s}.json", .{
-                base_url[0..blen], stremio_type, imdb_id[0..imdb_len],
-            }) catch continue;
+        const surl = stremio_pure.streamUrl(&stream_url, base, media_type orelse continue, stream_id) orelse continue;
 
-        var sbuf: [64 * 1024]u8 = undefined;
-        @import("../core/rate_limit.zig").acquire("stremio", 1.0); // third-party addon — be gentle
-        const s_body = @import("../core/http.zig").fetch(surl, &sbuf, .{ .timeout_secs = 8 }) orelse {
-            noteWorkerOutcome(.transport_failed);
+        // Heap + 1 MB: Torrentio's list for a popular title is ~300 KB, which
+        // overflowed the old 64 KB stack buffer into a null (failed) fetch.
+        const sbuf = alloc.alloc(u8, stremio_pure.max_stream_response) catch continue;
+        defer alloc.free(sbuf);
+        @import("../core/rate_limit.zig").acquire("stremio", 2.0); // third-party addons (distinct hosts) — be gentle
+        var http_status: ?std.http.Status = null;
+        const s_body = @import("../core/http.zig").fetch(surl, sbuf, .{ .timeout_secs = 8, .max_response = sbuf.len, .status_out = &http_status }) orelse {
+            const code: ?u16 = if (http_status) |st| @as(u16, @backingInt(st)) else null;
+            noteWorkerOutcome(stremio_pure.streamHttpOutcome(code));
             continue;
         };
         const sn = s_body.len;
@@ -4307,7 +4472,7 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
             continue;
         };
         for (parsed[0..count]) |source| {
-            var item = ResolvedItem{ .source = .stremio, .transport = source };
+            var item = ResolvedItem{ .source = .stremio, .transport = source, .seeds = source.seeds };
             copyField(&item.url, &item.url_len, source.url[0..source.url_len]);
             const name = if (source.title_len > 0) source.title[0..source.title_len] else addon.name[0..addon.name_len];
             copyField(&item.name, &item.name_len, name);
@@ -4324,8 +4489,10 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
             item.quality = detectQuality(item.name[0..item.name_len]);
             if (item.quality == 0) item.quality = detectQuality(source.quality[0..source.quality_len]);
             _ = pushResult(item);
+            published += 1;
         }
     }
+    return published;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -4404,7 +4571,10 @@ pub fn isPreferred(item: *const ResolvedItem) bool {
 }
 
 pub fn rememberProvider(item: *const ResolvedItem, remember: bool) void {
-    if (state.app.incognito_mode) { state.showToast("Source preferences are not saved in private mode"); return; }
+    if (state.app.incognito_mode) {
+        state.showToast("Source preferences are not saved in private mode");
+        return;
+    }
     const db = @import("../core/db.zig");
     var key_buf: [64]u8 = undefined;
     const key = @import("source_preference_pure.zig").key(item.preference_query[0..item.preference_query_len], &key_buf) orelse return;
@@ -4698,7 +4868,7 @@ fn fetchCatalogJson(url: []const u8, provider: []const u8) ?[]u8 {
         noteWorkerOutcome(.failed);
         return null;
     };
-    const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .timeout_secs = 10, .user_agent = @import("../core/app_meta.zig").user_agent, .impersonate = false, .cancel_epoch = workerCancellation() }) orelse {
+    const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .timeout_secs = @import("anime_pure.zig").catalogTimeoutSecs(provider), .user_agent = @import("../core/app_meta.zig").user_agent, .impersonate = false, .cancel_epoch = workerCancellation() }) orelse {
         alloc.free(buf);
         noteWorkerOutcome(.transport_failed);
         return null;
@@ -4974,7 +5144,7 @@ fn resolveInstalledReading(query: []const u8) void {
             .readnovelfull => validReadNovelFull,
             .standardebooks => validStandardEbooks,
             .wuxiaclick => validWuxiaClick,
-        }, .transport = .{ .timeout_secs = 10, .user_agent = "Mozilla/5.0", .impersonate = false, .cancel_epoch = workerCancellation() } });
+        }, .transport = .{ .timeout_secs = 10, .user_agent = "Mozilla/5.0", .impersonate = reading.wantsBrowserTransport(source), .cancel_epoch = workerCancellation() } });
         if (!response.ok()) {
             noteWorkerOutcome(.transport_failed);
             continue;

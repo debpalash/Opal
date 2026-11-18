@@ -1,4 +1,4 @@
-# VERSION: 2.8
+# VERSION: 2.9
 # AUTHORS: nKlido
 
 # LICENSING INFORMATION
@@ -20,143 +20,77 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import re
 from datetime import datetime
-from html.parser import HTMLParser
-from typing import Dict, List, Mapping, Tuple, Union
 
 from helpers import retrieve_url
 from novaprinter import prettyPrinter
 
 
 class solidtorrents:
-    url = 'https://solidtorrents.to'
+    # solidtorrents.to merged into BitSearch: it 301s to bitsearch.to, which
+    # 301s to bitsearch.eu, and serves BitSearch's card markup. The old
+    # `search-result` / `dl-magnet` parser matched nothing there (0 rows).
+    # This engine keeps its own identity by asking for the seeders-sorted view.
+    url = 'https://bitsearch.eu'
     name = 'Solid Torrents'
-    supported_categories = {'all': 'all', 'music': 'Audio', 'books': 'eBook'}
+    supported_categories = {'all': '', 'music': '7', 'books': '9'}
 
-    class TorrentInfoParser(HTMLParser):
+    _CARD = re.compile(
+        r'<div class="[^"]*\btorrent-result-card\b.*?<!-- Mobile', re.S)
+    _TITLE = re.compile(r'<a href="(/torrent/[^"]+)"[^>]*>\s*(.*?)\s*</a>', re.S)
+    _MAGNET = re.compile(r'href="(magnet:\?[^"]+)"')
+    _SIZE = re.compile(r'fa-download"></i>\s*<span>\s*([0-9.,]+\s*[KMGT]?B)\s*</span>')
+    _DATE = re.compile(r'fa-calendar"></i>\s*<span>\s*(\d{1,2})/(\d{1,2})/(\d{4})\s*</span>')
+    _SEEDS = re.compile(r'fa-arrow-up"></i>\s*<span[^>]*>\s*([0-9,]+)')
+    _LEECH = re.compile(r'fa-arrow-down"></i>\s*<span[^>]*>\s*([0-9,]+)')
 
-        def __init__(self, url: str) -> None:
-            HTMLParser.__init__(self)
-            self.url = url
-            self.foundResult = False
-            self.foundTitle = False
-            self.parseTitle = False
-            self.foundStats = False
-            self.parseSeeders = False
-            self.parseLeechers = False
-            self.parseSize = False
-            self.parseDate = False
-            self.column = 0
-            self.torrentReady = False
-            self.totalResults = 0
+    def parse(self, page: str) -> int:
+        """Print one row per result card; returns the number printed."""
+        total = 0
+        for card in self._CARD.findall(page):
+            title, magnet = self._TITLE.search(card), self._MAGNET.search(card)
+            if not title or not magnet:
+                continue
+            name = ' '.join(re.sub(r'<[^>]+>', '', title.group(2)).split())
+            if not name:
+                continue
 
-            self.torrent_info = self.empty_torrent_info()
+            def number(pattern: 're.Pattern[str]') -> int:
+                m = pattern.search(card)
+                return int(m.group(1).replace(',', '')) if m else -1
 
-        def empty_torrent_info(self) -> Dict[str, object]:
-            return {
-                'link': '',
-                'name': '',
-                'size': '-1',
-                'seeds': '-1',
-                'leech': '-1',
-                'engine_url': self.url,
-                'desc_link': '',
-                'pub_date': -1,
-            }
-
-        def handle_starttag(self, tag: str, attrs: List[Tuple[str, Union[str, None]]]) -> None:
-            def getStr(d: Mapping[str, Union[str, None]], key: str) -> str:
-                value = d.get(key, '')
-                return value if value is not None else ''
-
-            params = dict(attrs)
-
-            if 'search-result' in getStr(params, 'class'):
-                self.foundResult = True
-                return
-
-            if self.foundResult and ('title' in getStr(params, 'class')) and (tag == 'h5'):
-                self.foundTitle = True
-
-            if self.foundTitle and (tag == 'a'):
-                self.torrent_info['desc_link'] = self.url + getStr(params, 'href')
-                self.parseTitle = True
-
-            if self.foundResult and ('stats' in getStr(params, 'class')):
-                self.foundStats = True
-                self.column = -1
-
-            if self.foundStats and (tag == 'div'):
-                self.column = self.column + 1
-
-                if self.column == 2:
-                    self.parseSize = True
-
-            if self.foundStats and (tag == 'font') and (self.column == 3):
-                self.parseSeeders = True
-
-            if self.foundStats and (tag == 'font') and (self.column == 4):
-                self.parseLeechers = True
-
-            if self.foundStats and (tag == 'div') and (self.column == 5):
-                self.parseDate = True
-
-            if self.foundResult and ('dl-magnet' in getStr(params, 'class')) and (tag == 'a'):
-                self.torrent_info['link'] = params.get('href')
-                self.foundResult = False
-                self.torrentReady = True
-
-        def handle_endtag(self, tag: str) -> None:
-            if self.torrentReady:
-                prettyPrinter(self.torrent_info)  # type: ignore[arg-type] # refactor later
-                self.torrentReady = False
-                self.torrent_info = self.empty_torrent_info()
-                self.totalResults += 1
-
-        def handle_data(self, data: str) -> None:
-
-            if self.parseTitle:
-                if (bool(data.strip()) and data != '\n'):
-                    self.torrent_info['name'] = data
-                self.parseTitle = False
-                self.foundTitle = False
-
-            if self.parseSize:
-                self.torrent_info['size'] = data
-                self.parseSize = False
-
-            if self.parseSeeders:
-                self.torrent_info['seeds'] = data
-                self.parseSeeders = False
-
-            if self.parseLeechers:
-                self.torrent_info['leech'] = data
-                self.parseLeechers = False
-
-            if self.parseDate:
+            size = self._SIZE.search(card)
+            date = self._DATE.search(card)
+            pub_date = -1
+            if date:
                 try:
-                    # I chose not to use strptime here because it depends on user's locale
-                    months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
-                              'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
-                    [month, day, year] = data.replace(',', '').lower().split()
-                    date = datetime(int(year), int(months.index(month) + 1), int(day))
-                    self.torrent_info['pub_date'] = int(date.timestamp())
-                except Exception:  # pylint: disable=broad-exception-caught
-                    self.torrent_info['pub_date'] = -1
-                self.parseDate = False
-                self.foundStats = False
+                    pub_date = int(datetime(int(date.group(3)), int(date.group(1)),
+                                            int(date.group(2))).timestamp())
+                except (ValueError, OverflowError):
+                    pass
+            prettyPrinter({
+                'link': magnet.group(1),
+                'name': name,
+                'size': size.group(1).replace(',', '') if size else '-1',
+                'seeds': number(self._SEEDS),
+                'leech': number(self._LEECH),
+                'engine_url': self.url,
+                'desc_link': self.url.rstrip('/') + title.group(1),
+                'pub_date': pub_date,
+            })
+            total += 1
+        return total
 
     def request(self, searchTerm: str, category: str, page: int = 1) -> str:
         return retrieve_url(
-            self.url + '/search?q=' + searchTerm + '&category=' + category
-            + '&sort=seeders&sort=desc&page=' + str(page))
+            self.url.rstrip('/') + '/search?q=' + searchTerm.replace('%20', '+')
+            + ('&category=' + category if category else '')
+            + '&sortBy=seeders&page=' + str(page))
 
     def search(self, what: str, cat: str = 'all') -> None:
         category = self.supported_categories[cat]
 
-        for page in range(1, 5):
-            parser = self.TorrentInfoParser(self.url)
-            parser.feed(self.request(what, category, page))
-            parser.close()
-            if parser.totalResults < 15:
+        for page in range(1, 3):
+            if self.parse(self.request(what, category, page)) < 15:
                 break

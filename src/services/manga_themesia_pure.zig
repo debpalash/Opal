@@ -457,6 +457,8 @@ pub const ChapterIter = struct {
             var name: []const u8 = "";
             if (innerAfterMarker(row, 0, "chapternum")) |cn| {
                 name = cn;
+            } else if (innerAfterMarker(row, 0, "epl-title")) |title| {
+                name = title; // lightnovelwp `.eplister` rows
             } else {
                 const lt = std.mem.indexOfScalarPos(u8, row, a_tag.after, '<') orelse row.len;
                 name = std.mem.trim(u8, row[a_tag.after..lt], " \t\r\n");

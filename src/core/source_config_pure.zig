@@ -23,7 +23,10 @@ const std = @import("std");
 /// run 1-3 per source, and the browser extension can add more at will. 512 is
 /// ~8 fields for every bundled source with room for user-added ones, at
 /// roughly 300 KB of .bss — cheap next to silently disabling a source.
-pub const MAX_ENTRIES = 512;
+/// Raised to 1024 in the Nov 2026 source expansion: a real profile measured
+/// 109 installed sources / 273 fields before ~50 more sources (many carrying
+/// `mirrors`) were added.
+pub const MAX_ENTRIES = 1024;
 
 /// Filename limits. `id` is used directly as a filename stem, and `field`/`val`
 /// are copied into fixed buffers.
@@ -174,6 +177,17 @@ test "the table holds every field a full install can produce" {
     try expect(MAX_ENTRIES >= bundled_sources * worst_fields_per_source * 2);
 }
 
+test "the table keeps headroom over a fully installed expanded catalog" {
+    // Measured Nov 2026: 109 installed source files held 273 fields. The
+    // expansion roughly doubles the catalog and adds `mirrors` to many
+    // entries; the full catalog at four fields each must still fit.
+    const measured_fields = 273;
+    const expanded_sources = 220;
+    const fields_per_source = 4;
+    try expectEqual(@as(usize, 0), overflowBy(measured_fields, MAX_ENTRIES));
+    try expectEqual(@as(usize, 0), overflowBy(expanded_sources * fields_per_source, MAX_ENTRIES));
+}
+
 test "overflowBy reports the shortfall, never wraps" {
     try expectEqual(@as(usize, 0), overflowBy(0, 64));
     try expectEqual(@as(usize, 0), overflowBy(64, 64)); // exactly full is fine
@@ -319,6 +333,9 @@ pub const RETIRED = [_]Retired{
     .{ .id = "kickass", .field = "base", .host = "", .why = "engine deleted (was a 14-byte 404 page)" },
     .{ .id = "cyberflix", .field = "stremio", .host = "cyberflix.elfhosted.com", .why = "addon manifest returns 404" },
     .{ .id = "knightcrawler", .field = "stremio", .host = "knightcrawler.elfhosted.com", .why = "deprecated upstream" },
+    // Measured 2026-11-18: both domains now serve an unrelated site.
+    .{ .id = "readallcomics", .field = "base", .host = "readallcomics.com", .why = "domain repurposed (unrelated storefront)" },
+    .{ .id = "anidbapp", .field = "base", .host = "anidb.app", .why = "domain redirects to a different site" },
 };
 
 /// Whether an installed source matching a RETIRED entry should be uninstalled.
@@ -343,6 +360,10 @@ test "shouldRetire only fires on the host that actually died" {
     // No value on disk for that field is NOT grounds to delete a keyed
     // retirement — the file may hold a different field entirely.
     try expect(!shouldRetire("cyberflix.elfhosted.com", ""));
+    // Repurposed domains retire only while the install still names them.
+    try expect(shouldRetire("readallcomics.com", "https://readallcomics.com"));
+    try expect(!shouldRetire("readallcomics.com", "https://comics.mirror.example"));
+    try expect(shouldRetire("anidb.app", "https://anidb.app"));
     // Empty host = the consumer is gone; no endpoint can revive it.
     try expect(shouldRetire("", "https://kickasstorrents.to"));
     try expect(shouldRetire("", ""));

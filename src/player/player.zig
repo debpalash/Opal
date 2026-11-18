@@ -411,6 +411,9 @@ pub const MediaPlayer = struct {
     has_metadata: bool,
     last_load_time: i64,
     selected_file_idx: i32 = -1, // -1 means auto-select largest
+    /// File the source asked for (magnet `so=N`, from a Stremio row's fileIdx).
+    /// Consumed once by the auto-select below; -1 = none.
+    requested_file_idx: i32 = -1,
     last_error_time: i64 = 0,
     is_buffering_paused: bool = false,
     is_loading: bool = false,
@@ -843,6 +846,7 @@ pub const MediaPlayer = struct {
         self.load_serial = 0;
         self.browser_transport = null;
         self.selected_file_idx = -1;
+        self.requested_file_idx = -1;
         self.cell_volume = state.app.playback_volume;
         self.cell_speed = state.app.playback_speed;
         self.loop_a = -1.0;
@@ -2159,6 +2163,7 @@ pub const MediaPlayer = struct {
     pub fn attachTorrent(self: *MediaPlayer, id: i32) void {
         if (self.current_torrent_id != id) self.releaseMemoryTorrent();
         self.current_torrent_id = id;
+        self.requested_file_idx = -1; // a request belongs to one attach; search.zig sets it after
     }
 
     /// Release ephemeral torrent data when its last player closes or replaces it.
@@ -2244,6 +2249,7 @@ pub const MediaPlayer = struct {
         self.clearFrame();
         self.current_torrent_id = -1;
         self.selected_file_idx = -1;
+        self.requested_file_idx = -1;
         self.is_torrent = false;
         self.playback_origin = .direct;
         self.queue_item_id = -1;
@@ -3573,6 +3579,9 @@ pub fn updateTorrentBackgroundTasks() void {
                         var episode_idx: i32 = -1;
                         var playable_count: usize = 0;
                         var risky_count: i32 = 0;
+                        const requested_idx = p.requested_file_idx;
+                        p.requested_file_idx = -1; // one torrent only
+                        var requested_playable = false;
                         var i: i32 = 0;
                         while (i < f_count) : (i += 1) {
                             c.mpv.torrent_set_file_priority(state.torrentSession(), p.current_torrent_id, i, 0);
@@ -3582,6 +3591,7 @@ pub fn updateTorrentBackgroundTasks() void {
                             if (media_ext.isExecutableOrArchive(name)) risky_count += 1;
                             if (!media_ext.isPlayable(name)) continue; // skip non-media
                             playable_count += 1;
+                            if (i == requested_idx) requested_playable = true;
                             if (state.app.playing_episode.armed) {
                                 if (@import("../services/subtitles_pure.zig").findSxxEyy(name)) |episode| {
                                     if (episode.s == state.app.playing_episode.season and episode.e == state.app.playing_episode.episode) episode_idx = i;
@@ -3594,8 +3604,11 @@ pub fn updateTorrentBackgroundTasks() void {
                             }
                         }
 
-                        if (episode_idx >= 0) {
-                            max_idx = episode_idx;
+                        // A season pack's episode is the file the source named
+                        // (fileIdx), not the largest one.
+                        const pinned_idx = @import("../services/stream_source_pure.zig").pinnedTorrentFile(episode_idx, requested_idx, requested_playable);
+                        if (pinned_idx >= 0) {
+                            max_idx = pinned_idx;
                         } else if (state.app.playing_episode.armed and playable_count > 1) {
                             p.selected_file_idx = -2;
                             p.is_loading = false;

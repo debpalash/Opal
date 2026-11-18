@@ -368,6 +368,14 @@ pub fn addToQueueWithThumb(url: []const u8, title: []const u8, source: []const u
     state.wakeUi();
 }
 
+/// Stage a remote item before acknowledging the request.
+pub fn enqueueRemote(url: []const u8, title: []const u8, source: []const u8) bool {
+    if (!isReady() or !validInput(url, title, source, "")) return false;
+    if (!enqueuePending(url, title, source, "")) return false;
+    state.wakeUi();
+    return true;
+}
+
 fn validInput(url: []const u8, title: []const u8, source: []const u8, thumb_url: []const u8) bool {
     return url.len > 0 and url.len < 2048 and title.len < 256 and source.len < 32 and thumb_url.len < 512;
 }

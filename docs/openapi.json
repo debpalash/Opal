@@ -3230,7 +3230,7 @@
     "/download/url": {
       "post": {
         "operationId": "downloads_add_url",
-        "summary": "Download an http(s) URL into the download folder.",
+        "summary": "Download an HTTP(S) file or add a magnet to the torrent engine.",
         "tags": [
           "spend"
         ],
@@ -3240,7 +3240,7 @@
             "name": "url",
             "in": "query",
             "required": true,
-            "description": "http(s) URL of the file.",
+            "description": "HTTP(S) file URL or magnet link.",
             "schema": {
               "type": "string",
               "maxLength": 2048

@@ -1,4 +1,4 @@
-# VERSION: 1.1
+# VERSION: 1.2
 # AUTHORS: Opal
 # Knaben — a torrent metasearch aggregator (JSON POST API, no scraping needed)
 
@@ -37,12 +37,17 @@ class knaben:
     def search(self, what, cat='all'):
         query = urllib.parse.unquote(what)
 
+        # 'score' is not a search_type the API knows; it silently ignored the
+        # query and returned the global top-seeded list ("Rhinoceros v6.13..."
+        # for "dune 2021"). '100%' requires every term in the title.
         body = json.dumps({
-            'search_type': 'score',
+            'search_type': '100%',
+            'search_field': 'title',
             'query': query,
             'order_by': 'seeders',
             'order_direction': 'desc',
             'hide_unsafe': True,
+            'hide_xxx': True,
             'size': 50,
         }).encode('utf-8')
 

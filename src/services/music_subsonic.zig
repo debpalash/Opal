@@ -234,10 +234,18 @@ pub fn searchIntoWithCancellation(source: u8, query: []const u8, out: []pure.Mus
         SRC_PLEX => px_pure.buildSearchUrl(&url_buf, base, auth, query, @intCast(limit)),
         else => null,
     } orelse return .{ .status = .failed };
+    const response_kind: pure.SearchResponseKind = switch (source) {
+        SRC_JIOSAAVN => .jiosaavn,
+        SRC_SUBSONIC => .subsonic,
+        SRC_JELLYFIN => .jellyfin,
+        SRC_PLEX => .plex,
+        SRC_AUDIUS => .audius,
+        else => return .{ .status = .failed },
+    };
     const buffer = alloc.alloc(u8, 512 * 1024) catch return .{ .status = .failed };
     defer alloc.free(buffer);
     const headers = [_]std.http.Header{.{ .name = "Accept", .value = "application/json" }};
-    const body = if (source == SRC_JIOSAAVN) blk: {
+    const body = if (pure.universalUsesCurl(response_kind)) blk: {
         var captured_headers: [4096]u8 = undefined;
         const response = reliable_fetch.request(url, buffer, &captured_headers, .{
             .timeout_secs = 4,
@@ -250,14 +258,6 @@ pub fn searchIntoWithCancellation(source: u8, query: []const u8, out: []pure.Mus
     } else @import("../core/http.zig").fetch(url, buffer, .{ .timeout_secs = 4, .extra_headers = &headers }) orelse return .{ .status = .transport_failed };
     var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return .{ .status = .parse_failed };
     defer parsed.deinit();
-    const response_kind: pure.SearchResponseKind = switch (source) {
-        SRC_JIOSAAVN => .jiosaavn,
-        SRC_SUBSONIC => .subsonic,
-        SRC_JELLYFIN => .jellyfin,
-        SRC_PLEX => .plex,
-        SRC_AUDIUS => .audius,
-        else => return .{ .status = .failed },
-    };
     const rows = pure.pageRows(parsed.value, response_kind) orelse return .{ .status = .parse_failed };
     var count: usize = 0;
     for (rows) |value| {

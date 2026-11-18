@@ -22,6 +22,24 @@ pub const Provider = enum {
         };
     }
 };
+/// SMBC serves its comic pages with HTTP 500 while the body is the complete
+/// page (observed on every `/comic/<slug>` request, Nov 2026; the RSS feed
+/// answers 200). Only that publisher's comic pages may be read from that error
+/// status, and the caller must still validate the body (the `cc-comic` panel).
+pub fn readableErrorPage(provider: Provider, path: []const u8, status: u16) bool {
+    return provider == .smbc and status == 500 and
+        std.mem.startsWith(u8, path, "/comic/") and path.len > "/comic/".len and
+        !std.mem.eql(u8, path, "/comic/rss");
+}
+test "SMBC comic pages are readable from the publisher's HTTP 500, nothing else is" {
+    try std.testing.expect(readableErrorPage(.smbc, "/comic/formal", 500));
+    try std.testing.expect(!readableErrorPage(.smbc, "/comic/formal", 404));
+    try std.testing.expect(!readableErrorPage(.smbc, "/comic/formal", 503));
+    try std.testing.expect(!readableErrorPage(.smbc, "/comic/rss", 500));
+    try std.testing.expect(!readableErrorPage(.smbc, "/comic/", 500));
+    try std.testing.expect(!readableErrorPage(.xkcd, "/comic/formal", 500));
+    try std.testing.expect(!readableErrorPage(.poorlydrawnlines, "/comic/formal", 500));
+}
 pub const Item = struct {
     title: [256]u8 = @splat(0),
     title_len: usize = 0,

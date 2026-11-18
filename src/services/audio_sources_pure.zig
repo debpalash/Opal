@@ -1,7 +1,33 @@
 //! Public audio provider wire policy. No browse state, credentials or network.
 const std = @import("std");
 pub const SourceStatus = @import("resolver_lifecycle_pure.zig").SourceStatus;
-pub const Provider = enum { openverse, netlabels, somafm };
+pub const Provider = enum {
+    openverse,
+    netlabels,
+    somafm,
+    /// Internet Archive Live Music Archive (etree) — taper-friendly concerts.
+    livemusic,
+
+    /// The Internet Archive collection filter (already percent-encoded) for the
+    /// providers that share the search-then-metadata flow; null for the rest.
+    pub fn archiveCollection(self: Provider) ?[]const u8 {
+        return switch (self) {
+            .netlabels => "collection%3Anetlabels%20AND%20mediatype%3Aaudio",
+            .livemusic => "collection%3Aetree%20AND%20mediatype%3Aetree",
+            else => null,
+        };
+    }
+};
+
+/// The provider's first search request. `endpoint` has no trailing slash and
+/// `q` is percent-encoded. Null when `out` is too small.
+pub fn searchUrl(out: []u8, provider: Provider, endpoint: []const u8, q: []const u8, limit: usize) ?[]const u8 {
+    return switch (provider) {
+        .openverse => std.fmt.bufPrint(out, "{s}/v1/audio/?q={s}&category=music&page_size={d}", .{ endpoint, q, @min(20, limit) }),
+        .somafm => std.fmt.bufPrint(out, "{s}/channels.json", .{endpoint}),
+        .netlabels, .livemusic => std.fmt.bufPrint(out, "{s}/advancedsearch.php?q={s}%20AND%20%28{s}%29&fl%5B%5D=identifier&rows=2&output=json", .{ endpoint, provider.archiveCollection().?, q }),
+    } catch null;
+}
 pub const Kind = enum { music, radio };
 pub const Item = struct {
     kind: Kind = .music,
@@ -186,4 +212,37 @@ test "Netlabels uses individual MP3 tracks not archive or alternate encodings" {
     try std.testing.expectEqual(@as(usize, 1), parseNetlabel(p.value, "album", &rows).count);
     try std.testing.expectEqualStrings("https://archive.org/download/album/01%20song.mp3", rows[0].play_url[0..rows[0].play_url_len]);
     try std.testing.expectEqual(SourceStatus.parse_failed, parseNetlabel(p.value, "other", &rows).status);
+}
+
+test "provider search URLs: both archive collections share one flow" {
+    var b: [512]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "https://archive.org/advancedsearch.php?q=collection%3Anetlabels%20AND%20mediatype%3Aaudio%20AND%20%28dune%29&fl%5B%5D=identifier&rows=2&output=json",
+        searchUrl(&b, .netlabels, "https://archive.org", "dune", 16).?,
+    );
+    try std.testing.expectEqualStrings(
+        "https://archive.org/advancedsearch.php?q=collection%3Aetree%20AND%20mediatype%3Aetree%20AND%20%28dune%29&fl%5B%5D=identifier&rows=2&output=json",
+        searchUrl(&b, .livemusic, "https://archive.org", "dune", 16).?,
+    );
+    try std.testing.expectEqualStrings("https://api.openverse.org/v1/audio/?q=dune&category=music&page_size=20", searchUrl(&b, .openverse, "https://api.openverse.org", "dune", 64).?);
+    try std.testing.expectEqualStrings("https://somafm.com/channels.json", searchUrl(&b, .somafm, "https://somafm.com", "x", 1).?);
+    var tiny: [16]u8 = undefined;
+    try std.testing.expect(searchUrl(&tiny, .livemusic, "https://archive.org", "dune", 16) == null);
+    try std.testing.expect(Provider.openverse.archiveCollection() == null);
+}
+
+test "Live Music Archive concerts reuse the per-track MP3 projection" {
+    // Captured 2026-11 from archive.org/metadata/smz2006-04-30.aud.flac16 (trimmed).
+    const body =
+        \\{"metadata":{"identifier":"smz2006-04-30.aud.flac16","title":"A Silver Mt Zion Live at La Cigale on 2006-04-30","creator":"A Silver Mt Zion"},
+        \\"files":[{"name":"smz2006-04-30d1t2.flac","title":"Godbless Our Dead Marines"},
+        \\{"name":"smz2006-04-30d1t2.mp3","title":"Godbless Our Dead Marines"}]}
+    ;
+    const p = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, body, .{});
+    defer p.deinit();
+    var rows: [2]Item = undefined;
+    try std.testing.expectEqual(@as(usize, 1), parseNetlabel(p.value, "smz2006-04-30.aud.flac16", &rows).count);
+    try std.testing.expectEqualStrings("https://archive.org/download/smz2006-04-30.aud.flac16/smz2006-04-30d1t2.mp3", rows[0].play_url[0..rows[0].play_url_len]);
+    try std.testing.expectEqualStrings("Godbless Our Dead Marines", rows[0].title[0..rows[0].title_len]);
+    try std.testing.expectEqualStrings("A Silver Mt Zion", rows[0].artist[0..rows[0].artist_len]);
 }

@@ -36,6 +36,32 @@ fn displayName(line: []const u8) []const u8 {
     return std.mem.trim(u8, line[comma + 1 ..], " \r\t");
 }
 
+/// The stream URL as it fits the channel record. A URL longer than `cap` is cut
+/// at a query-parameter boundary — FAST playlists (Xumo, Local Now, Vizio, TCL)
+/// append 1-3 KB of ad-targeting parameters, and cutting one mid-value would
+/// send a malformed request. Verified live 2026-11: 18 of 20 sampled long URLs
+/// still answer with their HLS manifest after this cut. A URL whose PATH alone
+/// overflows is unusable when truncated, so it yields "" (entry skipped).
+pub fn fitUrl(line: []const u8, cap: usize) []const u8 {
+    if (line.len <= cap) return line;
+    const head = line[0..cap];
+    const query = std.mem.indexOfScalar(u8, head, '?') orelse return "";
+    if (std.mem.lastIndexOfScalar(u8, head, '&')) |amp| {
+        if (amp > query) return head[0..amp];
+    }
+    return head[0..query];
+}
+
+/// Value of a `#EXTVLCOPT:<key>=<value>` play hint ("" when the line is another
+/// directive or the value is empty).
+fn vlcOpt(line: []const u8, key: []const u8) []const u8 {
+    const prefix = "#EXTVLCOPT:";
+    if (!std.mem.startsWith(u8, line, prefix)) return "";
+    const rest = line[prefix.len..];
+    if (rest.len <= key.len or !std.ascii.eqlIgnoreCase(rest[0..key.len], key) or rest[key.len] != '=') return "";
+    return std.mem.trim(u8, rest[key.len + 1 ..], " \t");
+}
+
 /// Parse an M3U playlist into `out`, keeping entries that pass the same
 /// name/url/NSFW/query/category gates as the directory path (via acceptChannel).
 /// `nsfw_allowed` lifts the adult gate; `query`/`category` are case-insensitive
@@ -50,6 +76,12 @@ pub fn parseM3u(text: []const u8, out: []p.IptvChannel, nsfw_allowed: bool, quer
     var pending_cat_len: usize = 0;
     var pending_country: [64]u8 = undefined;
     var pending_country_len: usize = 0;
+    // Per-entry play hints (#EXTVLCOPT between the #EXTINF and its URL). Some
+    // CDNs reject a request without the playlist's declared User-Agent.
+    var pending_ua: [256]u8 = undefined;
+    var pending_ua_len: usize = 0;
+    var pending_ref: [256]u8 = undefined;
+    var pending_ref_len: usize = 0;
     var have_inf = false;
 
     var lines = std.mem.splitScalar(u8, text, '\n');
@@ -65,10 +97,26 @@ pub fn parseM3u(text: []const u8, out: []p.IptvChannel, nsfw_allowed: bool, quer
             pending_logo_len = attr(line, "tvg-logo", &pending_logo);
             pending_cat_len = attr(line, "group-title", &pending_cat);
             pending_country_len = attr(line, "tvg-country", &pending_country);
+            pending_ua_len = 0;
+            pending_ref_len = 0;
             have_inf = true;
             continue;
         }
-        if (line[0] == '#') continue; // other directives (#EXTGRP, #EXTVLCOPT…)
+        if (line[0] == '#') {
+            if (have_inf) {
+                const ua = vlcOpt(line, "http-user-agent");
+                if (ua.len > 0 and ua.len <= pending_ua.len) {
+                    @memcpy(pending_ua[0..ua.len], ua);
+                    pending_ua_len = ua.len;
+                }
+                const ref = vlcOpt(line, "http-referrer");
+                if (ref.len > 0 and ref.len <= pending_ref.len) {
+                    @memcpy(pending_ref[0..ref.len], ref);
+                    pending_ref_len = ref.len;
+                }
+            }
+            continue; // other directives (#EXTGRP, #KODIPROP…)
+        }
 
         // A non-# line is the stream URL for the pending #EXTINF.
         if (!have_inf) continue;
@@ -78,8 +126,14 @@ pub fn parseM3u(text: []const u8, out: []p.IptvChannel, nsfw_allowed: bool, quer
         c.* = .{};
         c.name_len = @min(pending_name_len, c.name.len);
         @memcpy(c.name[0..c.name_len], pending_name[0..c.name_len]);
-        c.url_len = @min(line.len, c.url.len);
-        @memcpy(c.url[0..c.url_len], line[0..c.url_len]);
+        const stream_url = fitUrl(line, c.url.len);
+        if (stream_url.len == 0) continue;
+        c.url_len = stream_url.len;
+        @memcpy(c.url[0..c.url_len], stream_url);
+        c.user_agent_len = @min(pending_ua_len, c.user_agent.len);
+        @memcpy(c.user_agent[0..c.user_agent_len], pending_ua[0..c.user_agent_len]);
+        c.referrer_len = @min(pending_ref_len, c.referrer.len);
+        @memcpy(c.referrer[0..c.referrer_len], pending_ref[0..c.referrer_len]);
         c.logo_len = @min(pending_logo_len, c.logo.len);
         @memcpy(c.logo[0..c.logo_len], pending_logo[0..c.logo_len]);
         c.category_len = @min(pending_cat_len, c.category.len);
@@ -163,4 +217,52 @@ test "playlist catalog preserves explicit countries and geographic group names" 
     try std.testing.expectEqualStrings("IN", rows[0].country[0..rows[0].country_len]);
     try std.testing.expectEqualStrings("GB", rows[1].country[0..rows[1].country_len]);
     try std.testing.expectEqualStrings("", playlistCountry("", "News"));
+}
+
+test "regression: long FAST stream URLs are cut at a parameter boundary, never mid-value" {
+    // Captured shape: apsattv.com xumo.m3u (2026-11) — 372 of 389 URLs exceed the
+    // 512-byte channel field; the blind cut landed inside an ad parameter.
+    const base = "https://dbrb49pjoymg4.cloudfront.net/10001/99991635/hls/playlist.m3u8?ads.xumo_channelId=99991635&ads._fw_ifa_type=[IFA_TYPE]";
+    try std.testing.expectEqualStrings(base, fitUrl(base, 512));
+    try std.testing.expectEqualStrings(
+        "https://dbrb49pjoymg4.cloudfront.net/10001/99991635/hls/playlist.m3u8?ads.xumo_channelId=99991635",
+        fitUrl(base, 110),
+    );
+    // Only one parameter fits → drop the whole query, keep the manifest path.
+    try std.testing.expectEqualStrings("https://dbrb49pjoymg4.cloudfront.net/10001/99991635/hls/playlist.m3u8", fitUrl(base, 80));
+    // The path itself overflows → unusable, skipped by the parser.
+    try std.testing.expectEqualStrings("", fitUrl(base, 40));
+
+    var long: [900]u8 = undefined;
+    const filler = "&ads.caid=FoxNewsNow";
+    @memcpy(long[0..base.len], base);
+    var w: usize = base.len;
+    while (w + filler.len <= long.len) : (w += filler.len) @memcpy(long[w..][0..filler.len], filler);
+    var text: [1024]u8 = undefined;
+    const m3u = try std.fmt.bufPrint(&text, "#EXTINF:-1 group-title=\"News\",LiveNOW from FOX\n{s}\n", .{long[0..w]});
+    var rows: [1]p.IptvChannel = undefined;
+    try std.testing.expectEqual(@as(usize, 1), parseM3u(m3u, &rows, false, "", ""));
+    const got = rows[0].url[0..rows[0].url_len];
+    try std.testing.expect(got.len <= rows[0].url.len);
+    try std.testing.expect(std.mem.endsWith(u8, got, "ads.caid=FoxNewsNow"));
+}
+
+test "EXTVLCOPT play hints attach to their own channel only" {
+    // Captured shape: i.mjh.nz/nz/raw-tv.m3u8 (2026-11).
+    const m3u =
+        "#EXTM3U\n" ++
+        "#EXTINF:-1 channel-id=\"mjh-sky-hgtv\" group-title=\"Nz\" , HGTV\n" ++
+        "#EXTVLCOPT:http-user-agent=otg/1.5.1 (AppleTv Apple TV 4; tvOS16.0; appletv.client) libcurl/7.58.0\n" ++
+        "#EXTVLCOPT:http-referrer=\n" ++
+        "https://i.mjh.nz/.r/sky-hgtv.m3u8\n" ++
+        "#EXTINF:-1 group-title=\"Nz\",Plain\n" ++
+        "#EXTVLCOPT:http-referrer=https://example.test/\n" ++
+        "https://i.mjh.nz/.r/plain.m3u8\n";
+    var rows: [2]p.IptvChannel = undefined;
+    try std.testing.expectEqual(@as(usize, 2), parseM3u(m3u, &rows, false, "", ""));
+    try std.testing.expectEqualStrings("HGTV", rows[0].name[0..rows[0].name_len]);
+    try std.testing.expect(std.mem.startsWith(u8, rows[0].user_agent[0..rows[0].user_agent_len], "otg/1.5.1 (AppleTv"));
+    try std.testing.expectEqual(@as(usize, 0), rows[0].referrer_len);
+    try std.testing.expectEqual(@as(usize, 0), rows[1].user_agent_len);
+    try std.testing.expectEqualStrings("https://example.test/", rows[1].referrer[0..rows[1].referrer_len]);
 }

@@ -24,6 +24,20 @@
 //!   • PAGES     GET {api}/series/{seriesSlug}/{chapterSlug}   → images at
 //!               {"chapter":{"chapter_data":{"images":[url,…]}}} (new) OR {"data":[url,…]} (old)
 //!
+//! Iken contract (verified live Nov 2026 — every catalog site that still answers
+//! has moved to it; the HeanCms `/query` path above now 404s there):
+//!   • SEARCH    GET {api}/api/query?page=N&perPage=20&searchTerm={q}
+//!               → { "posts":[Post], "totalCount":N }   Post = id, slug, postTitle,
+//!               featuredImage, seriesType (NOVEL ⇒ text, skipped)
+//!   • DETAILS   GET {api}/api/post?postSlug={slug}        → { "post":{ id, postTitle, isNovel, … } }
+//!   • CHAPTERS  GET {api}/api/chapters?postId={id}&skip=0&take=100&order=asc
+//!               → { "post":{ "chapters":[Chapter] }, "totalChapterCount":N }
+//!               isLocked / !isAccessible / price>0 ⇒ paywalled → SKIP
+//!   • PAGES     GET {api}/api/chapter?postId={id}&chapterId={cid}
+//!               → { "chapter":{ "images":[{ "url", "order", … }] } }  (locked ⇒ images:[])
+//! The flavour is detected by RESPONSE SHAPE (isIkenQuery / isIkenPost), so one
+//! "heancms" source id drives both and a legacy HeanCms site keeps working.
+//!
 //! Everything is fixed-buffer / no-allocation, matching the project's
 //! `[N]u8 + len` convention.
 
@@ -191,9 +205,25 @@ pub fn buildRouteUrl(out: []u8, slug: []const u8) ?[]const u8 {
 /// one, or the slug doesn't validate).
 pub fn slugFromRoute(url: []const u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, url, HC_SCHEME)) return null;
-    const slug = url[HC_SCHEME.len..];
+    const tail = url[HC_SCHEME.len..];
+    const slug = tail[0 .. std.mem.indexOfScalar(u8, tail, '?') orelse tail.len];
+    if (slug.len != tail.len and chapterIdFromRoute(url) == null) return null;
     if (!isValidSlug(slug)) return null;
     return slug;
+}
+
+/// Chapter routes retain the series identity and a stable numeric chapter id.
+pub fn chapterIdFromRoute(url: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, url, HC_SCHEME)) return null;
+    const at = std.mem.indexOf(u8, url, "?chapter=") orelse return null;
+    if (!isValidSlug(url[HC_SCHEME.len..at])) return null;
+    const id = url[at + "?chapter=".len ..];
+    return if (isValidId(id)) id else null;
+}
+
+pub fn buildIkenChapterRoute(out: []u8, slug: []const u8, id: []const u8) ?[]const u8 {
+    if (!isValidSlug(slug) or !isValidId(id)) return null;
+    return std.fmt.bufPrint(out, "{s}{s}?chapter={s}", .{ HC_SCHEME, slug, id }) catch null;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -276,6 +306,9 @@ pub const ChapterEntry = struct {
     /// True when `price == 0`. Paywalled chapters (price>0) are flagged here so
     /// the caller can SKIP them (and surface a count), never silently 404.
     free: bool,
+    /// Iken only: the raw chapter number token ("3", "10.5"); "" for HeanCms,
+    /// whose `chapter_name` already reads "Chapter 3".
+    number: []const u8 = "",
 };
 
 /// Parse one chapter object. Requires a valid chapter_slug; `price` defaults to 0
@@ -318,6 +351,244 @@ pub fn pagesNode(json: []const u8) ?[]const u8 {
     }
     return null;
 }
+
+// ══════════════════════════════════════════════════════════
+// Iken flavour (the API the HeanCms sites migrated to)
+// ══════════════════════════════════════════════════════════
+
+/// The raw value of a DEPTH-1 field of the JSON object `obj`: a string's
+/// (still-escaped) contents, a bare token (`375`, `true`, `null`), or the
+/// balanced `{…}`/`[…]` span. Unlike findJsonStr this never matches a same-named
+/// key inside a nested object — Iken chapters embed a `mangaPost` with its own
+/// `slug`/`id`, and its key order is not stable across sites. `name` is the bare
+/// key (no quotes). Null when absent or the object is truncated.
+pub fn objField(obj: []const u8, name: []const u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < obj.len and obj[i] != '{') i += 1;
+    i += 1;
+    while (i < obj.len) {
+        while (i < obj.len and obj[i] != '"') {
+            if (obj[i] == '}') return null;
+            i += 1;
+        }
+        if (i >= obj.len) return null;
+        const key_end = cp.skipString(obj, i);
+        if (key_end >= obj.len) return null; // unterminated key / nothing after it
+        const key = obj[i + 1 .. key_end - 1];
+        i = key_end;
+        while (i < obj.len and (obj[i] == ':' or std.ascii.isWhitespace(obj[i]))) i += 1;
+        if (i >= obj.len) return null;
+        var val: []const u8 = undefined;
+        switch (obj[i]) {
+            '"' => {
+                const end = cp.skipString(obj, i);
+                if (end >= obj.len) return null; // unterminated (truncated body)
+                val = obj[i + 1 .. end - 1];
+                i = end;
+            },
+            '{', '[' => {
+                val = cp.balancedSpan(obj, i) orelse return null;
+                i += val.len;
+            },
+            else => {
+                const start = i;
+                while (i < obj.len and obj[i] != ',' and obj[i] != '}' and !std.ascii.isWhitespace(obj[i])) i += 1;
+                val = obj[start..i];
+            },
+        }
+        if (std.mem.eql(u8, key, name)) return val;
+    }
+    return null;
+}
+
+fn fieldIs(obj: []const u8, name: []const u8, token: []const u8) bool {
+    const v = objField(obj, name) orelse return false;
+    return std.mem.eql(u8, v, token);
+}
+
+/// The `posts[]` array of an Iken `/api/query` body, or null when the body is
+/// not Iken-shaped (a HeanCms `{"data":[…]}`, a 404 JSON, an HTML wall).
+pub fn ikenPostsNode(json: []const u8) ?[]const u8 {
+    const n = objField(json, "posts") orelse return null;
+    if (n.len == 0 or n[0] != '[') return null;
+    return n;
+}
+
+/// True when a search response came from an Iken API (even with zero hits).
+pub fn isIkenQuery(json: []const u8) bool {
+    return ikenPostsNode(json) != null;
+}
+
+/// True when a details response came from an Iken API (`{"post":{…}}`).
+pub fn isIkenPost(json: []const u8) bool {
+    const n = objField(json, "post") orelse return false;
+    return n.len > 0 and n[0] == '{';
+}
+
+/// `GET {api}/api/query?page=N&perPage=20&searchTerm={q}` — browse (empty `query`)
+/// and search share the endpoint. `page` is 1-based.
+pub fn buildIkenQueryUrl(out: []u8, api: []const u8, query: []const u8, page: u32) ?[]const u8 {
+    if (!std.mem.startsWith(u8, api, "http")) return null;
+    if (page == 0) return null;
+    var enc: [512]u8 = undefined;
+    const n = percentEncodeStrict(query, &enc);
+    if (n > enc.len) return null;
+    return std.fmt.bufPrint(out, "{s}/api/query?page={d}&perPage=20&searchTerm={s}", .{ api, page, enc[0..n] }) catch null;
+}
+
+/// `GET {api}/api/post?postSlug={slug}` — series details (numeric id + title).
+pub fn buildIkenPostUrl(out: []u8, api: []const u8, slug: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, api, "http")) return null;
+    if (!isValidSlug(slug)) return null;
+    return std.fmt.bufPrint(out, "{s}/api/post?postSlug={s}", .{ api, slug }) catch null;
+}
+
+/// How many chapters one list call asks for. Ascending order + first-free means
+/// the head of the list is all the reader needs; a full `take=900` body (~0.8KB
+/// per chapter) would overflow the fetch buffer and truncate the JSON.
+pub const IKEN_CHAPTER_TAKE = 100;
+
+/// `GET {api}/api/chapters?postId={id}&skip=0&take=100&order=asc`.
+pub fn buildIkenChapterListUrl(out: []u8, api: []const u8, post_id: []const u8) ?[]const u8 {
+    return buildIkenChapterListPageUrl(out, api, post_id, 0);
+}
+
+pub fn buildIkenChapterListPageUrl(out: []u8, api: []const u8, post_id: []const u8, skip: usize) ?[]const u8 {
+    if (!std.mem.startsWith(u8, api, "http")) return null;
+    if (!isValidId(post_id)) return null;
+    return std.fmt.bufPrint(out, "{s}/api/chapters?postId={s}&skip={d}&take={d}&order=asc", .{ api, post_id, skip, IKEN_CHAPTER_TAKE }) catch null;
+}
+
+/// `GET {api}/api/chapter?postId={id}&chapterId={cid}` — one chapter's images.
+pub fn buildIkenPagesUrl(out: []u8, api: []const u8, post_id: []const u8, chapter_id: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, api, "http")) return null;
+    if (!isValidId(post_id) or !isValidId(chapter_id)) return null;
+    return std.fmt.bufPrint(out, "{s}/api/chapter?postId={s}&chapterId={s}", .{ api, post_id, chapter_id }) catch null;
+}
+
+/// Parse one Iken post object (a `/api/query` `posts[]` row, or the `post` node
+/// of `/api/post`). Requires a valid slug, a numeric id and a title. Novels
+/// (`seriesType:"NOVEL"` / `isNovel:true`) are text, not page images → null.
+pub fn parseIkenPost(obj: []const u8) ?SeriesEntry {
+    const slug = objField(obj, "slug") orelse return null;
+    if (!isValidSlug(slug)) return null;
+    const id = objField(obj, "id") orelse return null;
+    if (!isValidId(id)) return null;
+    const title = objField(obj, "postTitle") orelse return null;
+    if (title.len == 0 or std.mem.eql(u8, title, "null")) return null;
+    if (fieldIs(obj, "seriesType", "NOVEL") or fieldIs(obj, "isNovel", "true")) return null;
+    var thumb: []const u8 = objField(obj, "featuredImage") orelse "";
+    if (std.mem.eql(u8, thumb, "null")) thumb = "";
+    return .{ .id = id, .slug = slug, .title = title, .thumbnail = thumb };
+}
+
+/// Parse an `/api/post?postSlug=` body (`{"post":{…}}`).
+pub fn parseIkenDetail(json: []const u8) ?SeriesEntry {
+    const post = objField(json, "post") orelse return null;
+    if (post.len == 0 or post[0] != '{') return null;
+    return parseIkenPost(post);
+}
+
+/// Parse one Iken chapter object. `free` is false when the site flags it locked
+/// (`isLocked:true` / `isAccessible:false` / `isPermanentlyLocked:true`) or it
+/// still carries a coin price. `slug` is informational — pages are fetched by id.
+pub fn parseIkenChapter(obj: []const u8) ?ChapterEntry {
+    const id = objField(obj, "id") orelse return null;
+    if (!isValidId(id)) return null;
+    const locked = fieldIs(obj, "isLocked", "true") or
+        fieldIs(obj, "isAccessible", "false") or
+        fieldIs(obj, "isPermanentlyLocked", "true");
+    const price = std.fmt.parseInt(u64, objField(obj, "price") orelse "0", 10) catch 0;
+    var number: []const u8 = objField(obj, "number") orelse "";
+    if (std.mem.eql(u8, number, "null")) number = "";
+    return .{
+        .id = id,
+        .slug = objField(obj, "slug") orelse "",
+        .name = "",
+        .free = !locked and price == 0,
+        .number = number,
+    };
+}
+
+/// The FIRST free chapter of an `/api/chapters` body (`post.chapters[]`, asked
+/// for in ascending order → chapter 1 unless it is locked). Null when every
+/// listed chapter is paywalled or the payload is not Iken-shaped.
+pub fn firstFreeIkenChapter(json: []const u8) ?ChapterEntry {
+    const post = objField(json, "post") orelse return null;
+    const chapters = objField(post, "chapters") orelse return null;
+    if (chapters.len == 0 or chapters[0] != '[') return null;
+    var it = ObjIter{ .buf = chapters };
+    while (it.next()) |obj| {
+        const ch = parseIkenChapter(obj) orelse continue;
+        if (ch.free) return ch;
+    }
+    return null;
+}
+
+/// Owns chapter metadata across paginated fetch-buffer reuse. Locked chapters
+/// are skipped; a missing requested id never silently opens another chapter.
+pub const IkenNavigation = struct {
+    pub const Chapter = struct {
+        id: [24]u8 = @splat(0),
+        number: [48]u8 = @splat(0),
+        pub fn idSlice(self: *const Chapter) []const u8 {
+            return std.mem.sliceTo(&self.id, 0);
+        }
+        pub fn numberSlice(self: *const Chapter) []const u8 {
+            return std.mem.sliceTo(&self.number, 0);
+        }
+    };
+    previous: ?Chapter = null,
+    current: ?Chapter = null,
+    next: ?Chapter = null,
+
+    pub fn append(self: *IkenNavigation, json: []const u8, requested: ?[]const u8) ?usize {
+        const post = objField(json, "post") orelse return null;
+        const chapters = objField(post, "chapters") orelse return null;
+        if (chapters.len == 0 or chapters[0] != '[') return null;
+        var it = ObjIter{ .buf = chapters };
+        var count: usize = 0;
+        while (it.next()) |obj| {
+            count += 1;
+            const ch = parseIkenChapter(obj) orelse continue;
+            if (!ch.free or ch.id.len >= 24 or ch.number.len >= 48) continue;
+            var owned: Chapter = .{};
+            @memcpy(owned.id[0..ch.id.len], ch.id);
+            @memcpy(owned.number[0..ch.number.len], ch.number);
+            if (self.current != null) {
+                if (self.next == null) self.next = owned;
+            } else if (requested == null or std.mem.eql(u8, requested.?, ch.id)) {
+                self.current = owned;
+            } else self.previous = owned;
+        }
+        return count;
+    }
+};
+
+/// Walks the page-image URLs of an `/api/chapter` body in array order (the API
+/// returns them sorted by `order`). Each `next()` is a raw, still-escaped URL —
+/// jsonUnescape + absolutizeCover it. A locked chapter (`"images":[]`) or a
+/// novel chapter (text `content`, no images) yields nothing.
+pub const IkenImageIter = struct {
+    objs: ObjIter,
+
+    pub fn init(json: []const u8) IkenImageIter {
+        const empty: IkenImageIter = .{ .objs = .{ .buf = "" } };
+        const chapter = objField(json, "chapter") orelse return empty;
+        const images = objField(chapter, "images") orelse return empty;
+        if (images.len == 0 or images[0] != '[') return empty;
+        return .{ .objs = .{ .buf = images } };
+    }
+
+    pub fn next(self: *IkenImageIter) ?[]const u8 {
+        while (self.objs.next()) |obj| {
+            const url = objField(obj, "url") orelse continue;
+            if (url.len == 0 or std.mem.eql(u8, url, "null")) continue;
+            return url;
+        }
+        return null;
+    }
+};
 
 // ══════════════════════════════════════════════════════════
 // Tests — exercised against embedded HeanCms/Iken JSON samples.
@@ -539,4 +810,212 @@ test "findJsonUint: integer fields; rejects null/quoted/missing" {
     try std.testing.expect(findJsonUint("{\"x\":1}", "\"id\":") == null);
     try std.testing.expectEqual(@as(u64, 0), fieldUint("{}", "\"price\":", 0));
     try std.testing.expectEqual(@as(u64, 5), fieldUint("{\"price\":5}", "\"price\":", 0));
+}
+
+// ── Iken: samples trimmed from live captures (api.hivetoons.org, 2026-11-18) ──
+
+const IKEN_QUERY =
+    \\{"posts":[
+    \\{"id":375,"slug":"the-subcontractors-blueprint","postTitle":"The Subcontractor's Blueprint","featuredImage":"https://storage.hivetoon.com/public/upload/series/featured/cmera5fvc000wpg1hz1ad0qf4/d79c8f2a-c5ec-48fb-b770-495846f927d3.png","seriesType":"MANHWA","seriesStatus":"ONGOING","hot":false,"isPinned":false,"saleActive":false,"salePercentage":0,"saleEndDate":null,"genres":[{"id":2,"name":"Drama","color":""}],"chapters":"[{\"id\": 21915, \"number\": 3, \"title\": \"The Paper Trail\", \"slug\": \"chapter-3\", \"isLocked\": false, \"isAccessible\": true}]","averageRating":10},
+    \\{"id":2896,"slug":"the-17th-princess-just-wants-to-live","postTitle":"The 17th Princess Just Wants to Live","featuredImage":"https://storage.azorafly.com/upload/series/featured/x/b8f9069e.jpg","seriesType":"NOVEL","genres":[],"chapters":"[]","averageRating":0},
+    \\{"genres":[{"id":3,"name":"Fantasy","color":""}],"averageRating":9,"featuredImage":null,"postTitle":"The Northern Grand Duke’s Crazy Live-In Son-in-Law","slug":"the-northern-grand-dukes-crazy-live-in-son-in-law","id":374,"seriesType":"MANHWA"}
+    \\],"totalCount":330,"searchTerm":null}
+;
+
+const IKEN_POST =
+    \\{"firstChapter":{"number":1,"slug":"chapter-1"},"lastChapter":{"number":3,"slug":"chapter-3"},"totalChapterCount":3,"post":{"id":375,"slug":"the-subcontractors-blueprint","postTitle":"The Subcontractor's Blueprint","postContent":"<p>A man wakes up in the body of a Fair Trade Commission investigator.</p>","isNovel":false,"featuredImage":"https://storage.hivetoon.com/public/upload/series/featured/cmera5fvc000wpg1hz1ad0qf4/d79c8f2a-c5ec-48fb-b770-495846f927d3.png","seriesType":"MANHWA","seriesStatus":"ONGOING","genres":[{"id":2,"name":"Drama","color":""}],"_count":{"bookmarks":4,"ratings":0,"chapters":3},"createdby":{"id":"cmera5fvc000wpg1hz1ad0qf4","name":"storm"},"chapters":[],"averageRating":10}}
+;
+
+// Chapter 10 is coin-locked (price 100, isLocked) and listed first; chapter 8
+// became free. The second object puts `mangaPost` (with its own id/slug) FIRST.
+const IKEN_CHAPTERS =
+    \\{"post":{"chapters":[
+    \\{"id":21909,"slug":"chapter-10","number":10,"title":"Fitting Name","unlockAt":"2026-11-25T13:01:07.875Z","becameFreeAt":null,"isPermanentlyLocked":false,"isShortLinkLocked":false,"price":100,"mangaPostId":374,"likesCount":0,"_count":{"comments":0},"chapterPurchased":false,"isLocked":true,"isAccessible":false},
+    \\{"mangaPost":{"id":374,"postTitle":"The Northern Grand Duke’s Crazy Live-In Son-in-Law","slug":"the-northern-grand-dukes-crazy-live-in-son-in-law"},"id":21823,"slug":"chapter-8","number":8,"title":"Demian","unlockAt":null,"becameFreeAt":"2026-11-17T15:12:40.837Z","isPermanentlyLocked":false,"price":0,"mangaPostId":374,"chapterPurchased":false,"isLocked":false,"isAccessible":true}
+    \\]},"totalChapterCount":11}
+;
+
+const IKEN_PAGES =
+    \\{"chapter":{"id":21777,"slug":"chapter-1","number":1,"title":"To Save the Company","chapterStatus":"PUBLIC","featuredImage":"https://image-comic.pstatic.net/webtoon/857024/1/thumbnail_202x120.jpg","price":0,"mangaPostId":375,"mangaPost":{"id":375,"postTitle":"The Subcontractor's Blueprint","slug":"the-subcontractors-blueprint","featuredImage":"https://storage.hivetoon.com/public/upload/series/featured/x/cover.png"},"content":"","images":[{"id":805749,"url":"https://storage.hivetoon.com/public/upload/series/the-subcontractors-blueprint/e578908d-8f4b-4859-bf35-0c380b77bff8/page-0001_01_1793817704302-216377.webp","width":800,"height":5000,"order":0},{"id":1055182,"height":11115,"width":1125,"url":"https://storage.eternalmangas.org//upload/series/el-error-perfecto/motek8Hm3S/01.webp","order":1}],"isPurchased":false,"isLocked":false,"isAccessible":true},"nextChapter":{"slug":"chapter-2","number":2,"title":"An Inside Job"},"previousChapter":null}
+;
+
+const IKEN_PAGES_LOCKED =
+    \\{"chapter":{"id":21909,"slug":"chapter-10","number":10,"price":100,"isLockedByCoins":true,"mangaPostId":374,"mangaPost":{"id":374,"slug":"x"},"isPurchased":false,"isLocked":true,"isAccessible":false,"content":null,"images":[]},"nextChapter":null,"previousChapter":{"slug":"chapter-9","number":9,"title":"A Revisit"}}
+;
+
+test "regression: catalog sites moved to Iken — /api/* URL builders" {
+    var out: [512]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "https://api.x.com/api/query?page=1&perPage=20&searchTerm=",
+        buildIkenQueryUrl(&out, "https://api.x.com", "", 1).?,
+    );
+    try std.testing.expectEqualStrings(
+        "https://api.x.com/api/query?page=3&perPage=20&searchTerm=the%20duke%26x%3D1",
+        buildIkenQueryUrl(&out, "https://api.x.com", "the duke&x=1", 3).?,
+    );
+    try std.testing.expectEqualStrings(
+        "https://api.x.com/api/post?postSlug=the-subcontractors-blueprint",
+        buildIkenPostUrl(&out, "https://api.x.com", "the-subcontractors-blueprint").?,
+    );
+    try std.testing.expectEqualStrings(
+        "https://api.x.com/api/chapters?postId=375&skip=0&take=100&order=asc",
+        buildIkenChapterListUrl(&out, "https://api.x.com", "375").?,
+    );
+    try std.testing.expectEqualStrings(
+        "https://api.x.com/api/chapter?postId=375&chapterId=21777",
+        buildIkenPagesUrl(&out, "https://api.x.com", "375", "21777").?,
+    );
+    // Injection / bad input never reaches the network.
+    try std.testing.expect(buildIkenQueryUrl(&out, "https://api.x.com", "q", 0) == null);
+    try std.testing.expect(buildIkenQueryUrl(&out, "ftp://x", "q", 1) == null);
+    try std.testing.expect(buildIkenPostUrl(&out, "https://api.x.com", "a&postId=1") == null);
+    try std.testing.expect(buildIkenChapterListUrl(&out, "https://api.x.com", "375&take=9") == null);
+    try std.testing.expect(buildIkenPagesUrl(&out, "https://api.x.com", "375", "") == null);
+}
+
+test "objField: depth-1 only, any key order, all value kinds" {
+    const obj =
+        \\{"mangaPost":{"id":374,"slug":"inner"}, "id": 21823 ,"slug":"chapter-8","t":"a \"q\" }","ok":true,"n":null,"arr":[{"id":1}]}
+    ;
+    try std.testing.expectEqualStrings("21823", objField(obj, "id").?);
+    try std.testing.expectEqualStrings("chapter-8", objField(obj, "slug").?);
+    try std.testing.expectEqualStrings("a \\\"q\\\" }", objField(obj, "t").?);
+    try std.testing.expectEqualStrings("true", objField(obj, "ok").?);
+    try std.testing.expectEqualStrings("null", objField(obj, "n").?);
+    try std.testing.expectEqualStrings("[{\"id\":1}]", objField(obj, "arr").?);
+    try std.testing.expectEqualStrings("{\"id\":374,\"slug\":\"inner\"}", objField(obj, "mangaPost").?);
+    try std.testing.expect(objField(obj, "postTitle") == null);
+    // Truncated / non-object input never crashes or over-reads.
+    try std.testing.expect(objField("", "id") == null);
+    try std.testing.expect(objField("{", "id") == null);
+    try std.testing.expect(objField("{\"id", "id") == null);
+    try std.testing.expect(objField("{\"id\":", "id") == null);
+    try std.testing.expect(objField("{\"slug\":\"abc", "slug") == null);
+    try std.testing.expect(objField("{\"a\":{\"id\":1", "id") == null);
+    try std.testing.expect(objField("<html>", "id") == null);
+}
+
+test "Iken query: posts parsed, novels skipped, shape detection" {
+    try std.testing.expect(isIkenQuery(IKEN_QUERY));
+    try std.testing.expect(isIkenQuery("{\"posts\":[],\"totalCount\":0,\"searchTerm\":\"zz\"}"));
+    // HeanCms body / the 404 JSON a migrated site returns / an HTML wall are NOT Iken.
+    try std.testing.expect(!isIkenQuery(QUERY_SAMPLE));
+    try std.testing.expect(!isIkenQuery("{\"error\":\"Not Found\",\"message\":\"The requested resource was not found\"}"));
+    try std.testing.expect(!isIkenQuery("<!DOCTYPE html><title>Just a moment...</title>"));
+
+    var it = ObjIter{ .buf = ikenPostsNode(IKEN_QUERY).? };
+    const a = parseIkenPost(it.next().?).?;
+    try std.testing.expectEqualStrings("375", a.id);
+    try std.testing.expectEqualStrings("the-subcontractors-blueprint", a.slug);
+    try std.testing.expectEqualStrings("The Subcontractor's Blueprint", a.title);
+    try std.testing.expect(std.mem.startsWith(u8, a.thumbnail, "https://storage.hivetoon.com/public/upload/series/featured/"));
+    // seriesType NOVEL → not a page-image series.
+    try std.testing.expect(parseIkenPost(it.next().?) == null);
+    // Shuffled key order + null cover + \u-escaped title still parse; the row's
+    // own id wins over the nested genre id that precedes it.
+    const c = parseIkenPost(it.next().?).?;
+    try std.testing.expectEqualStrings("374", c.id);
+    try std.testing.expectEqualStrings("the-northern-grand-dukes-crazy-live-in-son-in-law", c.slug);
+    try std.testing.expectEqualStrings("", c.thumbnail);
+    var t: [128]u8 = undefined;
+    const tn = jsonUnescape(c.title, &t);
+    try std.testing.expectEqualStrings("The Northern Grand Duke\u{2019}s Crazy Live-In Son-in-Law", t[0..tn]);
+    try std.testing.expect(it.next() == null);
+}
+
+test "Iken detail: post node id/title; novel + non-Iken rejected" {
+    try std.testing.expect(isIkenPost(IKEN_POST));
+    try std.testing.expect(!isIkenPost(DETAIL_SAMPLE));
+    try std.testing.expect(!isIkenPost("{\"message\":\"Either post slug or post ID is required\"}"));
+    const d = parseIkenDetail(IKEN_POST).?;
+    try std.testing.expectEqualStrings("375", d.id);
+    try std.testing.expectEqualStrings("the-subcontractors-blueprint", d.slug);
+    try std.testing.expectEqualStrings("The Subcontractor's Blueprint", d.title);
+    try std.testing.expect(parseIkenDetail("{\"post\":{\"id\":9,\"slug\":\"n\",\"postTitle\":\"N\",\"isNovel\":true}}") == null);
+    try std.testing.expect(parseIkenDetail("{\"post\":null}") == null);
+}
+
+test "firstFreeIkenChapter: coin-locked chapter skipped, nested mangaPost id ignored" {
+    const ch = firstFreeIkenChapter(IKEN_CHAPTERS).?;
+    // 21823 is the chapter's id; 374 is the nested mangaPost id that precedes it.
+    try std.testing.expectEqualStrings("21823", ch.id);
+    try std.testing.expectEqualStrings("chapter-8", ch.slug);
+    try std.testing.expectEqualStrings("8", ch.number);
+    try std.testing.expect(ch.free);
+
+    var it = ObjIter{ .buf = objField(objField(IKEN_CHAPTERS, "post").?, "chapters").? };
+    const locked = parseIkenChapter(it.next().?).?;
+    try std.testing.expectEqualStrings("21909", locked.id);
+    try std.testing.expect(!locked.free);
+
+    // Each lock signal alone is enough; no flags + no price ⇒ free.
+    try std.testing.expect(!parseIkenChapter("{\"id\":1,\"isAccessible\":false}").?.free);
+    try std.testing.expect(!parseIkenChapter("{\"id\":1,\"isPermanentlyLocked\":true}").?.free);
+    try std.testing.expect(!parseIkenChapter("{\"id\":1,\"price\":50}").?.free);
+    try std.testing.expect(parseIkenChapter("{\"id\":1,\"number\":1.5}").?.free);
+    try std.testing.expect(parseIkenChapter("{\"slug\":\"chapter-1\"}") == null); // no id → can't fetch pages
+
+    try std.testing.expect(firstFreeIkenChapter("{\"post\":{\"chapters\":[{\"id\":1,\"isLocked\":true}]},\"totalChapterCount\":1}") == null);
+    try std.testing.expect(firstFreeIkenChapter("{\"post\":{\"chapters\":[]},\"totalChapterCount\":0}") == null);
+    try std.testing.expect(firstFreeIkenChapter(CHAPTERS_SAMPLE) == null); // HeanCms shape
+    try std.testing.expect(firstFreeIkenChapter("{\"post\":{\"chapters\":[{\"id\":1,\"price\":0") == null); // truncated
+}
+
+test "IkenImageIter: image objects → url in order; locked/novel/garbage yield none" {
+    var it = IkenImageIter.init(IKEN_PAGES);
+    try std.testing.expectEqualStrings(
+        "https://storage.hivetoon.com/public/upload/series/the-subcontractors-blueprint/e578908d-8f4b-4859-bf35-0c380b77bff8/page-0001_01_1793817704302-216377.webp",
+        it.next().?,
+    );
+    // Second object has `url` after height/width (eternalmangas key order); the
+    // chapter's own featuredImage / mangaPost cover are never mistaken for pages.
+    try std.testing.expectEqualStrings("https://storage.eternalmangas.org//upload/series/el-error-perfecto/motek8Hm3S/01.webp", it.next().?);
+    try std.testing.expect(it.next() == null);
+
+    var locked = IkenImageIter.init(IKEN_PAGES_LOCKED);
+    try std.testing.expect(locked.next() == null);
+    var legacy = IkenImageIter.init(PAGES_NEW);
+    try std.testing.expect(legacy.next() == null);
+    var junk = IkenImageIter.init("<html>403</html>");
+    try std.testing.expect(junk.next() == null);
+    var cut = IkenImageIter.init("{\"chapter\":{\"images\":[{\"url\":\"https://a.test/1.webp\"},{\"url\":\"https://a");
+    try std.testing.expect(cut.next() == null);
+}
+
+test "Iken chapter navigation survives pagination and skips locked chapters" {
+    var nav: IkenNavigation = .{};
+    _ = nav.append("{\"post\":{\"chapters\":[{\"id\":1,\"number\":1},{\"id\":2,\"price\":50},{\"id\":3,\"number\":1.5}]}}", "3").?;
+    try std.testing.expectEqualStrings("1", nav.previous.?.idSlice());
+    try std.testing.expectEqualStrings("3", nav.current.?.idSlice());
+    try std.testing.expectEqualStrings("1.5", nav.current.?.numberSlice());
+    try std.testing.expect(nav.next == null);
+    _ = nav.append("{\"post\":{\"chapters\":[{\"id\":4,\"isAccessible\":false},{\"id\":5}]}}", "3").?;
+    try std.testing.expectEqualStrings("5", nav.next.?.idSlice());
+    var first: IkenNavigation = .{};
+    _ = first.append(IKEN_CHAPTERS, null).?;
+    try std.testing.expect(first.previous == null);
+    try std.testing.expect(first.current != null);
+    var absent: IkenNavigation = .{};
+    _ = absent.append(IKEN_CHAPTERS, "999999").?;
+    try std.testing.expect(absent.current == null);
+    var out: [256]u8 = undefined;
+    const route = buildIkenChapterRoute(&out, "series-name", "21777").?;
+    try std.testing.expectEqualStrings("series-name", slugFromRoute(route).?);
+    try std.testing.expectEqualStrings("21777", chapterIdFromRoute(route).?);
+    try std.testing.expect(slugFromRoute("heancms:x?chapter=1&extra=2") == null);
+    try std.testing.expectEqualStrings("https://api.x/api/chapters?postId=1&skip=100&take=100&order=asc", buildIkenChapterListPageUrl(&out, "https://api.x", "1", 100).?);
+}
+
+/// Rebuild the header from series metadata, never from a prior chapter label.
+pub fn readerTitle(out: []u8, series: []const u8, chapter: []const u8) []const u8 {
+    const base = if (series.len > 0) series else "HeanCms";
+    if (chapter.len == 0) return base;
+    return std.fmt.bufPrint(out, "{s} · {s}", .{ base, chapter }) catch base;
+}
+
+test "Iken chapter header replaces the prior chapter label" {
+    var out: [256]u8 = undefined;
+    _ = readerTitle(&out, "Series", "Ch. 1");
+    try std.testing.expectEqualStrings("Series · Ch. 2", readerTitle(&out, "Series", "Ch. 2"));
+    try std.testing.expectEqualStrings("Series", readerTitle(&out, "Series", ""));
 }

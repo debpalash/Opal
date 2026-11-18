@@ -81,7 +81,7 @@ pub fn percentEncodeStrict(input: []const u8, out: []u8) usize {
 /// Skip a JSON string that starts at `buf[i]` == '"'. Returns the index just
 /// past the closing quote, honouring backslash escapes. Used by the structural
 /// scanners so a `{`/`[` inside a string literal never moves the depth counter.
-fn skipString(buf: []const u8, i: usize) usize {
+pub fn skipString(buf: []const u8, i: usize) usize {
     var p = i + 1;
     while (p < buf.len) : (p += 1) {
         if (buf[p] == '\\') {
@@ -95,7 +95,7 @@ fn skipString(buf: []const u8, i: usize) usize {
 
 /// Return the balanced `{…}` / `[…]` span starting at `buf[start]` (inclusive of
 /// both delimiters), or null if unbalanced. String-aware.
-fn balancedSpan(buf: []const u8, start: usize) ?[]const u8 {
+pub fn balancedSpan(buf: []const u8, start: usize) ?[]const u8 {
     if (start >= buf.len) return null;
     const open = buf[start];
     const close: u8 = switch (open) {
@@ -311,10 +311,21 @@ pub const MD_SCHEME = "mangadex:";
 // send an identifying UA to MangaDex (which is also what its docs ask for).
 pub const UA_BROWSER = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-/// The User-Agent to send for `url`. MangaDex hosts get the identifying UA; every
-/// other host keeps the browser UA the scrapers rely on.
+/// Hosts that refuse a spoofed browser UA from a non-browser TLS client and
+/// serve an honest client UA. Poorly Drawn Lines resets the connection (HTTP/2
+/// PROTOCOL_ERROR) for the Chrome UA on its `/wp-content/uploads/` images while
+/// answering 200 to the app UA — every page and cover failed to download.
+const HONEST_UA_HOSTS = [_][]const u8{ "mangadex.", "poorlydrawnlines." };
+
+/// The User-Agent to send for `url`. Hosts in `HONEST_UA_HOSTS` get the
+/// identifying UA; every other host keeps the browser UA the scrapers rely on.
 pub fn userAgentFor(url: []const u8, opal_user_agent: []const u8) []const u8 {
-    if (std.mem.indexOf(u8, url, "mangadex.") != null) return opal_user_agent;
+    const scheme_end = std.mem.indexOf(u8, url, "://") orelse return UA_BROWSER;
+    const authority = url[scheme_end + 3 ..];
+    const host = authority[0 .. std.mem.indexOfAny(u8, authority, "/?#") orelse authority.len];
+    for (HONEST_UA_HOSTS) |marker| {
+        if (std.mem.indexOf(u8, host, marker) != null) return opal_user_agent;
+    }
     return UA_BROWSER;
 }
 
@@ -683,6 +694,20 @@ test "regression: MangaDex hosts get the API UA, scrapers keep the browser UA" {
     // browser UA (they rely on it to get past Cloudflare).
     try std.testing.expectEqualStrings(UA_BROWSER, userAgentFor("https://readallcomics.com/invincible-001/", app_ua));
     try std.testing.expectEqualStrings(UA_BROWSER, userAgentFor("https://1.bp.blogspot.com/x.jpg", app_ua));
+}
+
+test "regression: Poorly Drawn Lines images get the app UA, not the spoofed browser UA" {
+    // Verified live (Nov 2026): the Chrome UA gets a connection reset on
+    // poorlydrawnlines.com/wp-content/uploads/…; the app UA gets 200 image/png.
+    const app_ua = "Opal/test-version (+https://github.com/debpalash/Opal)";
+    try std.testing.expectEqualStrings(app_ua, userAgentFor("https://poorlydrawnlines.com/wp-content/uploads/2013/10/bear_and_penguin.png", app_ua));
+    try std.testing.expectEqualStrings(app_ua, userAgentFor("https://www.poorlydrawnlines.com/wp-json/wp/v2/posts/4080", app_ua));
+    // Only the HOST decides: a path or query that merely names a listed host
+    // on another site keeps the browser UA.
+    try std.testing.expectEqualStrings(UA_BROWSER, userAgentFor("https://cdn.example.test/mirror/poorlydrawnlines.com/a.png", app_ua));
+    try std.testing.expectEqualStrings(UA_BROWSER, userAgentFor("https://example.test/?from=mangadex.org", app_ua));
+    try std.testing.expectEqualStrings(UA_BROWSER, userAgentFor("mangadex:801513ba-a712-498c-8f57-cae55b38cc92", app_ua));
+    try std.testing.expectEqualStrings(UA_BROWSER, userAgentFor("https://imgs.xkcd.com/comics/containers.png", app_ua));
 }
 
 test "buildSearchUrl: empty query browses popular manga" {

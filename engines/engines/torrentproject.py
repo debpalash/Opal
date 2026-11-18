@@ -1,4 +1,4 @@
-# VERSION: 1.92
+# VERSION: 1.93
 # AUTHORS: mauricci
 
 import sys
@@ -13,7 +13,7 @@ from novaprinter import prettyPrinter
 
 
 class torrentproject:
-    url = 'https://torrentproject.com.se'
+    url = 'https://torrentproject.cc'  # .com.se now serves a parked redirect page
     name = 'TorrentProject'
     supported_categories = {'all': '0'}
 
