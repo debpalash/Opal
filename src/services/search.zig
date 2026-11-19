@@ -6,6 +6,7 @@ const state = @import("../core/state.zig");
 const player = @import("../player/player.zig");
 const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
+const media_card = @import("../ui/media_card.zig");
 const history = @import("history.zig");
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
 const bounded_process = @import("../core/bounded_process.zig");
@@ -2056,7 +2057,9 @@ fn renderContentGallery(pending: *?ResultAction) void {
                     }
                     grid.deinit();
                 } else {
-                    const rail_height = gallery_layout.shelfHeightFor(art.h, dvui.themeGet().font_body.textHeight(), gallery_layout.isPhone(width));
+                    // The rail is exactly one media-card row tall: cover + measured
+                    // footer + margins, so Details is never clipped.
+                    const rail_height = media_card.pure.rowPitch(art.h, media_card.footerHeight(gallery_layout.cardFooter(gallery_layout.isPhone(width))), GALLERY_CARD_MARGIN);
                     var rail = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .auto_overlay, .vertical = .none }, .{ .id_extra = 94800 + @as(usize, @intFromEnum(category)), .expand = .horizontal, .min_size_content = .{ .w = 1, .h = rail_height }, .max_size_content = .{ .w = std.math.floatMax(f32), .h = rail_height }, .background = false, .color_fill = .{ .color = theme.transparent } });
                     var strip = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 94900 + @as(usize, @intFromEnum(category)) });
                     for (visible[0..visible_count]) |index| {
@@ -2108,48 +2111,55 @@ fn renderGallerySummary(group: *const search_content.Group, width: f32) void {
     components.tipId(@src(), row.data().*, safeUtf8(item.name[0..item.name_len]), key);
 }
 
+/// Half the gap between gallery cards (shelves and the filtered grid).
+const GALLERY_CARD_MARGIN: f32 = 6;
+
+/// One gallery card on the shared media card: cover (click → details) with the
+/// selection ring, two-line title, then "N sources" beside a Details action.
+/// Phones drop the action row — the cover tap is the action.
 fn renderGalleryCard(group: *const search_content.Group, size: gallery_layout.Size) void {
     const item = &view_cache.rows.?[group.representative];
     const key: usize = @truncate(group.identity);
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = key, .min_size_content = .{ .w = size.w, .h = 0 }, .max_size_content = .{ .w = size.w, .h = std.math.floatMax(f32) }, .margin = .{ .x = 0, .y = 0, .w = 12, .h = if (view_filters.content == .all) 0 else 16 }, .background = false, .color_fill = .{ .color = theme.transparent } });
-    defer card.deinit();
-    var art = dvui.overlay(@src(), .{ .id_extra = key +% 1, .min_size_content = .{ .w = size.w, .h = size.h }, .max_size_content = .{ .w = size.w, .h = size.h }, .background = true, .color_fill = .{ .color = theme.colors.bg_surface }, .corners = dvui.CornerRect.all(theme.radius.md), .border = dvui.Rect.all(if (gallery_selection == group.identity) 2 else 0), .color_border = .{ .color = theme.colors.accent } });
-    if (art.data().visible()) {
-        if (galleryCover(group.identity)) |slot| components.galleryCoverArt(@src(), key +% 2, slot, item.poster_url[0..item.poster_url_len], galleryIcon(group.category), theme.radius.md, size.w, size.h);
+    const phone = gallery_layout.isPhone(view_width);
+    const footer = gallery_layout.cardFooter(phone);
+    var select = false;
+    var card = media_card.begin(@src(), .{ .id = key, .width = size.w, .cover_h = size.h, .footer = footer, .margin = GALLERY_CARD_MARGIN, .focused = gallery_selection == group.identity });
+    defer card.end();
+    // Artwork only for covers in the viewport (shelves are not virtualized).
+    if (card.cover.stack.data().visible()) {
+        if (galleryCover(group.identity)) |slot| components.galleryCoverArt(@src(), key +% 2, slot, item.poster_url[0..item.poster_url_len], galleryIcon(group.category), theme.radius.lg, size.w, size.h);
     }
-    var hovered = false;
-    if (dvui.clicked(art.data(), .{ .hovered = &hovered })) {
-        gallery_selection = group.identity;
-        gallery_selected_manually = true;
-        gallery_show_sources = false;
-        result_scroll.viewport.y = 0;
-    }
-    art.deinit();
-    const body = theme.mediaTitleFont(item.name[0..item.name_len], dvui.themeGet().font_body);
+    if (card.endCover()) select = true;
     var metadata: [128]u8 = undefined;
     const total_sources = groupSourceTotal(group);
-    const line = if (total_sources > 0) std.fmt.bufPrint(&metadata, "{d} source{s}", .{ total_sources, if (total_sources == 1) "" else "s" }) catch "" else if (item.author_len > 0) item.author[0..item.author_len] else item.detail[0..item.detail_len];
-    if (card.data().visible()) {
+    const raw_line = if (total_sources > 0) std.fmt.bufPrint(&metadata, "{d} source{s}", .{ total_sources, if (total_sources == 1) "" else "s" }) catch "" else if (item.author_len > 0) item.author[0..item.author_len] else item.detail[0..item.detail_len];
+    var line_buf: [256]u8 = undefined;
+    const line = search_view.singleLine(&line_buf, safeUtf8(raw_line));
+    if (card.outer.data().visible()) {
         if (@import("builtin").is_test) gallery_text_rows_for_test += 1;
-        var title: [520]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{searchRowTitle(item.name[0..item.name_len], body, size.w, &title)}, .{ .id_extra = key +% 3, .font = body, .color_text = .{ .color = theme.colors.text_primary }, .min_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .max_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .margin = .{ .x = 0, .y = 7, .w = 0, .h = 0 } });
-        searchRowLine(key +% 4, safeUtf8(line), body.withSize(theme.font_size.small), size.w, theme.colors.text_secondary);
+        if (media_card.title(safeUtf8(item.name[0..item.name_len]), footer.title_lines)) select = true;
+        if (phone) media_card.meta(safeUtf8(line), key +% 4, .secondary);
     } else {
-        // Retain exact row geometry and every Details tab stop while avoiding
-        // title clipping, shaping and text widget work outside the viewport.
-        _ = dvui.spacer(@src(), .{ .id_extra = key +% 3, .min_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .margin = .{ .x = 0, .y = 7, .w = 0, .h = 0 } });
-        _ = dvui.spacer(@src(), .{ .id_extra = key +% 4, .min_size_content = .{ .w = size.w, .h = body.withSize(theme.font_size.small).textHeight() } });
+        // Keep the action row (and its Details tab stop) at its real position
+        // while skipping title shaping and text widgets outside the viewport.
+        const text_h = media_card.footerHeight(footer) - (if (footer.action_row) media_card.pure.ACTION_ROW_H else 0);
+        _ = dvui.spacer(@src(), .{ .id_extra = key +% 3, .min_size_content = .{ .w = size.w, .h = text_h } });
     }
-    // Phone: the cover tap is the action; a Details button per card made
-    // every shelf a column of identical buttons.
-    if (!gallery_layout.isPhone(view_width) and components.actionButton(@src(), "Details", .secondary, key +% 5)) {
+    if (footer.action_row) {
+        var actions = media_card.actionRow();
+        defer actions.deinit();
+        if (card.outer.data().visible()) media_card.rowText(safeUtf8(line), size.w - 30, .secondary);
+        media_card.spacer();
+        if (media_card.iconAction(@src(), icons.tvg.lucide.info, "Details", key +% 5, false)) select = true;
+    }
+    if (select) {
         gallery_selection = group.identity;
         gallery_selected_manually = true;
         gallery_show_sources = false;
         result_scroll.viewport.y = 0;
     }
-    components.tipId(@src(), card.data().*, safeUtf8(item.name[0..item.name_len]), key);
-    renderSearchResultContext(key, card.data().borderRectScale().r, item);
+    components.tipId(@src(), card.outer.data().*, safeUtf8(item.name[0..item.name_len]), key);
+    renderSearchResultContext(key, card.outer.data().borderRectScale().r, item);
 }
 
 fn renderGalleryHero(group: *const search_content.Group, width: f32, pending: *?ResultAction) void {

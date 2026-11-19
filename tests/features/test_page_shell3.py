@@ -365,6 +365,46 @@ def test_release_cards():
     return "pass", "one shared poster card; releases grouped per show + artwork resolved"
 
 
+@test("Live TV, radio and search gallery cards use the shared media card", "Page Shell")
+def test_catalog_cards_media_card_c():
+    # These grids each carried their own card box + hard-coded footer height
+    # (46 for Live TV/radio, "art + 4 body lines + 64" for search shelves), so
+    # the virtualized row pitch drifted from the drawn card whenever fonts
+    # changed. Card, skeleton and spacer now all take media_card numbers.
+    iptv = _src("src/services/iptv.zig")
+    radio = _src("src/services/radio.zig")
+    search = _src("src/services/search.zig")
+    gallery = _src("src/ui/search_gallery_pure.zig")
+    exceptions = _src("docs/architecture-exceptions.json")
+    iptv_card = _between(iptv, "fn renderCard(", "fn renderResults(")
+    radio_card = _between(radio, "fn renderCard(", "fn renderResults(")
+    search_card = _between(search, "fn renderGalleryCard(", "fn renderGalleryHero(")
+    checks = {
+        "iptv square media card": "media_card.begin(@src(), .{ .id = i, .width = card_w, .aspect = .square, .footer = CARD_FOOTER })" in iptv_card,
+        "iptv logo through media_card.art": "media_card.art(slot.tex," in iptv,
+        "iptv cover + title play": "if (open_cover or open_title) playChannel(i)" in iptv_card,
+        "iptv favourite star kept": "media_card.iconAction(@src(), icons.tvg.lucide.star" in iptv_card and "iptv_store.toggleFavorite(ch)" in iptv_card,
+        "iptv health dot kept": "renderHealthDot(i, url)" in iptv_card and "maybeProbe(url)" in iptv,
+        "iptv pitch from media_card": "media_card.rowPitch(card_w, .square, CARD_FOOTER)" in iptv and "CARD_FOOTER_H" not in iptv,
+        "iptv skeleton matches card": "media_card.skeletonGrid(@src(), 58000, cols, card_w, .square, CARD_FOOTER, 3)" in iptv,
+        "radio square media card": "media_card.begin(@src(), .{ .id = i, .width = card_w, .aspect = .square, .footer = CARD_FOOTER })" in radio_card,
+        "radio logo through media_card.art": "media_card.art(visible_texture," in radio,
+        "radio health dot kept": "renderHealthDot(i, s)" in radio_card and "link_health.probe(RADIO_KIND" in radio,
+        "radio pitch from media_card": "media_card.rowPitch(card_w, .square, CARD_FOOTER)" in radio and "CARD_FOOTER_H" not in radio
+            and "media_card.footerHeight(CARD_FOOTER)" in radio,
+        "search card on media card": "media_card.begin(@src()" in search_card and ".focused = gallery_selection == group.identity" in search_card,
+        "search card keeps Details + context menu": '"Details"' in search_card and "renderSearchResultContext(key" in search_card,
+        "search footer from tested policy": "gallery_layout.cardFooter(" in search_card and "pub fn cardFooter(phone: bool)" in gallery,
+        "search rail pitch from media_card": "media_card.pure.rowPitch(art.h, media_card.footerHeight(gallery_layout.cardFooter(" in search
+            and "shelfHeight" not in search and "shelfHeight" not in gallery,
+        "boundary edges recorded": all(f'"src/services/{name}.zig -> ../ui/media_card.zig"' in exceptions for name in ("iptv", "radio", "search")),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "missing: " + ", ".join(missing)
+    return "pass", "Live TV, radio and search gallery cards share media_card geometry"
+
+
 @test("C toggles subtitles (not the comic viewer)", "Page Shell")
 def test_c_toggles_subs():
     # C used to force the active player into the comic viewer, which blanked the

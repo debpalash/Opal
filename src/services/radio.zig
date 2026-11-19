@@ -22,6 +22,7 @@ const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
+const media_card = @import("../ui/media_card.zig");
 const logs = @import("../core/logs.zig");
 const pure = @import("radio_pure.zig");
 /// App-wide stream-health probing (shared with Live TV) — the "radio" kind.
@@ -861,9 +862,10 @@ fn renderSearchBar() void {
 // Popular stations and search results are the SAME record (parseStations fills
 // both), so they render through one grid: station logo + name + "codec · kbps ·
 // country", click → playStation(i), exactly what the old row's Play button did.
-const CARD_GAP: f32 = 6;
 const CARD_TARGET_W: f32 = 170; // desired card width; columns derive from it
-const CARD_FOOTER_H: f32 = 46; // name + meta lines under the logo
+/// Name + "codec · kbps · country" under the logo, measured by media_card so
+/// card, skeleton and spacer pitch never drift.
+const CARD_FOOTER: media_card.Footer = .{ .title_lines = 1, .meta_lines = 1 };
 
 /// Fill the card's logo area with the station's favicon, reusing the shared
 /// poster daemon. Falls back to the radio glyph while loading, when the station
@@ -893,103 +895,55 @@ fn renderLogo(i: usize, s: *const pure.Station) void {
     }
 
     const visible_texture = if (fav.len > 0 and slot.url_hash == h) slot.tex else null;
-    if (visible_texture) |tex| {
-        _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
-            .id_extra = i + 1000,
-            .expand = .both,
-            .corners = dvui.CornerRect.all(8),
-        });
-    } else if (fav.len > 0 and !slot.failed) {
-        components.coverSkeleton(@src(), i + 1000, 8);
-    } else {
-        _ = dvui.icon(@src(), "", icons.tvg.lucide.radio, .{}, .{
-            .id_extra = i + 1000,
-            .color_text = .{ .color = theme.colors.text_tertiary },
-            .gravity_x = 0.5,
-            .gravity_y = 0.5,
-            .expand = .both,
-        });
-    }
+    media_card.art(visible_texture, .{ .loading = fav.len > 0 and !slot.failed, .placeholder = icons.tvg.lucide.radio });
 }
 
-/// One station card: logo (clickable → play) + name + codec/bitrate/country.
-fn renderCard(i: usize, card_w: f32, s: *const pure.Station) void {
+/// Stream-health dot on the logo's top-right corner. Probing is lazy —
+/// rendering a card kicks a bounded probe for its stream on the shared
+/// app-wide pool, and the dot uses the same colour mapping as Live TV (green
+/// live / yellow slow / red dead; nothing drawn until a probe lands).
+fn renderHealthDot(i: usize, s: *const pure.Station) void {
+    const stream_url = if (s.url_resolved_len > 0)
+        s.url_resolved[0..@min(s.url_resolved_len, s.url_resolved.len)]
+    else
+        s.url[0..@min(s.url_len, s.url.len)];
+    link_health.probe(RADIO_KIND, stream_url);
+    const st = link_health.statusOf(RADIO_KIND, stream_url);
+    if (st == .unknown) return;
+    var dot = dvui.box(@src(), .{}, .{
+        .id_extra = i + 8000,
+        .gravity_x = 1,
+        .gravity_y = 0,
+        .min_size_content = .{ .w = 8, .h = 8 },
+        .max_size_content = .{ .w = 8, .h = 8 },
+        .corners = dvui.CornerRect.all(6),
+        .background = true,
+        .color_fill = .{ .color = link_health.statusColor(st) },
+        .border = dvui.Rect.all(2),
+        .color_border = .{ .color = theme.colors.bg_elevated },
+        .margin = dvui.Rect.all(8),
+    });
+    dot.deinit();
+}
 
+/// One station card (shared media card): square logo + name (both click →
+/// play) + codec/bitrate/country.
+fn renderCard(i: usize, card_w: f32, s: *const pure.Station) void {
     // Validate a STABLE COPY: a fetch worker can rewrite results[i] mid-frame
     // and dvui panics on invalid UTF-8 it reads after we validated.
     var name_buf: [160]u8 = undefined;
     const name = safeUtf8Buf(s.name[0..@min(s.name_len, s.name.len)], &name_buf);
 
     // min == max height → every card (and thus every row) has a uniform pitch.
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = i,
-        .min_size_content = .{ .w = card_w, .h = card_w + CARD_FOOTER_H },
-        .max_size_content = .{ .w = card_w, .h = card_w + CARD_FOOTER_H },
-        .margin = dvui.Rect.all(CARD_GAP),
-    });
-    defer card.deinit();
-
-    // Logo hosted INSIDE a single button widget — one clickable rectangle per
-    // card (a sibling button + box would draw two).
-    {
-        var bw: dvui.ButtonWidget = undefined;
-        bw.init(@src(), .{}, .{
-            .id_extra = i + 2000,
-            .background = true,
-            .color_fill = .{ .color = theme.colors.bg_elevated },
-            .corners = dvui.CornerRect.all(8),
-            .min_size_content = .{ .w = card_w, .h = card_w },
-            .max_size_content = .{ .w = card_w, .h = card_w },
-            .padding = dvui.Rect.all(0),
-        });
-        bw.processEvents();
-        bw.drawBackground();
-
-        renderLogo(i, s);
-
-        const clicked = bw.clicked();
-        bw.drawFocus();
-        bw.deinit();
-        // Same click target as the old row's Play button.
-        if (clicked) playCopiedStation(s.*);
-    }
-
-    // Name row: stream-health dot + title. Probing is lazy — rendering a card
-    // kicks a bounded probe for its stream on the shared app-wide pool, and the
-    // dot uses the same colour mapping as Live TV (green live / yellow slow /
-    // red dead; nothing drawn until a probe lands).
-    {
-        var nrow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 6000, .expand = .horizontal });
-        defer nrow.deinit();
-
-        const stream_url = if (s.url_resolved_len > 0)
-            s.url_resolved[0..@min(s.url_resolved_len, s.url_resolved.len)]
-        else
-            s.url[0..@min(s.url_len, s.url.len)];
-        link_health.probe(RADIO_KIND, stream_url);
-        const st = link_health.statusOf(RADIO_KIND, stream_url);
-        if (st != .unknown) {
-            var dot = dvui.box(@src(), .{}, .{
-                .id_extra = i + 8000,
-                .min_size_content = .{ .w = 8, .h = 8 },
-                .max_size_content = .{ .w = 8, .h = 8 },
-                .corners = dvui.CornerRect.all(4),
-                .background = true,
-                .color_fill = .{ .color = link_health.statusColor(st) },
-                .gravity_y = 0.5,
-                .margin = .{ .x = 2, .y = 0, .w = 4, .h = 0 },
-            });
-            dot.deinit();
-        }
-
-        _ = dvui.label(@src(), "{s}", .{name}, .{
-            .id_extra = i + 3000,
-            .color_text = .{ .color = theme.colors.text_primary },
-            .expand = .horizontal,
-            .gravity_y = 0.5,
-            .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
-        });
-    }
+    var card = media_card.begin(@src(), .{ .id = i, .width = card_w, .aspect = .square, .footer = CARD_FOOTER });
+    defer card.end();
+    renderLogo(i, s);
+    renderHealthDot(i, s);
+    const open_cover = card.endCover();
+    const open_title = media_card.title(name, CARD_FOOTER.title_lines);
+    // Same click target as the old row's Play button.
+    const clicked = open_cover or open_title;
+    if (clicked) playCopiedStation(s.*);
 
     // Meta: codec · bitrate · country.
     var meta_buf: [120]u8 = undefined;
@@ -1011,12 +965,7 @@ fn renderCard(i: usize, card_w: f32, s: *const pure.Station) void {
     }
     if (wrote) {
         var safe_meta: [120]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(meta_buf[0..mw.end], &safe_meta)}, .{
-            .id_extra = i + 4000,
-            .color_text = .{ .color = theme.colors.text_tertiary },
-            .expand = .horizontal,
-            .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-        });
+        media_card.meta(safeUtf8Buf(meta_buf[0..mw.end], &safe_meta), i, .tertiary);
     }
 }
 
@@ -1041,15 +990,16 @@ fn renderResults() void {
     // falls back to a sane default) — same shape as the TMDB gallery.
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
-    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
-    const cols_f: f32 = @floatFromInt(cols);
-    const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
+    const grid = media_card.pure.columns(avail_w, CARD_TARGET_W, media_card.pure.MARGIN, 1, 12);
+    const cols: usize = grid.count;
+    const card_w: f32 = @max(100, grid.card_w);
     if (count == 0) {
-        components.coverSkeletonGrid(@src(), 48000, cols, card_w, card_w, CARD_FOOTER_H, 3);
+        components.coverSkeletonGrid(@src(), 48000, cols, card_w, card_w, media_card.footerHeight(CARD_FOOTER), 3);
         return;
     }
 
-    const row_h = card_w + CARD_FOOTER_H + 2 * CARD_GAP;
+    // Uniform cards (media_card.begin pins min == max) → fixed row pitch.
+    const row_h = media_card.rowPitch(card_w, .square, CARD_FOOTER);
     const total_rows = (count + cols - 1) / cols;
     const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
 

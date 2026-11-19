@@ -30,6 +30,7 @@ const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
+const media_card = @import("../ui/media_card.zig");
 const logs = @import("../core/logs.zig");
 const pure = @import("iptv_pure.zig");
 const playlist = @import("iptv_playlist_pure.zig");
@@ -1099,9 +1100,10 @@ fn renderToolbar() void {
 // poster daemon) + name + "category · country · quality · HLS". Channels with
 // no logo (null-channel streams, or a logo stb_image can't decode) fall back to
 // a tv glyph. Click → playChannel(i).
-const CARD_GAP: f32 = 6;
 const CARD_TARGET_W: f32 = 170;
-const CARD_FOOTER_H: f32 = 46;
+/// Name, then "category · country · quality" beside the favourite star —
+/// measured by media_card so card, skeleton and spacer pitch never drift.
+const CARD_FOOTER: media_card.Footer = .{ .title_lines = 1, .action_row = true };
 
 // Parallel poster slots, one per results[] row (sized to the render window so
 // channel_posters[i] can never index out of bounds). Mirrors radio's
@@ -1149,26 +1151,35 @@ fn renderLogo(i: usize, ch: *const pure.IptvChannel) void {
         }
     }
 
-    if (slot.tex) |*tex| {
-        _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-            .id_extra = i + 1000,
-            .expand = .both,
-            .corners = dvui.CornerRect.all(8),
-        });
-    } else if (logo.len > 0 and !slot.failed) {
-        components.coverSkeleton(@src(), i + 1000, 8);
-    } else {
-        _ = dvui.icon(@src(), "", icons.tvg.lucide.tv, .{}, .{
-            .id_extra = i + 1000,
-            .color_text = .{ .color = theme.colors.text_tertiary },
-            .gravity_x = 0.5,
-            .gravity_y = 0.5,
-            .expand = .both,
-        });
-    }
+    media_card.art(slot.tex, .{ .loading = logo.len > 0 and !slot.failed, .placeholder = icons.tvg.lucide.tv });
 }
 
-/// One channel card: logo tile (clickable → play) + name + category/country/quality.
+/// Stream-health dot on the logo's top-right corner (green live / yellow slow /
+/// red dead). Probing is lazy: rendering a card kicks a bounded probe for its
+/// stream; nothing is drawn until a probe lands.
+fn renderHealthDot(i: usize, url: []const u8) void {
+    maybeProbe(url);
+    const st = healthOf(url);
+    if (st == .unknown) return;
+    var dot = dvui.box(@src(), .{}, .{
+        .id_extra = i + 8000,
+        .gravity_x = 1,
+        .gravity_y = 0,
+        .min_size_content = .{ .w = 8, .h = 8 },
+        .max_size_content = .{ .w = 8, .h = 8 },
+        .corners = dvui.CornerRect.all(6),
+        .background = true,
+        .color_fill = .{ .color = statusColor(st) },
+        .border = dvui.Rect.all(2),
+        .color_border = .{ .color = theme.colors.bg_elevated },
+        .margin = dvui.Rect.all(8),
+    });
+    dot.deinit();
+}
+
+/// One channel card (shared media card): square logo (clickable → play) with a
+/// health dot, name (clickable → play), then category/country/quality beside
+/// the favourite star.
 fn renderCard(i: usize, card_w: f32) void {
     const ch = &state.app.iptv.results[i];
 
@@ -1176,88 +1187,16 @@ fn renderCard(i: usize, card_w: f32) void {
     // and dvui panics on invalid UTF-8 it reads after we validated.
     var name_buf: [160]u8 = undefined;
     const name = safeUtf8Buf(ch.name[0..@min(ch.name_len, ch.name.len)], &name_buf);
+    const url = ch.url[0..@min(ch.url_len, ch.url.len)];
 
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = i,
-        .min_size_content = .{ .w = card_w, .h = card_w + CARD_FOOTER_H },
-        .max_size_content = .{ .w = card_w, .h = card_w + CARD_FOOTER_H },
-        .margin = dvui.Rect.all(CARD_GAP),
-    });
-    defer card.deinit();
-
-    // Glyph tile hosted INSIDE a single button widget — one clickable rectangle.
-    {
-        var bw: dvui.ButtonWidget = undefined;
-        bw.init(@src(), .{}, .{
-            .id_extra = i + 2000,
-            .background = true,
-            .color_fill = .{ .color = theme.colors.bg_elevated },
-            .corners = dvui.CornerRect.all(8),
-            .min_size_content = .{ .w = card_w, .h = card_w },
-            .max_size_content = .{ .w = card_w, .h = card_w },
-            .padding = dvui.Rect.all(0),
-        });
-        bw.processEvents();
-        bw.drawBackground();
-
-        renderLogo(i, ch);
-
-        const clicked = bw.clicked();
-        bw.drawFocus();
-        bw.deinit();
-        if (clicked) playChannel(i);
-    }
-
-    // Name row: title (expand) + a favorite star. The star is a sibling of the
-    // play tile (not inside its button), so toggling a favorite never triggers
-    // playback. Star color = gold when favorited, muted otherwise.
-    {
-        var nrow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 6000, .expand = .horizontal });
-        defer nrow.deinit();
-
-        // Health status dot (green live / yellow slow / red dead). Probing is
-        // lazy: rendering a card kicks a bounded probe for its stream.
-        const url = ch.url[0..@min(ch.url_len, ch.url.len)];
-        maybeProbe(url);
-        const st = healthOf(url);
-        if (st != .unknown) {
-            var dot = dvui.box(@src(), .{}, .{
-                .id_extra = i + 8000,
-                .min_size_content = .{ .w = 8, .h = 8 },
-                .max_size_content = .{ .w = 8, .h = 8 },
-                .corners = dvui.CornerRect.all(4),
-                .background = true,
-                .color_fill = .{ .color = statusColor(st) },
-                .gravity_y = 0.5,
-                .margin = .{ .x = 2, .y = 0, .w = 4, .h = 0 },
-            });
-            dot.deinit();
-        }
-
-        _ = dvui.label(@src(), "{s}", .{name}, .{
-            .id_extra = i + 3000,
-            .color_text = .{ .color = theme.colors.text_primary },
-            .expand = .horizontal,
-            .gravity_y = 0.5,
-            .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
-        });
-        const faved = isFav(ch.url[0..@min(ch.url_len, ch.url.len)]);
-        if (dvui.buttonIcon(@src(), "iptvfav", icons.tvg.lucide.star, .{}, .{}, .{
-            .id_extra = i + 7000,
-            .color_text = .{ .color = if (faved) theme.colors.warning else theme.colors.text_tertiary },
-            .color_fill = .{ .color = theme.transparent },
-            .color_fill_hover = .{ .color = theme.colors.bg_hover },
-            .border = dvui.Rect.all(0),
-            .min_size_content = theme.iconSize(.sm),
-            .padding = dvui.Rect.all(4),
-            .gravity_y = 0.5,
-        })) {
-            _ = iptv_store.toggleFavorite(ch);
-            fav_dirty = true;
-            // Removing a favorite while viewing Favorites → drop it from the grid.
-            if (state.app.iptv.quick_filter == 1) loadQuickView();
-        }
-    }
+    // min == max height → every card (and thus every row) has a uniform pitch.
+    var card = media_card.begin(@src(), .{ .id = i, .width = card_w, .aspect = .square, .footer = CARD_FOOTER });
+    defer card.end();
+    renderLogo(i, ch);
+    renderHealthDot(i, url);
+    const open_cover = card.endCover();
+    const open_title = media_card.title(name, CARD_FOOTER.title_lines);
+    if (open_cover or open_title) playChannel(i);
 
     // Meta: category · country · quality · HLS (whichever are present). Category
     // + country come from the channels.json join; quality from the stream.
@@ -1286,14 +1225,20 @@ fn renderCard(i: usize, card_w: f32) void {
         sep(&mw, &wrote);
         mw.writeAll("HLS") catch {};
     }
-    if (wrote) {
-        var safe_meta: [96]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(meta_buf[0..mw.end], &safe_meta)}, .{
-            .id_extra = i + 4000,
-            .color_text = .{ .color = theme.colors.text_tertiary },
-            .expand = .horizontal,
-            .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-        });
+
+    // The star lives in the footer (not inside the cover button), so toggling
+    // a favourite never triggers playback.
+    var row = media_card.actionRow();
+    defer row.deinit();
+    var safe_meta: [96]u8 = undefined;
+    media_card.rowText(if (wrote) safeUtf8Buf(meta_buf[0..mw.end], &safe_meta) else "", card_w - 30, .secondary);
+    media_card.spacer();
+    const faved = isFav(url);
+    if (media_card.iconAction(@src(), icons.tvg.lucide.star, if (faved) "Remove favorite" else "Favorite", i, faved)) {
+        _ = iptv_store.toggleFavorite(ch);
+        fav_dirty = true;
+        // Removing a favorite while viewing Favorites → drop it from the grid.
+        if (state.app.iptv.quick_filter == 1) loadQuickView();
     }
 }
 
@@ -1343,11 +1288,11 @@ fn renderResults() void {
     // falls back to a sane default) — same shape as radio's grid.
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
-    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
-    const cols_f: f32 = @floatFromInt(cols);
-    const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
+    const grid = media_card.pure.columns(avail_w, CARD_TARGET_W, media_card.pure.MARGIN, 1, 12);
+    const cols: usize = grid.count;
+    const card_w: f32 = @max(100, grid.card_w);
     if (grid_total == 0) {
-        components.coverSkeletonGrid(@src(), 58000, cols, card_w, card_w, CARD_FOOTER_H, 3);
+        media_card.skeletonGrid(@src(), 58000, cols, card_w, .square, CARD_FOOTER, 3);
         return;
     }
 
@@ -1356,10 +1301,10 @@ fn renderResults() void {
     // entire directory. tmdb_pure.visibleRows picks the rows in view (±3 rows
     // overscan); ensureWindow then guarantees those catalog rows are materialized
     // in results[] (re-querying a fresh RENDER_WINDOW when the viewport scrolls
-    // out of the loaded slice). Cards are uniform (renderCard pins
-    // min==max = card_w+CARD_FOOTER_H), so the row pitch is fixed and the two
-    // spacer boxes reserve the off-screen height above/below.
-    const row_h: f32 = card_w + CARD_FOOTER_H + 2 * CARD_GAP;
+    // out of the loaded slice). Cards are uniform (media_card.begin pins
+    // min==max height), so the row pitch is fixed and the two spacer boxes
+    // reserve the off-screen height above/below.
+    const row_h: f32 = media_card.rowPitch(card_w, .square, CARD_FOOTER);
     const total_rows = (grid_total + cols - 1) / cols;
     const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 3);
     const first_ch = win.first * cols;

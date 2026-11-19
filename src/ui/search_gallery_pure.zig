@@ -1,5 +1,6 @@
 //! Geometry policy shared by the native search gallery and its regression tests.
 const std = @import("std");
+const card_pure = @import("media_card_pure.zig");
 pub const Shape = enum { portrait, square, landscape };
 pub const Size = struct { w: f32, h: f32 };
 pub const Crop = struct { x: f32 = 0, y: f32 = 0, w: f32 = 1, h: f32 = 1 };
@@ -56,13 +57,11 @@ pub fn heroCopyGravity(width: f32) f32 {
     // Fractional gravity in a vertical Box positions a child as an overlay.
     return if (stackedHero(width)) 0 else 0.5;
 }
-pub fn shelfHeight(art_height: f32, body_height: f32) f32 {
-    // Two title lines, a metadata line, button, and widget margins/padding.
-    return art_height + body_height * 4 + 64;
-}
-/// Phone shelves carry no Details button: two title lines + metadata only.
-pub fn shelfHeightFor(art_height: f32, body_height: f32, phone: bool) f32 {
-    return if (phone) art_height + body_height * 3 + 40 else shelfHeight(art_height, body_height);
+/// Gallery card footer (shared media card). Desktop: two-line title, then the
+/// source count beside a Details action. Phone: no action row — two-line title
+/// + the source count; tapping the cover opens details.
+pub fn cardFooter(phone: bool) card_pure.Footer {
+    return if (phone) .{ .title_lines = 2, .meta_lines = 1 } else .{ .title_lines = 2, .action_row = true };
 }
 pub fn heroArtSize(width: f32, backdrop: bool) Size {
     const w = if (backdrop) @min(560, @max(200, if (stackedHero(width)) width - 24 else width * 0.49)) else @min(184, @max(112, width * 0.2));
@@ -94,7 +93,9 @@ test "phone shelves fit three covers and drop the Details row" {
     const art = cardSize(.portrait, w);
     try std.testing.expect(art.w * 3 + 24 <= w + 1);
     try std.testing.expectApproxEqAbs(@as(f32, 1.5), art.h / art.w, 0.001);
-    try std.testing.expect(shelfHeightFor(art.h, 18, true) < shelfHeightFor(art.h, 18, false));
+    const m: card_pure.Metrics = .{ .title_line = 18, .meta_line = 14 };
+    try std.testing.expect(!cardFooter(true).action_row and cardFooter(false).action_row);
+    try std.testing.expect(card_pure.footerHeight(cardFooter(true), m) < card_pure.footerHeight(cardFooter(false), m));
     try std.testing.expect(cardSize(.landscape, w).w < w);
 }
 test "search hero stacks on narrow windows without expanding portrait artwork" {
@@ -106,9 +107,11 @@ test "search hero stacks on narrow windows without expanding portrait artwork" {
     try std.testing.expectEqual(@as(f32, 0.5), heroCopyGravity(1360));
 }
 test "search shelf reserves complete card actions instead of clipping Details" {
-    for ([_]f32{ 14, 20, 30 }) |body_height| {
+    for ([_]f32{ 14, 20, 30 }) |line| {
         const art = cardSize(.portrait, 1360);
-        try std.testing.expect(shelfHeight(art.h, body_height) >= art.h + body_height * 4 + 48);
+        const footer = card_pure.footerHeight(cardFooter(false), .{ .title_line = line, .meta_line = line * 0.8 });
+        const rail = card_pure.rowPitch(art.h, footer, 6);
+        try std.testing.expect(rail >= art.h + 2 * line + card_pure.ACTION_ROW_H + 12);
     }
 }
 test "progressive search publications preserve selected content by identity" {

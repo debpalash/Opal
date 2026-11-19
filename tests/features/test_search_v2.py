@@ -109,8 +109,8 @@ def test_search_v2_native_view():
         "compact sort popup": "searchSelectImpl(91300, &SORT_LABELS, @intFromEnum(view_sort), dense)" in controls and "&SORT_LABELS" in controls
             and "components.segment(" not in controls and "searchSelect(91300" not in renderer,
         "filtered content totals": "{d} titles · {d} other releases" in renderer and "galleryGroupVisible(group)" in renderer,
-        "visible artwork only": "art.data().visible()" in renderer and "components.galleryCoverArt(" in renderer,
-        "keyboard details action retained": 'actionButton(@src(), "Details"' in renderer,
+        "visible artwork only": "card.cover.stack.data().visible()" in renderer and "components.galleryCoverArt(" in renderer,
+        "keyboard details action retained": 'actionButton(@src(), "Details"' in renderer and 'media_card.iconAction(@src(), icons.tvg.lucide.info, "Details"' in renderer,
         "shared content grouping": "search_content.projectInto(" in renderer and "galleryGroupVisible(" in renderer,
         "search preserves the selected browse scope": "browser.searchCurrentBrowse(text)" not in omnibox and "search_mod.submitScopedQuery(text)" in omnibox,
         "snapshot-owned action": "view_cache.rows.?[action.idx]" in renderer and "resolver.playResolvedItem(item)" in renderer,
