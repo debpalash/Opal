@@ -9,6 +9,7 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
+const media_card = @import("../ui/media_card.zig");
 const io = @import("../core/io_global.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 const paths = @import("../core/paths.zig");
@@ -84,7 +85,8 @@ pub var item_count: usize = 0;
 pub var is_loading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 const PLEX_CARD_TARGET_W: f32 = 150;
 const PLEX_CARD_GAP: f32 = 4;
-const PLEX_CARD_FOOTER_H: f32 = 76;
+/// Title + watched/favorite/rating row (measured by media_card).
+const PLEX_CARD_FOOTER: media_card.Footer = .{ .title_lines = 1, .action_row = true };
 var item_covers: [300]components.CoverSlot = @as([300]components.CoverSlot, @splat(.{}));
 
 // ── Infinite-scroll pagination ──
@@ -1282,11 +1284,11 @@ pub fn renderContent() void {
     const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / PLEX_CARD_TARGET_W)));
     const cols_f: f32 = @floatFromInt(cols);
     const card_w: f32 = @max(104, (avail_w - cols_f * 2 * PLEX_CARD_GAP) / cols_f);
-    const poster_h = card_w * 1.45;
-    const row_h = poster_h + PLEX_CARD_FOOTER_H + 2 * PLEX_CARD_GAP;
+    const poster_h = media_card.coverHeight(card_w, .poster);
+    const row_h = poster_h + media_card.footerHeight(PLEX_CARD_FOOTER) + 2 * PLEX_CARD_GAP;
     if (item_count == 0) {
         if (is_loading.load(.acquire))
-            components.coverSkeletonGrid(@src(), 90000, cols, card_w, poster_h, PLEX_CARD_FOOTER_H, 3)
+            components.coverSkeletonGrid(@src(), 90000, cols, card_w, poster_h, media_card.footerHeight(PLEX_CARD_FOOTER), 3)
         else
             components.emptyState(@import("icons").tvg.lucide.library, "This library is empty", "Choose another Plex library.");
         return;
@@ -1357,64 +1359,41 @@ fn renderItemCard(i: usize, card_w: f32, poster_h: f32) void {
     const actionable = it.is_folder or it.part_len > 0;
     var tb: [180]u8 = undefined;
     const title = @import("../core/text.zig").safeUtf8Buf(it.title[0..it.title_len], &tb);
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = i + 92000,
-        .min_size_content = .{ .w = card_w, .h = poster_h + PLEX_CARD_FOOTER_H },
-        .max_size_content = .{ .w = card_w, .h = poster_h + PLEX_CARD_FOOTER_H },
-        .margin = dvui.Rect.all(PLEX_CARD_GAP),
-        .background = true,
-        .color_fill = .{ .color = theme.colors.bg_surface },
-        .color_fill_hover = .{ .color = theme.colors.bg_hover },
-        .corners = dvui.CornerRect.all(theme.radius.md),
-    });
-    defer card.deinit();
+    var card = media_card.begin(@src(), .{ .id = i + 92000, .width = card_w, .cover_h = poster_h, .footer = PLEX_CARD_FOOTER, .margin = PLEX_CARD_GAP });
+    defer card.end();
 
-    var bw: dvui.ButtonWidget = undefined;
-    bw.init(@src(), .{}, .{
-        .id_extra = i + 92100,
-        .background = true,
-        .color_fill = .{ .color = theme.colors.bg_elevated },
-        .corners = dvui.CornerRect.all(theme.radius.md),
-        .min_size_content = .{ .w = card_w, .h = poster_h },
-        .max_size_content = .{ .w = card_w, .h = poster_h },
-        .padding = dvui.Rect.all(0),
-    });
-    bw.processEvents();
-    bw.drawBackground();
     var cover_buf: [1024]u8 = undefined;
-    components.coverArt(@src(), i + 92200, &item_covers[i], itemCoverUrl(it, &cover_buf), if (it.is_folder) icons.tvg.lucide.folder else if (actionable) icons.tvg.lucide.play else icons.tvg.lucide.image, theme.radius.md);
-    const clicked = bw.clicked();
-    bw.drawFocus();
-    bw.deinit();
-    if (clicked and actionable) activateItem(i);
+    components.coverArt(@src(), i + 92200, &item_covers[i], itemCoverUrl(it, &cover_buf), if (it.is_folder) icons.tvg.lucide.folder else if (actionable) icons.tvg.lucide.play else icons.tvg.lucide.image, theme.radius.lg);
+    if (it.view_count > 0) media_card.badge(.top_right, "Watched", .success);
+    if (!it.is_folder and it.view_offset_ms > 0 and it.view_count == 0 and it.duration_ms > 0)
+        media_card.progress(card_w, @as(f64, @floatFromInt(it.view_offset_ms)) / @as(f64, @floatFromInt(it.duration_ms)));
+    const open_cover = card.endCover();
+    const open_title = media_card.title(title, 1);
+    if ((open_cover or open_title) and actionable) activateItem(i);
 
-    _ = dvui.label(@src(), "{s}", .{title}, .{
-        .id_extra = i + 92300,
-        .color_text = .{ .color = theme.colors.text_primary },
-        .font = dvui.themeGet().font_heading.withSize(theme.font_size.small),
-        .min_size_content = .{ .w = card_w, .h = 22 },
-        .max_size_content = .{ .w = card_w, .h = 22 },
-        .padding = .{ .x = 5, .y = 5, .w = 5, .h = 0 },
-    });
-    var tools = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 92400, .expand = .horizontal, .padding = .{ .x = 3, .y = 0, .w = 3, .h = 3 } });
+    // Watched / favorite / rating — server-owned state, always reachable.
+    var tools = media_card.actionRow();
     defer tools.deinit();
-    if (actionable and components.iconButton(@src(), if (it.is_folder) icons.tvg.lucide.@"folder-open" else icons.tvg.lucide.play, if (it.is_folder) "Open" else if (it.view_offset_ms > 0 and it.view_count == 0) "Resume" else "Play", true)) activateItem(i);
-    if (!it.is_folder and it.rating_key_len > 0) {
-        if (components.iconButton(@src(), icons.tvg.lucide.check, if (it.view_count > 0) "Mark unwatched" else "Mark watched", it.view_count > 0))
-            _ = setWatched(it.rating_key[0..it.rating_key_len], it.view_count == 0);
-        if (components.iconButton(@src(), icons.tvg.lucide.heart, if (it.is_favorite) "Remove favorite" else "Favorite", it.is_favorite))
-            _ = setFavorite(it.rating_key[0..it.rating_key_len], !it.is_favorite);
-        var rating_choice: usize = @intFromFloat(@round(std.math.clamp(it.user_rating, 0, 10) * 2));
-        if (dvui.dropdown(@src(), &RATING_LABELS, .{ .choice = &rating_choice }, .{}, .{
-            .id_extra = i + 92500,
-            .color_fill = .{ .color = theme.colors.bg_elevated },
-            .color_text = .{ .color = if (it.user_rating > 0) theme.colors.warning else theme.colors.text_secondary },
-            .corners = theme.dims.rad_sm,
-            .padding = .{ .x = 5, .y = 3, .w = 5, .h = 3 },
-            .gravity_y = 0.5,
-        })) {
-            const selected: f32 = @as(f32, @floatFromInt(rating_choice)) / 2.0;
-            if (@abs(selected - it.user_rating) >= 0.01) _ = setRating(it.rating_key[0..it.rating_key_len], selected);
-        }
+    if (it.is_folder or it.rating_key_len == 0) {
+        media_card.rowText(if (it.is_folder) "Folder" else "", card_w, .secondary);
+        return;
+    }
+    if (media_card.iconAction(@src(), icons.tvg.lucide.check, if (it.view_count > 0) "Mark unwatched" else "Mark watched", i, it.view_count > 0))
+        _ = setWatched(it.rating_key[0..it.rating_key_len], it.view_count == 0);
+    if (media_card.iconAction(@src(), icons.tvg.lucide.heart, if (it.is_favorite) "Remove favorite" else "Favorite", i, it.is_favorite))
+        _ = setFavorite(it.rating_key[0..it.rating_key_len], !it.is_favorite);
+    media_card.spacer();
+    var rating_choice: usize = @intFromFloat(@round(std.math.clamp(it.user_rating, 0, 10) * 2));
+    if (dvui.dropdown(@src(), &RATING_LABELS, .{ .choice = &rating_choice }, .{}, .{
+        .id_extra = i + 92500,
+        .color_fill = .{ .color = theme.colors.bg_elevated },
+        .color_text = .{ .color = if (it.user_rating > 0) theme.colors.warning else theme.colors.text_secondary },
+        .font = media_card.metaFont(),
+        .corners = theme.dims.rad_sm,
+        .padding = .{ .x = 5, .y = 1, .w = 5, .h = 1 },
+        .gravity_y = 0.5,
+    })) {
+        const selected: f32 = @as(f32, @floatFromInt(rating_choice)) / 2.0;
+        if (@abs(selected - it.user_rating) >= 0.01) _ = setRating(it.rating_key[0..it.rating_key_len], selected);
     }
 }

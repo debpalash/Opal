@@ -116,7 +116,7 @@ def test_poster_texture_lifetime():
     coming = _between(home, "fn renderComingUpRail", "fn renderTrendingRail")
     checks = {
         "coming up uploads": "_ = poster.uploadIfReady" in coming,
-        "coming up draws stored texture": "if (it.poster_tex)" in coming,
+        "coming up draws stored texture": "media_card.art(it.poster_tex" in coming,
         "coming up owns its fetch": "poster.fetchAsync(url" in coming and "fetchPoster(it)" not in coming,
         "shared card uploads": "_ = poster.uploadIfReady" in card,
         "shared card draws stored texture": "if (it.poster_tex)" in card,
@@ -298,7 +298,7 @@ def test_podcasts_radio_default_content():
             for s in (pod, rad)
         ),
         # ── Cards: artwork via the shared poster daemon, existing click path ──
-        "podcast cards click loadEpisodes": "if (clicked) loadEpisodes(i)" in pod_ui,
+        "podcast cards click loadEpisodes": "if (open_cover or open_title) loadEpisodes(i)" in pod_ui,
         "radio cards play immutable rendered station": "if (clicked) playCopiedStation(s.*)" in rad and "fn playCopiedStation(s: pure.Station)" in rad,
         "poster daemon reused": (
             "components.coverArt(" in pod_ui and "poster.fetchAsync(" in _src("src/ui/components.zig")

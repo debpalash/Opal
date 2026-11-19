@@ -765,17 +765,18 @@ def test_youtube_browse():
 def test_youtube_card_footer():
     yt = _src("src/services/youtube.zig")
     card = _between(yt, "fn renderCard(", "pub fn ")
-    footer = _between(yt, "fn cardFooterH()", "fn metaFont()")
+    mc = _src("src/ui/media_card.zig")
     checks = {
-        "artwork is a keyboard-focusable play target": "var thumb: dvui.ButtonWidget" in card
-            and "if (thumb.clicked()) action = .play" in card and "thumb.drawFocus()" in card,
-        "16:9 artwork": "the_card_w * 9.0 / 16.0" in card,
-        "bounded two-line title": "components.twoLineTitle(" in card
-            and "title_font.textHeight() * 2 + 6" in card and ".h = title_h" in card,
-        "footer includes title metadata and action height": "titleFont().textHeight() * 2" in footer
-            and "metaFont().lineHeight() * 2" in footer and "font_body.lineHeight() + 60" in footer,
-        "grid and cards share footer measurement": yt.count("cardFooterH()") >= 3,
-        "themed play and queue remain available": 'actionButton(@src(), "Play", .secondary' in card
+        # The shared card's cover is one focusable ButtonWidget.
+        "artwork is a keyboard-focusable play target": "if (card.endCover()) action = .play" in card
+            and "self.button.drawFocus()" in mc and "button.processEvents()" in mc,
+        "16:9 artwork": ".aspect = .wide" in card and "width * 9.0 / 16.0" in _src("src/ui/media_card_pure.zig"),
+        "bounded two-line title": "media_card.title(title, CARD_FOOTER.title_lines)" in card
+            and "components.twoLineTitle(" in mc,
+        "footer includes title metadata and action height": ".title_lines = 2, .meta_lines = 1, .action_row = true" in yt,
+        "grid and cards share footer measurement": yt.count("CARD_FOOTER") >= 4
+            and "media_card.rowPitch(real_card_w, .wide, CARD_FOOTER)" in yt,
+        "themed play and queue remain available": 'iconAction(@src(), icons.tvg.lucide.play, "Play"' in card
             and 'menuItemLabel(@src(), "Add to queue"' in card and "action = .queue" in card,
         "source channel remains actionable": "action = .channel" in card,
     }

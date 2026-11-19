@@ -54,7 +54,7 @@ def test_browse_loading_and_failure_retention():
         source = _src("src/services/" + name + ".zig")
         assert "pub fn setLoadingFixtureForTest(enabled: bool)" in source, name
         assert "Browse loading fixture is test-only" in source, name
-        assert "coverSkeletonGrid" in source, name
+        assert "coverSkeletonGrid" in source or "media_card.skeletonGrid(" in source, name
     content = section(anime, "pub fn renderContent()", "\n}\n")
     assert 'dvui.label(@src(), "Loading..."' not in content
     page = section(drama, "fn fetchPage(", "/// Drain worker-staged results")

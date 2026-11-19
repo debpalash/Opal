@@ -1533,6 +1533,16 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_loading_pure).step);
 
+    // Shared media card geometry: cover aspects, measured footers, row pitch.
+    const test_media_card_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ui/media_card_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_media_card_pure).step);
+
     // Launch never restores a saved fullscreen window state.
     const test_window_geometry_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{

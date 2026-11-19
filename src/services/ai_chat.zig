@@ -1050,7 +1050,7 @@ fn renderCatalogRail() void {
 
     const card_w: f32 = 116;
     const poster_h: f32 = card_w * 1.5;
-    const strip_h: f32 = poster_h + 64 + 8; // card content + footer + margins
+    const strip_h: f32 = poster_h + tmdb.posterShelfChrome(); // card + measured footer + margins
 
     var rail = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
         .id_extra = 9310,

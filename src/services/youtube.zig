@@ -6,6 +6,7 @@ const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
+const media_card = @import("../ui/media_card.zig");
 const io = @import("../core/io_global.zig");
 const workers = @import("../core/workers.zig");
 const tmdb_pure = @import("tmdb_pure.zig"); // unit-tested grid virtualization (visibleRows)
@@ -86,17 +87,10 @@ var card_w: f32 = 280; // YouTube-like desktop density; still user-adjustable
 const CARD_MIN: f32 = 200;
 const CARD_MAX: f32 = 420;
 
-/// The card title font. Heading WEIGHT at body SIZE — compact, and small enough
-/// that a two-line title stays short. cardFooterH() MUST measure the SAME font.
-fn titleFont() dvui.Font {
-    return dvui.themeGet().font_heading.withSize(theme.font_size.body);
-}
-
-/// Shared by the fixed-height cards and virtual row spacers.
-fn cardFooterH() f32 {
-    return @ceil(7 + titleFont().textHeight() * 2 + 6 + 4 +
-        metaFont().lineHeight() * 2 + dvui.themeGet().font_body.lineHeight() + 60);
-}
+/// Two-line title, channel line, then views·date with Play/More. The card,
+/// the skeleton grid and the virtual row spacers all measure THIS footer
+/// through media_card, so they cannot drift.
+const CARD_FOOTER: media_card.Footer = .{ .title_lines = 2, .meta_lines = 1, .action_row = true };
 
 /// Compact font for the channel + views·date lines under the title.
 fn metaFont() dvui.Font {
@@ -1357,12 +1351,12 @@ pub fn renderContent() void {
     // uniform, evenly-spaced lattice at every width.
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(260, (if (rect_w > 1) rect_w else 900) - 8);
-    const gutter: f32 = 10; // 2 * card margin (5)
-    const cols: usize = @max(1, @as(usize, @intFromFloat((avail_w + gutter) / (card_w + gutter))));
-    const real_card_w: f32 = @max(120, (avail_w - @as(f32, @floatFromInt(cols - 1)) * gutter) / @as(f32, @floatFromInt(cols)));
+    const grid = media_card.pure.columns(avail_w, card_w, media_card.pure.MARGIN, 1, 12);
+    const cols: usize = grid.count;
+    const real_card_w: f32 = @max(120, grid.card_w);
     if (total == 0) {
         if (state.app.yt.is_loading.load(.acquire))
-            components.coverSkeletonGrid(@src(), 48000, cols, real_card_w, real_card_w * 9.0 / 16.0, cardFooterH(), 3)
+            media_card.skeletonGrid(@src(), 48000, cols, real_card_w, .wide, CARD_FOOTER, 3)
         else if (components.emptyStateCta(brands.icon(.youtube), "No videos found", "Try a different search or refresh this feed.", "Retry"))
             refreshCurrentFeed();
         return;
@@ -1376,8 +1370,7 @@ pub fn renderContent() void {
     // of all ~200 card widget trees. The base index of each row (row * cols) is
     // IDENTICAL to the prior loop's `i`, so every card's id_extra scheme is
     // unchanged and retained widget state is unaffected.
-    const thumb_h: f32 = real_card_w * 9.0 / 16.0;
-    const row_h: f32 = thumb_h + cardFooterH() + 12;
+    const row_h: f32 = media_card.rowPitch(real_card_w, .wide, CARD_FOOTER);
     const total_rows = (total + cols - 1) / cols;
     const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
 
@@ -1871,201 +1864,70 @@ fn prepareThumbnail(item: *state.YtItem, uploads: *usize) void {
 fn renderCard(item: *const state.YtItem, idx: usize, the_card_w: f32, ymd: []const u8) ?CardAction {
     var action: ?CardAction = null;
     const title = safeUtf8(item.title[0..item.title_len]);
-    const thumb_h: f32 = the_card_w * 9.0 / 16.0;
 
-    // min == max height → uniform row pitch, which the grid's virtualization
-    // spacer math depends on (row_h = thumb_h + cardFooterH() + padding + margins).
-    // cardFooterH() is font-metric-derived and sized for the WORST case (2-line
-    // title) at the live UI scale — it MUST be the exact same call the pitch calc
-    // uses (grid loop above), or the card and the spacer drift.
-    const footer_h = cardFooterH();
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = idx + 9000,
-        .background = false,
-        .border = dvui.Rect.all(0),
-        .corners = dvui.CornerRect.all(0),
-        .min_size_content = .{ .w = the_card_w, .h = thumb_h + footer_h },
-        .max_size_content = .{ .w = the_card_w, .h = thumb_h + footer_h },
-        .margin = .{ .x = 5, .y = 5, .w = 5, .h = 7 },
-        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
-    });
-    defer card.deinit();
+    // min == max height (media_card.begin) → uniform row pitch, which the
+    // grid's virtualization spacer math depends on. Both take their footer
+    // from CARD_FOOTER so the card and the spacer never drift.
+    var card = media_card.begin(@src(), .{ .id = idx + 9000, .width = the_card_w, .aspect = .wide, .footer = CARD_FOOTER });
+    defer card.end();
 
     // Like Movies & TV, the artwork itself is the primary click target.
-    {
-        var thumb: dvui.ButtonWidget = undefined;
-        thumb.init(@src(), .{}, .{
-            .id_extra = idx + 100,
-            .background = true,
-            .color_fill = .{ .color = theme.colors.bg_deep },
-            .corners = dvui.CornerRect.all(8),
-            .min_size_content = .{ .w = the_card_w, .h = thumb_h },
-            .max_size_content = .{ .w = the_card_w, .h = thumb_h },
-            .padding = dvui.Rect.all(0),
-        });
-        thumb.processEvents();
-        thumb.drawBackground();
-        defer {
-            if (thumb.clicked()) action = .play;
-            thumb.drawFocus();
-            thumb.deinit();
+    if (item.thumb_tex) |tex| {
+        media_card.art(tex, .{ .natural = .{ .w = @floatFromInt(item.thumb_w), .h = @floatFromInt(item.thumb_h) } });
+        const elapsed = @as(i64, @intCast(@divFloor(dvui.frameTimeNS(), std.time.ns_per_ms))) - item.thumb_ready_ms;
+        if (!state.app.reduce_motion and elapsed >= 0 and elapsed < 140) {
+            const t = @as(f32, @floatFromInt(elapsed)) / 140;
+            var fade = dvui.box(@src(), .{}, .{ .id_extra = idx + 151, .expand = .both, .background = true, .color_fill = .{ .color = theme.colors.bg_elevated.opacity((1 - t) * (1 - t)) }, .corners = dvui.CornerRect.all(theme.radius.lg) });
+            fade.deinit();
+            components.animatedRefresh(16_667);
         }
-
-        // Stack: image (or placeholder) + duration badge + sticky action icons.
-        {
-            var stack = dvui.overlay(@src(), .{ .id_extra = idx + 140, .expand = .both });
-            defer stack.deinit();
-
-            if (item.thumb_tex) |tex| {
-                const crop = @import("../ui/search_gallery_pure.zig").coverCrop(.{ .w = @floatFromInt(item.thumb_w), .h = @floatFromInt(item.thumb_h) }, .{ .w = the_card_w, .h = thumb_h });
-                _ = dvui.image(@src(), .{ .source = .{ .texture = tex }, .uv = .{ .x = crop.x, .y = crop.y, .w = crop.w, .h = crop.h } }, .{
-                    .id_extra = idx + 150,
-                    .min_size_content = .{ .w = the_card_w, .h = thumb_h },
-                    .max_size_content = .{ .w = the_card_w, .h = thumb_h },
-                    .corners = dvui.CornerRect.all(theme.radius.lg),
-                });
-                const elapsed = @as(i64, @intCast(@divFloor(dvui.frameTimeNS(), std.time.ns_per_ms))) - item.thumb_ready_ms;
-                if (!state.app.reduce_motion and elapsed >= 0 and elapsed < 140) {
-                    const t = @as(f32, @floatFromInt(elapsed)) / 140;
-                    var fade = dvui.box(@src(), .{}, .{ .id_extra = idx + 151, .expand = .both, .background = true, .color_fill = .{ .color = theme.colors.bg_elevated.opacity((1 - t) * (1 - t)) }, .corners = dvui.CornerRect.all(theme.radius.lg) });
-                    fade.deinit();
-                    components.animatedRefresh(16_667);
-                }
-            } else {
-                // Quiet video canvas, never a stretched generic image glyph or
-                // a low-frame-rate shimmer competing with scroll animation.
-                var canvas = dvui.box(@src(), .{}, .{ .id_extra = idx + 150, .expand = .both, .background = true, .color_fill = .{ .color = theme.colors.bg_elevated }, .corners = dvui.CornerRect.all(theme.radius.lg) });
-                canvas.deinit();
-                dvui.icon(@src(), "Video artwork", icons.tvg.lucide.play, .{}, .{
-                    .id_extra = idx + 152,
-                    .gravity_x = 0.5,
-                    .gravity_y = 0.5,
-                    .min_size_content = .{ .w = 22, .h = 22 },
-                    .max_size_content = .{ .w = 22, .h = 22 },
-                    .padding = dvui.Rect.all(12),
-                    .background = true,
-                    .color_fill = .{ .color = theme.colors.bg_hover },
-                    .corners = dvui.CornerRect.all(23),
-                    .color_text = .{ .color = theme.colors.text_tertiary },
-                });
-                // Retry when a global fetch slot becomes free even if another
-                // provider's completion does not request a frame for this view.
-                if (!item.thumb_failed and item.thumbnail_url_len > 0) components.animatedRefresh(100_000);
-            }
-
-            // Duration badge (bottom-right) — a tight pill over a soft scrim so
-            // it stays legible on both dark and light thumbnails.
-            if (item.duration > 0) {
-                var dur_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .id_extra = idx + 161,
-                    .gravity_x = 1.0,
-                    .gravity_y = 1.0,
-                    .background = true,
-                    .color_fill = .{ .color = theme.colors.overlay },
-                    .corners = dvui.CornerRect.all(4),
-                    .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
-                    .margin = .{ .x = 0, .y = 0, .w = 6, .h = 6 },
-                });
-                defer dur_box.deinit();
-
-                var dur_buf: [24]u8 = undefined;
-                const dur_str = yt_pure.formatDuration(item.duration, &dur_buf);
-                if (dur_str.len > 0) {
-                    _ = dvui.labelNoFmt(@src(), dur_str, .{}, .{ .id_extra = idx + 162, .color_text = .{ .color = dvui.Color.white }, .font = metaFont() });
-                }
-            }
-        }
+    } else {
+        // Quiet video canvas, never a stretched generic image glyph or a
+        // low-frame-rate shimmer competing with scroll animation.
+        media_card.placeholder(icons.tvg.lucide.play);
+        // Retry when a global fetch slot becomes free even if another
+        // provider's completion does not request a frame for this view.
+        if (!item.thumb_failed and item.thumbnail_url_len > 0) components.animatedRefresh(100_000);
     }
+    if (item.duration > 0) {
+        var dur_buf: [24]u8 = undefined;
+        const dur_str = yt_pure.formatDuration(item.duration, &dur_buf);
+        if (dur_str.len > 0) media_card.badge(.bottom_right, dur_str, .glass);
+    }
+    if (card.endCover()) action = .play;
 
-    // Info
+    if (media_card.title(title, CARD_FOOTER.title_lines)) action = .play;
+
+    // Channel on its own line (clickable → that channel's uploads), then
+    // "1.5M views · 3w ago" beside the actions. Splitting them means dvui
+    // ellipsizes the CHANNEL and a view-count digit is never cut.
+    if (item.uploader_len > 0) {
+        var ch_buf: [80]u8 = undefined;
+        const ch = truncateUtf8(item.uploader[0..item.uploader_len], 28, &ch_buf);
+        if (item.channel_id_len > 0) {
+            if (dvui.labelClick(@src(), "{s}", .{ch}, .{}, .{
+                .id_extra = idx + 410,
+                .color_text = .{ .color = theme.colors.text_secondary },
+                .font = metaFont(),
+                .min_size_content = .{ .w = the_card_w - 4, .h = metaFont().lineHeight() },
+                .max_size_content = .{ .w = the_card_w - 4, .h = metaFont().lineHeight() },
+                .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+            })) action = .channel;
+        } else media_card.meta(ch, idx + 410, .secondary);
+    } else media_card.meta("", idx + 410, .secondary);
+
+    var actions = media_card.actionRow();
+    defer actions.deinit();
+    var abuf: [16]u8 = undefined;
+    const ago = if (ymd.len == 8) formatAgo(ymd, &abuf) else "";
+    var mbuf: [64]u8 = undefined;
+    media_card.rowText(metaLine(item.views, ago, &mbuf), the_card_w - 52, .secondary);
+    media_card.spacer();
+    if (media_card.iconAction(@src(), icons.tvg.lucide.play, "Play", idx + 510, false)) action = .play;
     {
-        var info = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 200,
-            .expand = .horizontal,
-            .padding = .{ .x = 2, .y = 7, .w = 2, .h = 0 },
-        });
-        defer info.deinit();
-
-        var title_buf: [520]u8 = undefined;
-        const title_font = theme.mediaTitleFont(title, titleFont());
-        const title_2l = components.twoLineTitle(title, title_font, the_card_w - 4, &title_buf);
-        const title_h = title_font.textHeight() * 2 + 6;
-        if (dvui.button(@src(), title_2l, .{}, .{
-            .id_extra = idx + 300,
-            .expand = .horizontal,
-            .color_text = .{ .color = theme.colors.text_primary },
-            .font = title_font,
-            .min_size_content = .{ .w = the_card_w - 4, .h = title_h },
-            .max_size_content = .{ .w = the_card_w - 4, .h = title_h },
-            .color_fill = .{ .color = theme.transparent },
-            .color_fill_hover = .{ .color = theme.colors.bg_hover },
-            .color_fill_press = .{ .color = theme.colors.bg_elevated },
-            .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-        })) action = .play;
-
-        // Two-line meta: channel on its own line, then "1.5M views · 3w ago".
-        // Splitting them means dvui ellipsizes the CHANNEL (line 1) and trims
-        // the date end (line 2) — a view-count digit is never cut.
-        {
-            var meta = dvui.box(@src(), .{ .dir = .vertical }, .{
-                .id_extra = idx + 400,
-                .expand = .horizontal,
-                .padding = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
-            });
-            defer meta.deinit();
-
-            if (item.uploader_len > 0) {
-                var ch_buf: [80]u8 = undefined;
-                const ch = truncateUtf8(item.uploader[0..item.uploader_len], 28, &ch_buf);
-                if (item.channel_id_len > 0) {
-                    // Clickable channel → that channel's uploads take over the
-                    // grid (openChannel validates the id and no-ops if bad).
-                    if (dvui.labelClick(@src(), "{s}", .{ch}, .{}, .{
-                        .id_extra = idx + 410,
-                        .expand = .horizontal,
-                        .color_text = .{ .color = theme.colors.text_secondary },
-                        .font = metaFont(),
-                    })) {
-                        action = .channel;
-                    }
-                } else {
-                    _ = dvui.labelNoFmt(@src(), ch, .{}, .{
-                        .id_extra = idx + 410,
-                        .expand = .horizontal,
-                        .color_text = .{ .color = theme.colors.text_secondary },
-                        .font = metaFont(),
-                    });
-                }
-            }
-
-            var abuf: [16]u8 = undefined;
-            const ago = if (ymd.len == 8) formatAgo(ymd, &abuf) else "";
-            var mbuf: [64]u8 = undefined;
-            const ml = metaLine(item.views, ago, &mbuf);
-            if (ml.len > 0) {
-                _ = dvui.labelNoFmt(@src(), ml, .{}, .{
-                    .id_extra = idx + 430,
-                    .expand = .horizontal,
-                    .color_text = .{ .color = theme.colors.text_tertiary },
-                    .font = metaFont(),
-                });
-            }
-        }
-        var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = idx + 500,
-            .expand = .horizontal,
-            .padding = dvui.Rect.all(2),
-        });
-        defer actions.deinit();
-        if (components.actionButton(@src(), "Play", .secondary, idx + 510)) action = .play;
-        var gap = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-        gap.deinit();
-        var menu = dvui.menu(@src(), .horizontal, .{ .id_extra = idx + 520 });
-        defer menu.deinit();
-        if (dvui.menuItemIcon(@src(), "More actions", icons.tvg.lucide.@"ellipsis-vertical", .{ .submenu = true }, .{
-            .color_text = .{ .color = theme.colors.text_secondary },
-            .padding = dvui.Rect.all(4),
-        })) |rect| {
+        const more = media_card.moreMenu(idx + 520);
+        defer more.deinit();
+        if (more.anchor) |rect| {
             var popup = dvui.floatingMenu(@src(), .{ .from = rect }, .{ .color_fill = .{ .color = theme.colors.bg_surface } });
             defer popup.deinit();
             var choices = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = .{ .color = theme.colors.bg_surface }, .padding = dvui.Rect.all(4) });
@@ -2079,7 +1941,7 @@ fn renderCard(item: *const state.YtItem, idx: usize, the_card_w: f32, ymd: []con
 
     // ── Right-click context menu ──
     {
-        const ctext = dvui.context(@src(), .{ .rect = card.data().borderRectScale().r }, .{ .id_extra = idx + 700 });
+        const ctext = dvui.context(@src(), .{ .rect = card.outer.data().borderRectScale().r }, .{ .id_extra = idx + 700 });
         defer ctext.deinit();
 
         if (ctext.activePoint()) |cp| {

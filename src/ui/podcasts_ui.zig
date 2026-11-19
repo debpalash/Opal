@@ -7,6 +7,7 @@ const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("theme.zig");
 const components = @import("components.zig");
+const media_card = @import("media_card.zig");
 const poster = @import("../core/poster.zig");
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 const pure = @import("../services/podcasts_pure.zig");
@@ -93,7 +94,7 @@ fn renderSearchBar() void {
 // loadEpisodes(i), exactly as the old "Episodes" row button did.
 const CARD_GAP: f32 = 6;
 const CARD_TARGET_W: f32 = 170; // desired card width; columns derive from it
-const CARD_FOOTER_H: f32 = 46; // title + publisher lines under the cover
+const CARD_FOOTER: media_card.Footer = .{ .title_lines = 1, .meta_lines = 1 }; // title + publisher
 
 /// Fill the card's cover area with the show's artwork, reusing the shared poster
 /// daemon. Falls back to the podcast glyph while loading, when the show has no
@@ -102,9 +103,9 @@ fn renderCover(i: usize, p: *const pure.Podcast) void {
     components.coverArt(@src(), i + 1000, &pod_posters[i], p.artwork[0..p.artwork_len], icons.tvg.lucide.podcast, 8);
 }
 
-/// One show card: square cover (clickable) + title + publisher subtitle.
+/// One show card: square cover (clickable) + title + publisher subtitle,
+/// through the shared media card.
 fn renderCard(i: usize, card_w: f32, p: *const pure.Podcast) void {
-
     // Validate STABLE COPIES: a fetch worker can rewrite results[i] mid-frame
     // and dvui panics on invalid UTF-8 it reads after we validated.
     var name_buf: [160]u8 = undefined;
@@ -113,54 +114,14 @@ fn renderCard(i: usize, card_w: f32, p: *const pure.Podcast) void {
     const artist = safeUtf8Buf(p.artist[0..@min(p.artist_len, p.artist.len)], &artist_buf);
 
     // min == max height → every card (and thus every row) has a uniform pitch.
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = i,
-        .min_size_content = .{ .w = card_w, .h = card_w + CARD_FOOTER_H },
-        .max_size_content = .{ .w = card_w, .h = card_w + CARD_FOOTER_H },
-        .margin = dvui.Rect.all(CARD_GAP),
-    });
-    defer card.deinit();
-
-    // Cover art hosted INSIDE a single button widget — one clickable rectangle
-    // per card (a sibling button + box would draw two).
-    {
-        var bw: dvui.ButtonWidget = undefined;
-        bw.init(@src(), .{}, .{
-            .id_extra = i + 2000,
-            .background = true,
-            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
-            .corners = dvui.CornerRect.all(theme.radius.lg),
-            .min_size_content = .{ .w = card_w, .h = card_w },
-            .max_size_content = .{ .w = card_w, .h = card_w },
-            .padding = dvui.Rect.all(0),
-        });
-        bw.processEvents();
-        bw.drawBackground();
-
-        renderCover(i, p);
-
-        const clicked = bw.clicked();
-        bw.drawFocus();
-        bw.deinit();
-        // Same click target as the old row's "Episodes" button.
-        if (clicked) loadEpisodes(i);
-    }
-
-    _ = dvui.label(@src(), "{s}", .{name}, .{
-        .id_extra = i + 3000,
-        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
-        .expand = .horizontal,
-        .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
-    });
-
-    if (artist.len > 0) {
-        _ = dvui.label(@src(), "{s}", .{artist}, .{
-            .id_extra = i + 4000,
-            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
-            .expand = .horizontal,
-            .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-        });
-    }
+    var card = media_card.begin(@src(), .{ .id = i, .width = card_w, .aspect = .square, .footer = CARD_FOOTER, .margin = CARD_GAP });
+    defer card.end();
+    renderCover(i, p);
+    // Same click target as the old row's "Episodes" button.
+    const open_cover = card.endCover();
+    const open_title = media_card.title(name, 1);
+    if (open_cover or open_title) loadEpisodes(i);
+    if (artist.len > 0) media_card.meta(artist, i, .tertiary);
 }
 
 fn renderResults(view: *const Snapshot) void {
@@ -185,11 +146,11 @@ fn renderResults(view: *const Snapshot) void {
     const cols_f: f32 = @floatFromInt(cols);
     const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
     if (count == 0) {
-        components.coverSkeletonGrid(@src(), 48000, cols, card_w, card_w, CARD_FOOTER_H, 3);
+        components.coverSkeletonGrid(@src(), 48000, cols, card_w, card_w, media_card.footerHeight(CARD_FOOTER), 3);
         return;
     }
 
-    const row_h = card_w + CARD_FOOTER_H + 2 * CARD_GAP;
+    const row_h = card_w + media_card.footerHeight(CARD_FOOTER) + 2 * CARD_GAP;
     const total_rows = (count + cols - 1) / cols;
     const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
 

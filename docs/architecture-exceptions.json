@@ -72,6 +72,7 @@
     "src/services/music_subsonic.zig -> ../ui/browse_layout_pure.zig",
     "src/services/music_subsonic.zig -> ../ui/components.zig",
     "src/services/music_subsonic.zig -> ../ui/lyrics_text.zig",
+    "src/services/music_subsonic.zig -> ../ui/media_card.zig",
     "src/services/music_subsonic.zig -> ../ui/theme.zig",
     "src/services/music_subsonic.zig -> dvui",
     "src/services/music_subsonic.zig -> icons",
@@ -89,6 +90,7 @@
     "src/services/opds.zig -> icons",
     "src/services/plex.zig -> ../ui/browse_filters.zig",
     "src/services/plex.zig -> ../ui/components.zig",
+    "src/services/plex.zig -> ../ui/media_card.zig",
     "src/services/plex.zig -> ../ui/theme.zig",
     "src/services/plex.zig -> dvui",
     "src/services/plex.zig -> icons",
@@ -141,6 +143,7 @@
     "src/services/tmdb.zig -> ../ui/browse_filters.zig",
     "src/services/tmdb.zig -> ../ui/browse_layout_pure.zig",
     "src/services/tmdb.zig -> ../ui/components.zig",
+    "src/services/tmdb.zig -> ../ui/media_card.zig",
     "src/services/tmdb.zig -> ../ui/theme.zig",
     "src/services/tmdb.zig -> ../ui/tv_layout_pure.zig",
     "src/services/tmdb.zig -> dvui",
@@ -184,7 +187,7 @@
     "src/services/youtube.zig -> ../ui/browse_filters.zig",
     "src/services/youtube.zig -> ../ui/browse_layout_pure.zig",
     "src/services/youtube.zig -> ../ui/components.zig",
-    "src/services/youtube.zig -> ../ui/search_gallery_pure.zig",
+    "src/services/youtube.zig -> ../ui/media_card.zig",
     "src/services/youtube.zig -> ../ui/theme.zig",
     "src/services/youtube.zig -> dvui",
     "src/services/youtube.zig -> icons",
@@ -241,8 +244,7 @@
       "src/services/wallpapers.zig -> dvui",
       "src/services/wallpapers.zig -> icons",
       "src/services/youtube.zig -> ../ui/brands.zig",
-      "src/services/youtube.zig -> ../ui/browse_filters.zig",
-      "src/services/youtube.zig -> ../ui/search_gallery_pure.zig"
+      "src/services/youtube.zig -> ../ui/browse_filters.zig"
     ]
   }
 }

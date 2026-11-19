@@ -25,6 +25,7 @@ const yt_music = @import("music_youtube_pure.zig");
 const au_pure = @import("music_audius_pure.zig");
 const paths = @import("../core/paths.zig");
 const components = @import("../ui/components.zig");
+const media_card = @import("../ui/media_card.zig");
 const io = @import("../core/io_global.zig");
 const reliable_fetch = @import("reliable_fetch.zig");
 const poster = @import("../core/poster.zig");
@@ -1277,7 +1278,8 @@ fn fetchBody(url: []const u8, cap: usize, accept: []const u8) ?[]u8 {
 // ══════════════════════════════════════════════════════════
 const CARD_GAP: f32 = 6;
 const CARD_TARGET_W: f32 = 160;
-const CARD_FOOTER_H: f32 = 46;
+/// Title + one artist/credit/download row.
+const CARD_FOOTER: media_card.Footer = .{ .title_lines = 1, .action_row = true };
 
 const CoverSlot = struct {
     pixels: ?[]u8 = null,
@@ -1543,100 +1545,31 @@ fn renderCover(i: usize, song: *const pure.MusicSong, source: u8) void {
     }
 
     const visible_texture = if (cover_url.len > 0 and slot.url_hash == h) slot.tex else null;
-    if (visible_texture) |tex| {
-        _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
-            .id_extra = i + 1000,
-            .expand = .both,
-            .corners = dvui.CornerRect.all(8),
-        });
-    } else if (cover_url.len > 0 and !slot.failed) {
-        components.coverSkeleton(@src(), i + 1000, 8);
-    } else {
-        _ = dvui.icon(@src(), "", icons.tvg.lucide.music, .{}, .{
-            .id_extra = i + 1000,
-            .color_text = .{ .color = theme.colors.text_tertiary },
-            .gravity_x = 0.5,
-            .gravity_y = 0.5,
-            .expand = .both,
-        });
-    }
+    media_card.art(visible_texture, .{ .loading = cover_url.len > 0 and !slot.failed, .placeholder = icons.tvg.lucide.music });
 }
 
 fn renderCard(i: usize, card_w: f32, song: *const pure.MusicSong, source: u8) void {
     var name_buf: [160]u8 = undefined;
     const title = safeUtf8Buf(song.title[0..@min(song.title_len, song.title.len)], &name_buf);
 
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = i,
-        .min_size_content = .{ .w = card_w, .h = card_w + CARD_FOOTER_H },
-        .max_size_content = .{ .w = card_w, .h = card_w + CARD_FOOTER_H },
-        .margin = dvui.Rect.all(CARD_GAP),
-    });
-    defer card.deinit();
+    var card = media_card.begin(@src(), .{ .id = i, .width = card_w, .aspect = .square, .footer = CARD_FOOTER, .margin = CARD_GAP });
+    defer card.end();
+    renderCover(i, song, source);
+    const play_cover = card.endCover();
+    const play_title = media_card.title(title, 1);
+    if (play_cover or play_title) playCopiedSong(song.*, source);
 
-    {
-        var bw: dvui.ButtonWidget = undefined;
-        bw.init(@src(), .{}, .{
-            .id_extra = i + 2000,
-            .background = true,
-            .color_fill = .{ .color = theme.colors.bg_elevated },
-            .corners = dvui.CornerRect.all(8),
-            .min_size_content = .{ .w = card_w, .h = card_w },
-            .max_size_content = .{ .w = card_w, .h = card_w },
-            .padding = dvui.Rect.all(0),
-        });
-        bw.processEvents();
-        bw.drawBackground();
-        renderCover(i, song, source);
-        const clicked = bw.clicked();
-        bw.drawFocus();
-        bw.deinit();
-        if (clicked) playCopiedSong(song.*, source);
-    }
-
-    {
-        var nrow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 6000, .expand = .horizontal });
-        defer nrow.deinit();
-        _ = dvui.label(@src(), "{s}", .{title}, .{
-            .id_extra = i + 3000,
-            .color_text = .{ .color = theme.colors.text_primary },
-            .expand = .horizontal,
-            .gravity_y = 0.5,
-            .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
-        });
-        if (song.download_allowed and dvui.buttonIcon(@src(), "musicdl", icons.tvg.lucide.download, .{}, .{}, .{
-            .id_extra = i + 7000,
-            .color_text = .{ .color = theme.colors.text_tertiary },
-            .color_fill = .{ .color = theme.transparent },
-            .color_fill_hover = .{ .color = theme.colors.bg_hover },
-            .border = dvui.Rect.all(0),
-            .min_size_content = theme.iconSize(.sm),
-            .padding = dvui.Rect.all(4),
-            .gravity_y = 0.5,
-        })) {
-            downloadCopiedSong(song.*, source);
-        }
-    }
-    if (song.artist_len > 0) {
-        var a_safe: [128]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(song.artist[0..@min(song.artist_len, song.artist.len)], &a_safe)}, .{
-            .id_extra = i + 4000,
-            .color_text = .{ .color = theme.colors.text_tertiary },
-            .expand = .horizontal,
-            .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-        });
-    }
-    if (song.attribution_len > 0) {
-        var credit_wd: dvui.WidgetData = undefined;
-        _ = dvui.label(@src(), "License & attribution", .{}, .{
-            .data_out = &credit_wd,
-            .id_extra = i + 4100,
-            .color_text = .{ .color = theme.colors.text_tertiary },
-            .font = dvui.themeGet().font_body.withSize(10),
-            .expand = .horizontal,
-        });
-        components.tipId(@src(), credit_wd, song.attribution[0..@min(song.attribution_len, song.attribution.len)], i + 4200);
-    }
+    // Artist, then license credit (tooltip) and download on one row.
+    var row = media_card.actionRow();
+    defer row.deinit();
+    var a_safe: [128]u8 = undefined;
+    const artist = safeUtf8Buf(song.artist[0..@min(song.artist_len, song.artist.len)], &a_safe);
+    media_card.rowText(artist, card_w - 52, .secondary);
+    media_card.spacer();
+    if (song.attribution_len > 0)
+        _ = media_card.iconAction(@src(), icons.tvg.lucide.info, song.attribution[0..@min(song.attribution_len, song.attribution.len)], i + 4100, false);
+    if (song.download_allowed and media_card.iconAction(@src(), icons.tvg.lucide.download, "Download", i + 7000, false))
+        downloadCopiedSong(song.*, source);
 }
 
 fn renderResults() void {
@@ -1668,11 +1601,11 @@ fn renderResults() void {
     const cols_f: f32 = @floatFromInt(cols);
     const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
     if (total == 0) {
-        components.coverSkeletonGrid(@src(), 48000, cols, card_w, card_w, CARD_FOOTER_H, 3);
+        components.coverSkeletonGrid(@src(), 48000, cols, card_w, card_w, media_card.footerHeight(CARD_FOOTER), 3);
         return;
     }
 
-    const row_h = card_w + CARD_FOOTER_H + 2 * CARD_GAP;
+    const row_h = card_w + media_card.footerHeight(CARD_FOOTER) + 2 * CARD_GAP;
     const total_rows = (total + cols - 1) / cols;
     const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
 
