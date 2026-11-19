@@ -944,6 +944,7 @@ pub fn appDeinit() void {
     @import("services/browser_privacy.zig").shutdown();
     @import("services/wallpaper_desktop.zig").deinitNative();
     workers.beginShutdownAndDrain(800);
+    @import("services/podcasts.zig").closeEpisodes();
     @import("ui/local_library_ui.zig").deinit();
     @import("services/source_request.zig").deinit();
     search.deinitGallery();
