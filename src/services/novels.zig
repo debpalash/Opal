@@ -23,6 +23,7 @@ const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
+const media_card = @import("../ui/media_card.zig");
 const logs = @import("../core/logs.zig");
 const reliable_fetch = @import("reliable_fetch.zig");
 const db = @import("../core/db.zig");
@@ -2218,8 +2219,8 @@ fn renderSearchView() void {
     if (count == 0) {
         if (state.app.novels.is_loading.load(.acquire)) {
             const width = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
-            const grid = @import("../ui/browse_layout_pure.zig").readingGrid(width);
-            components.coverSkeletonGrid(@src(), 98000, grid.columns, grid.card_width, 112, 14, 2);
+            const grid = novelGrid(width);
+            media_card.skeletonGrid(@src(), 98000, grid.count, grid.card_w, .poster, NOVEL_FOOTER, 2);
         } else {
             components.emptyState(
                 icons.tvg.lucide.@"book-open",
@@ -2239,10 +2240,11 @@ fn renderSearchView() void {
 
     const layout_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
     const viewport_width = if (scroll.data().rect.w > 1) scroll.data().rect.w else layout_w;
-    const grid = @import("../ui/browse_layout_pure.zig").readingGrid(viewport_width);
-    const cols = grid.columns;
+    const grid = novelGrid(viewport_width);
+    const cols = grid.count;
     const rows = (count + cols - 1) / cols;
-    const row_h: f32 = 126;
+    // Fixed row pitch from the shared card (cover + measured footer + margins).
+    const row_h: f32 = media_card.rowPitch(grid.card_w, .poster, NOVEL_FOOTER);
     const win = tmdb_pure.visibleRows(rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
     if (win.first > 0) {
         var sp = dvui.box(@src(), .{}, .{
@@ -2259,7 +2261,7 @@ fn renderSearchView() void {
             .expand = .horizontal,
             .min_size_content = .{ .w = 1, .h = row_h },
             .max_size_content = .{ .w = std.math.floatMax(f32), .h = row_h },
-            .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+            .padding = .{ .x = NOVEL_ROW_PAD, .y = 0, .w = NOVEL_ROW_PAD, .h = 0 },
         });
         defer row.deinit();
 
@@ -2267,7 +2269,7 @@ fn renderSearchView() void {
             const i = row_idx * cols + col;
             if (i >= count) break;
             const item = resultRow(i) orelse continue;
-            renderNovelCard(item, i, grid.card_width);
+            renderNovelCard(item, i, grid.card_w);
         }
     }
 
@@ -2358,94 +2360,47 @@ fn novelSourceIcon(source: NovelSource) []const u8 {
     };
 }
 
+/// Book card: portrait cover, two-line title, author · year, source library.
+/// Measured by media_card so card, skeleton and row pitch share one number.
+const NOVEL_FOOTER: media_card.Footer = .{ .title_lines = 2, .meta_lines = 2 };
+const NOVEL_CARD_TARGET_W: f32 = 150;
+/// Horizontal padding on each grid row.
+const NOVEL_ROW_PAD: f32 = 8;
+
+fn novelGrid(viewport_width: f32) media_card.pure.Columns {
+    return media_card.pure.columns(@max(1, viewport_width - 2 * NOVEL_ROW_PAD), NOVEL_CARD_TARGET_W, media_card.pure.MARGIN, 1, 64);
+}
+
 fn renderNovelCard(item: ListRow, index: usize, card_width: f32) void {
     var name_buf: [256]u8 = undefined;
     const name = safeUtf8Buf(item.title(), &name_buf);
     const source: NovelSource = @enumFromInt(item.source);
 
-    var bw: dvui.ButtonWidget = undefined;
-    bw.init(@src(), .{}, .{
-        .id_extra = 52000 + index,
-        .min_size_content = .{ .w = card_width, .h = 112 },
-        .max_size_content = .{ .w = card_width, .h = 112 },
-        .background = true,
-        .color_fill = .{ .color = theme.colors.bg_elevated },
-        .color_fill_hover = .{ .color = theme.colors.bg_hover },
-        .corners = theme.dims.rad_md,
-        .margin = .{ .x = 4, .y = 3, .w = 4, .h = 3 },
-        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
-    });
-    bw.processEvents();
-    bw.drawBackground();
-    if (@import("builtin").is_test) native_card_rects[index] = bw.data().borderRectScale().r;
+    // min == max height (inside media_card.begin) → uniform row pitch.
+    var card = media_card.begin(@src(), .{ .id = 52000 + index, .width = card_width, .aspect = .poster, .footer = NOVEL_FOOTER });
+    defer card.end();
+    if (@import("builtin").is_test) native_card_rects[index] = card.outer.data().borderRectScale().r;
 
-    {
-        var body = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = 53000 + index,
-            .expand = .both,
-            .max_size_content = .{ .w = 0, .h = 112 },
-            .padding = .{ .x = 0, .y = 0, .w = 10, .h = 0 },
-        });
-        defer body.deinit();
+    components.coverArt(@src(), 54500 + index, &novel_covers[index], item.metadata.cover(), novelSourceIcon(source), theme.radius.lg);
+    const open_cover = card.endCover();
+    const open_title = media_card.title(name, NOVEL_FOOTER.title_lines);
 
-        {
-            var spine = dvui.box(@src(), .{ .dir = .vertical }, .{
-                .id_extra = 54000 + index,
-                .min_size_content = .{ .w = 76, .h = 112 },
-                .max_size_content = .{ .w = 76, .h = 112 },
-                .background = true,
-                .color_fill = .{ .color = theme.colors.accent.lerp(theme.colors.bg_surface, 0.35) },
-                .corners = .{ .tl = .theme(theme.radius.md), .tr = .theme(theme.radius.md), .br = .theme(0), .bl = .theme(0) },
-            });
-            defer spine.deinit();
-            components.coverArt(@src(), 54500 + index, &novel_covers[index], item.metadata.cover(), novelSourceIcon(source), theme.radius.md);
-        }
-
-        {
-            var text = dvui.box(@src(), .{ .dir = .vertical }, .{
-                .id_extra = 55000 + index,
-                .expand = .both,
-                .max_size_content = .{ .w = 0, .h = 94 },
-                .padding = .{ .x = 10, .y = 10, .w = 4, .h = 8 },
-            });
-            defer text.deinit();
-            _ = dvui.label(@src(), "{s}", .{name}, .{
-                .id_extra = 56000 + index,
-                .expand = .horizontal,
-                .color_text = .{ .color = theme.colors.text_primary },
-                .font = theme.mediaTitleFont(name, dvui.themeGet().font_body),
-            });
-            if (item.metadata.author_len > 0 or item.metadata.overview_len > 0) {
-                var subtitle_buf: [256]u8 = undefined;
-                const subtitle = if (item.metadata.author_len > 0)
-                    safeUtf8(item.metadata.author())
-                else
-                    safeUtf8(item.metadata.overview()[0..@min(item.metadata.overview_len, 100)]);
-                const subtitle_text = if (item.metadata.year > 0)
-                    std.fmt.bufPrint(&subtitle_buf, "{s} · {d}", .{ subtitle, item.metadata.year }) catch subtitle
-                else
-                    subtitle;
-                _ = dvui.label(@src(), "{s}", .{subtitle_text}, .{
-                    .id_extra = 56500 + index,
-                    .expand = .horizontal,
-                    .color_text = .{ .color = theme.colors.text_secondary },
-                });
-            }
-            {
-                var spacer = dvui.box(@src(), .{}, .{ .id_extra = 57000 + index, .expand = .vertical });
-                spacer.deinit();
-            }
-            _ = dvui.label(@src(), "{s}", .{novelSourceLabel(source)}, .{
-                .id_extra = 58000 + index,
-                .color_text = .{ .color = theme.colors.accent },
-            });
-        }
+    var subtitle_buf: [256]u8 = undefined;
+    var subtitle_text: []const u8 = "";
+    if (item.metadata.author_len > 0 or item.metadata.overview_len > 0) {
+        const subtitle = if (item.metadata.author_len > 0)
+            safeUtf8(item.metadata.author())
+        else
+            safeUtf8(item.metadata.overview()[0..@min(item.metadata.overview_len, 100)]);
+        subtitle_text = if (item.metadata.year > 0)
+            std.fmt.bufPrint(&subtitle_buf, "{s} · {d}", .{ subtitle, item.metadata.year }) catch subtitle
+        else
+            subtitle;
     }
+    media_card.meta(subtitle_text, 56500 + index, .secondary);
+    media_card.meta(novelSourceLabel(source), 58000 + index, .accent);
 
-    const clicked = bw.clicked();
-    bw.drawFocus();
-    bw.deinit();
-    if (clicked) openNovel(index);
+    if (open_cover or open_title) openNovel(index);
 }
 
 fn renderChaptersView() void {

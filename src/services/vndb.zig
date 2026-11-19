@@ -27,6 +27,7 @@ const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
+const media_card = @import("../ui/media_card.zig");
 const logs = @import("../core/logs.zig");
 const pure = @import("vndb_pure.zig");
 const io = @import("../core/io_global.zig");
@@ -535,10 +536,12 @@ fn renderSearchBar() void {
 }
 
 // ── Card grid ──
-const CARD_GAP: f32 = 6;
 const CARD_TARGET_W: f32 = 150; // desired card width; columns derive from it
-const CARD_COVER_H: f32 = 200; // cover art height (VN box-art is portrait)
-const CARD_FOOTER_H: f32 = 52; // title + rating/year lines under the cover
+/// Two-line title + one rating · year line under the portrait box-art cover.
+/// Measured by media_card so card, skeleton and row pitch share one number.
+const CARD_FOOTER: media_card.Footer = .{ .title_lines = 2, .meta_lines = 1 };
+/// Detail-view cover column width (portrait box-art, same aspect as cards).
+const DETAIL_COVER_W: f32 = 160;
 
 /// Fill a card's cover area with the VN cover art via the shared poster daemon.
 /// Falls back to the gamepad glyph while loading / when there's no cover / when
@@ -552,20 +555,14 @@ fn renderCover(i: usize, v: *const pure.Vn) void {
             slot.* = .{};
         }
         // A delayed previous cover must never decorate a coverless record.
-        _ = dvui.icon(@src(), "", icons.tvg.lucide.@"gamepad-2", .{}, .{
-            .id_extra = i + 1000,
-            .color_text = .{ .color = theme.colors.text_tertiary },
-            .gravity_x = 0.5,
-            .gravity_y = 0.5,
-            .expand = .both,
-        });
+        media_card.placeholder(icons.tvg.lucide.@"gamepad-2");
         return;
     }
 
     if (url.len > 0) {
         const h = std.hash.Fnv1a_64.hash(url);
         if (slot.url_hash != h and slot.fetching) {
-            components.coverSkeleton(@src(), i + 1000, 8);
+            media_card.art(null, .{ .loading = true });
             return; // An older cover must not be painted on a different VN.
         }
         if (slot.url_hash != h and !slot.fetching) {
@@ -584,23 +581,10 @@ fn renderCover(i: usize, v: *const pure.Vn) void {
         }
     }
 
-    if (slot.tex) |*tex| {
-        _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-            .id_extra = i + 1000,
-            .expand = .both,
-            .corners = dvui.CornerRect.all(8),
-        });
-    } else if (url.len > 0 and !slot.failed) {
-        components.coverSkeleton(@src(), i + 1000, 8);
-    } else {
-        _ = dvui.icon(@src(), "", icons.tvg.lucide.@"gamepad-2", .{}, .{
-            .id_extra = i + 1000,
-            .color_text = .{ .color = theme.colors.text_tertiary },
-            .gravity_x = 0.5,
-            .gravity_y = 0.5,
-            .expand = .both,
-        });
-    }
+    media_card.art(slot.tex, .{
+        .loading = url.len > 0 and !slot.failed,
+        .placeholder = icons.tvg.lucide.@"gamepad-2",
+    });
 }
 
 /// One VN card: cover (clickable → detail) + title + rating · year.
@@ -610,49 +594,16 @@ fn renderCard(i: usize, card_w: f32) void {
     var title_buf: [256]u8 = undefined;
     const title = safeUtf8Buf(v.title[0..@min(v.title_len, v.title.len)], &title_buf);
 
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = i,
-        .min_size_content = .{ .w = card_w, .h = CARD_COVER_H + CARD_FOOTER_H },
-        .max_size_content = .{ .w = card_w, .h = CARD_COVER_H + CARD_FOOTER_H },
-        .margin = dvui.Rect.all(CARD_GAP),
-    });
-    defer card.deinit();
+    // min == max height (inside media_card.begin) → uniform row pitch.
+    var card = media_card.begin(@src(), .{ .id = i, .width = card_w, .aspect = .poster, .footer = CARD_FOOTER });
+    defer card.end();
 
-    // Cover hosted INSIDE a single button widget — one clickable rectangle.
-    {
-        var bw: dvui.ButtonWidget = undefined;
-        bw.init(@src(), .{}, .{
-            .id_extra = i + 2000,
-            .background = true,
-            .color_fill = .{ .color = theme.colors.bg_elevated },
-            .corners = dvui.CornerRect.all(8),
-            .min_size_content = .{ .w = card_w, .h = CARD_COVER_H },
-            .max_size_content = .{ .w = card_w, .h = CARD_COVER_H },
-            .padding = dvui.Rect.all(0),
-        });
-        bw.processEvents();
-        bw.drawBackground();
-
-        renderCover(i, v);
-
-        const clicked = bw.clicked();
-        bw.drawFocus();
-        bw.deinit();
-        if (clicked) openDetail(i);
-    }
+    // Cover hosted INSIDE the shared card's single button — one clickable rectangle.
+    renderCover(i, v);
+    if (card.endCover()) openDetail(i);
 
     // Title (click → detail).
-    if (dvui.button(@src(), title, .{}, .{
-        .id_extra = i + 3000,
-        .expand = .horizontal,
-        .color_text = .{ .color = theme.colors.text_primary },
-        .color_fill = .{ .color = theme.transparent },
-        .color_fill_hover = .{ .color = theme.colors.bg_hover },
-        .color_fill_press = .{ .color = theme.colors.bg_elevated },
-        .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
-    })) {
-        openDetail(i);
-    }
+    if (media_card.title(title, CARD_FOOTER.title_lines)) openDetail(i);
 
     // Rating · year.
     var meta_buf: [64]u8 = undefined;
@@ -666,16 +617,8 @@ fn renderCard(i: usize, card_w: f32) void {
         if (wrote) mw.writeAll(" · ") catch {};
         // Year portion only (first 4 chars of "YYYY-MM-DD").
         mw.writeAll(v.released[0..@min(v.released_len, 4)]) catch {};
-        wrote = true;
     }
-    if (wrote) {
-        _ = dvui.label(@src(), "{s}", .{meta_buf[0..mw.end]}, .{
-            .id_extra = i + 4000,
-            .color_text = .{ .color = theme.colors.text_tertiary },
-            .expand = .horizontal,
-            .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-        });
-    }
+    media_card.meta(meta_buf[0..mw.end], i + 4000, .tertiary);
 }
 
 fn renderResults() void {
@@ -696,17 +639,18 @@ fn renderResults() void {
     // falls back to a sane default) — same shape as the TMDB/radio grid.
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
-    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
-    const cols_f: f32 = @floatFromInt(cols);
-    const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
+    const grid = media_card.pure.columns(avail_w, CARD_TARGET_W, media_card.pure.MARGIN, 1, 64);
+    const cols: usize = grid.count;
+    const card_w: f32 = @max(100, grid.card_w);
     if (count == 0) {
-        components.coverSkeletonGrid(@src(), 48000, cols, card_w, CARD_COVER_H, CARD_FOOTER_H, 3);
+        media_card.skeletonGrid(@src(), 48000, cols, card_w, .poster, CARD_FOOTER, 3);
         return;
     }
 
-    // Uniform cards give the grid a fixed row pitch. Keep only the viewport and
-    // two overscan rows alive, while spacers preserve exact scroll geometry.
-    const row_h: f32 = CARD_COVER_H + CARD_FOOTER_H + 2 * CARD_GAP;
+    // Uniform cards give the grid a fixed row pitch (shared card: cover +
+    // measured footer + margins). Keep only the viewport and two overscan rows
+    // alive, while spacers preserve exact scroll geometry.
+    const row_h: f32 = media_card.rowPitch(card_w, .poster, CARD_FOOTER);
     const total_rows = (count + cols - 1) / cols;
     const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
 
@@ -795,8 +739,8 @@ fn renderDetailRecord(v: *const pure.Vn, idx: usize) void {
     // Cover column.
     {
         var covcol = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .min_size_content = .{ .w = 160, .h = CARD_COVER_H },
-            .max_size_content = .{ .w = 160, .h = CARD_COVER_H },
+            .min_size_content = .{ .w = DETAIL_COVER_W, .h = media_card.coverHeight(DETAIL_COVER_W, .poster) },
+            .max_size_content = .{ .w = DETAIL_COVER_W, .h = media_card.coverHeight(DETAIL_COVER_W, .poster) },
         });
         defer covcol.deinit();
         renderCover(idx, v);
