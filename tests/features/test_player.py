@@ -2006,3 +2006,24 @@ def test_picture_grade_changes_pixels():
         if c0 - c2 < 100:
             return "fail", "saturation=-100 did not desaturate (chroma %.2f -> %.2f)" % (c0, c2)
     return "pass", "std chroma %.2f, vivid %.2f, sat-100 %.2f" % (c0, c1, c2)
+
+
+@test("Casting covers Chromecast (catt) and AirPlay (pyatv) through one device list", "Player")
+def test_cast_airplay_wiring():
+    cast, pure, remote = _src("src/services/cast.zig"), _src("src/services/cast_pure.zig"), _src("src/services/remote.zig")
+    js, build = _src("web/js/now-playing.js"), _src("build.zig")
+    checks = {
+        "pure module tested in build": 'b.path("src/services/cast_pure.zig")' in build,
+        "both scan tools": '"catt", "scan"' in pure and '"atvscript", "scan"' in pure,
+        "atvremote play_url argv": '"atvremote", "--id"' in pure and '"play_url={s}"' in pure,
+        "cast.zig routes through pure parsers": "pure.parseCattScan(" in cast and "pure.parseAtvscriptScan(" in cast,
+        "cast.zig routes through pure argv": "pure.castArgv(" in cast and "pure.stopArgv(" in cast,
+        "loopback URLs refused": "pure.castRefusal(" in cast,
+        "install hint only when both tools missing": "!have_catt and !have_atv" in cast,
+        "device list under mutex": "mutex.lock()" in cast and "pub var devices" not in cast and "cast.snapshot(&snap)" in remote,
+        "protocol in /cast/devices": '\\"protocol\\":' in remote,
+        "cast_start reports refusal": "cast.castActive(idx)" in remote and '\\"ok\\":false,\\"action\\":\\"cast_start\\"' in remote,
+        "web shows protocol": "x.protocol === 'airplay'" in js and "cast-proto" in js,
+    }
+    bad = [k for k, ok in checks.items() if not ok]
+    return ("fail", "missing: " + ", ".join(bad)) if bad else ("pass", f"{len(checks)} cast/AirPlay wiring checks")

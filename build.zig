@@ -2029,6 +2029,16 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_tmdb_pure).step);
 
+    // Cast: catt / atvscript scan parsing, catt / atvremote argv, loopback-URL refusal.
+    const test_cast_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/cast_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_cast_pure).step);
+
     // Zero-key Cinemeta catalog response splitting and stable fallback ids.
     const test_cinemeta_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{

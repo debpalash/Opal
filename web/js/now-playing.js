@@ -204,21 +204,24 @@ async function loadCastDevices(){
     const devices = d.devices || [];
     $('cast-hint').textContent = d.scanning
       ? 'Scanning your network…'
-      : devices.length ? `${devices.length} device${devices.length === 1 ? '' : 's'} found` : 'No cast devices found.';
+      : devices.length ? `${devices.length} device${devices.length === 1 ? '' : 's'} found` : 'No Chromecast or AirPlay devices found.';
     $('cast-stop').hidden = !d.casting;
     $('cast-devices').innerHTML = devices.map((x, i) => `
       <button type="button" class="cast-device ${d.active === i ? 'active' : ''}" data-i="${i}"
         aria-pressed="${d.active === i ? 'true' : 'false'}">
-        <span>${esc(x.name || 'Cast device')}</span><small>${esc(x.ip || '')}</small>
+        <span>${esc(x.name || 'Cast device')}</span>
+        <small><span class="cast-proto">${x.protocol === 'airplay' ? 'AirPlay' : 'Chromecast'}</span> ${esc(x.ip || '')}</small>
       </button>`).join('');
     $('cast-devices').querySelectorAll('.cast-device').forEach(b => b.onclick = async () => {
       const device = devices[+b.dataset.i];
-      await api('/cast/start?idx=' + b.dataset.i).catch(()=>{});
-      toast('Casting to ' + (device?.name || 'device'));
+      try {
+        await api('/cast/start?idx=' + b.dataset.i);
+        toast('Casting to ' + (device?.name || 'device'));
+      } catch (e) { toast(e.message || 'Could not cast'); }
       castPolls = 0; loadCastDevices();
     });
     if (d.scanning && castPolls++ < 20) castWatch = setTimeout(loadCastDevices, 900);
-  } catch { $('cast-hint').textContent = 'Could not scan — install catt on the Opal machine.'; }
+  } catch { $('cast-hint').textContent = 'Could not scan — install catt (Chromecast) or pyatv (AirPlay) on the Opal machine.'; }
 }
 $('b-cast').onclick = () => {
   const open = $('cast-panel').hidden;

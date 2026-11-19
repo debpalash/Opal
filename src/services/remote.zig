@@ -3969,8 +3969,17 @@ fn apiPartyCast(stream: std.Io.net.Stream, api_path: []const u8, query: []const 
         const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "0", 10) catch 0;
         // castActive reads state.app.players — take the same lock the tail does.
         state.players_mutex.lock();
-        cast.castActive(idx);
+        const refusal = cast.castActive(idx);
         state.players_mutex.unlock();
+        if (refusal) |why| {
+            var err_buf: [512]u8 = undefined;
+            var ew = std.Io.Writer.fixed(&err_buf);
+            ew.writeAll("{\"ok\":false,\"action\":\"cast_start\",\"error\":\"") catch return;
+            escJsonWrite(&ew, why);
+            ew.writeAll("\"}") catch return;
+            sendJson(stream, err_buf[0..ew.end]);
+            return;
+        }
         sendJson(stream, "{\"ok\":true,\"action\":\"cast_start\"}");
         return;
     }
@@ -3980,23 +3989,26 @@ fn apiPartyCast(stream: std.Io.net.Stream, api_path: []const u8, query: []const 
         return;
     }
     if (std.mem.eql(u8, api_path, "/cast/devices")) {
-        // First hit kicks a `catt scan`; the client polls until scanning clears.
-        if (cast.device_count == 0 and !cast.is_scanning.load(.acquire)) cast.scanDevices();
-        var json_buf: [4 * 1024]u8 = undefined;
+        // First hit kicks a scan (catt + atvscript); the client polls until
+        // scanning clears. Read a locked snapshot — the scan worker rewrites
+        // the list.
+        if (cast.deviceCount() == 0 and !cast.is_scanning.load(.acquire)) cast.scanDevices();
+        var snap: cast.Snapshot = .{};
+        cast.snapshot(&snap);
+        var json_buf: [8 * 1024]u8 = undefined;
         var w = std.Io.Writer.fixed(&json_buf);
         w.print("{{\"scanning\":{s},\"casting\":{s},\"active\":{?d},\"devices\":[", .{
             if (cast.is_scanning.load(.acquire)) "true" else "false",
             if (cast.is_casting.load(.acquire)) "true" else "false",
-            cast.active_device_idx,
+            snap.active_idx,
         }) catch return;
-        const n = @min(cast.device_count, cast.devices.len);
-        for (cast.devices[0..n], 0..) |*d, i| {
+        for (snap.devices[0..snap.count], 0..) |*d, i| {
             if (i > 0) w.writeAll(",") catch return;
             w.writeAll("{\"name\":\"") catch return;
-            escJsonWrite(&w, txt.safeUtf8(d.name[0..@min(d.name_len, d.name.len)]));
+            escJsonWrite(&w, txt.safeUtf8(d.nameSlice()));
             w.writeAll("\",\"ip\":\"") catch return;
-            escJsonWrite(&w, txt.safeUtf8(d.ip[0..@min(d.ip_len, d.ip.len)]));
-            w.writeAll("\"}") catch return;
+            escJsonWrite(&w, txt.safeUtf8(d.ipSlice()));
+            w.print("\",\"protocol\":\"{s}\"}}", .{@tagName(d.protocol)}) catch return;
         }
         w.writeAll("]}") catch return;
         sendJson(stream, json_buf[0..w.end]);

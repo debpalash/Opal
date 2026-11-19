@@ -1093,7 +1093,7 @@
     "/cast/scan": {
       "get": {
         "operationId": "cast_scan",
-        "summary": "Scan the local network for Chromecast devices (needs the catt tool). Takes a few seconds; read cast_devices afterwards.",
+        "summary": "Scan the local network for Chromecast (needs catt) and AirPlay (needs pyatv) devices. Takes a few seconds; read cast_devices afterwards.",
         "tags": [
           "read"
         ],
@@ -1112,7 +1112,7 @@
     "/cast/devices": {
       "get": {
         "operationId": "cast_devices",
-        "summary": "Cast devices found so far (name, ip), whether a scan is running and whether something is casting. Starts a scan when none are known yet.",
+        "summary": "Cast devices found so far (name, ip, protocol chromecast or airplay), whether a scan is running and whether something is casting. Starts a scan when none are known yet.",
         "tags": [
           "read"
         ],
@@ -1772,7 +1772,7 @@
     "/cast/start": {
       "post": {
         "operationId": "cast_start",
-        "summary": "Cast what is playing now to a Chromecast from cast_devices. Local playback keeps going; stop with cast_stop.",
+        "summary": "Cast what is playing now to a Chromecast or AirPlay device from cast_devices. Local files work; localhost stream URLs are refused because the receiver cannot reach them. Local playback keeps going; stop with cast_stop.",
         "tags": [
           "playback"
         ],
@@ -1803,7 +1803,7 @@
     "/cast/stop": {
       "post": {
         "operationId": "cast_stop",
-        "summary": "Stop casting to the Chromecast.",
+        "summary": "Stop casting to the Chromecast or AirPlay device.",
         "tags": [
           "playback"
         ],

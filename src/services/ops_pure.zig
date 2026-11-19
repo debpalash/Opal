@@ -351,8 +351,8 @@ pub const ops = [_]Op{
     .{ .name = "player_info", .summary = "Full state of the active player: position, volume, speed, subtitle delay, chapters, audio and subtitle tracks (ids for player_audio_track and player_subtitle_track), subtitle search results and audio outputs. Answers 'no player' when nothing is loaded.", .tier = .read, .method = .GET, .path = "/player" },
 
     // ── Cast: scanning is a background job, then read the devices ──
-    .{ .name = "cast_scan", .summary = "Scan the local network for Chromecast devices (needs the catt tool). Takes a few seconds; read cast_devices afterwards.", .tier = .read, .method = .GET, .path = "/cast/scan" },
-    .{ .name = "cast_devices", .summary = "Cast devices found so far (name, ip), whether a scan is running and whether something is casting. Starts a scan when none are known yet.", .tier = .read, .method = .GET, .path = "/cast/devices" },
+    .{ .name = "cast_scan", .summary = "Scan the local network for Chromecast (needs catt) and AirPlay (needs pyatv) devices. Takes a few seconds; read cast_devices afterwards.", .tier = .read, .method = .GET, .path = "/cast/scan" },
+    .{ .name = "cast_devices", .summary = "Cast devices found so far (name, ip, protocol chromecast or airplay), whether a scan is running and whether something is casting. Starts a scan when none are known yet.", .tier = .read, .method = .GET, .path = "/cast/devices" },
 
     // ── Live torrents (downloads_list covers direct downloads; these are the torrent sessions) ──
     .{
@@ -462,13 +462,13 @@ pub const ops = [_]Op{
     },
     .{
         .name = "cast_start",
-        .summary = "Cast what is playing now to a Chromecast from cast_devices. Local playback keeps going; stop with cast_stop.",
+        .summary = "Cast what is playing now to a Chromecast or AirPlay device from cast_devices. Local files work; localhost stream URLs are refused because the receiver cannot reach them. Local playback keeps going; stop with cast_stop.",
         .tier = .playback,
         .method = .POST,
         .path = "/cast/start",
         .params = &.{.{ .name = "device", .kind = .integer, .desc = "Zero-based position in cast_devices.", .required = true, .wire = "idx", .min = 0, .max = 15 }},
     },
-    .{ .name = "cast_stop", .summary = "Stop casting to the Chromecast.", .tier = .playback, .method = .POST, .path = "/cast/stop" },
+    .{ .name = "cast_stop", .summary = "Stop casting to the Chromecast or AirPlay device.", .tier = .playback, .method = .POST, .path = "/cast/stop" },
     .{ .name = "jellyfin_play", .summary = "Play a movie, episode or video from the Jellyfin items in jellyfin_results, by id. Streams from the user's own server.", .tier = .playback, .method = .POST, .path = "/jellyfin/play", .params = &.{jf_id} },
 
     // ── Persistent changes ──
