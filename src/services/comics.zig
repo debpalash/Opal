@@ -1108,7 +1108,8 @@ fn setHeancmsTitle(series_title: []const u8, chapter_label: []const u8) void {
 /// loadHeancmsPages. Returns null when the host does not speak Iken (caller
 /// falls back to the legacy chain), else whether pages were staged.
 ///   1. /api/post?postSlug={slug}                       → numeric post id + title
-///   2. /api/chapters?postId={id}&take=100&order=asc    → first FREE chapter id
+///   2. /api/chapters?postId={id}&skip=S&take=100&order=asc (paged) → the
+///      requested (or first) FREE chapter + its free neighbours → prev/next routes
 ///   3. /api/chapter?postId={id}&chapterId={cid}        → images[].url
 fn loadIkenPages(api: []const u8, cdn: []const u8, slug: []const u8, chapter_id: ?[]const u8) ?bool {
     var url_buf: [512]u8 = undefined;
@@ -1135,14 +1136,15 @@ fn loadIkenPages(api: []const u8, cdn: []const u8, slug: []const u8, chapter_id:
     // Walk ascending pages until the requested chapter and its free successor
     // are known. Metadata is owned across fetch-buffer reuse.
     var nav: heancms.IkenNavigation = .{};
+    // Paging stops via the tested heancms.ikenNextSkip (series total, short
+    // page without a total, IKEN_CHAPTER_CAP, or successor found).
     var skip: usize = 0;
-    while (skip < 100_000) {
+    while (true) {
         const chap_url = heancms.buildIkenChapterListPageUrl(&url_buf, api, post_id, skip) orelse return false;
         n = fetchUrl(chap_url, buf);
         if (n == 0 or workers.isQuitting()) return false;
         const count = nav.append(buf[0..n], chapter_id) orelse return false;
-        if (nav.next != null or count < heancms.IKEN_CHAPTER_TAKE) break;
-        skip += count;
+        skip = heancms.ikenNextSkip(skip, count, heancms.ikenTotalChapterCount(buf[0..n]), nav.next != null) orelse break;
     }
     const chapter = nav.current orelse {
         logs.pushLog("warn", "comics", "Iken: requested chapter unavailable or locked", false);
