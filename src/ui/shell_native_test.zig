@@ -619,3 +619,25 @@ test "Native shell offline route pixel capture" {
     }
     try std.testing.expect(captured > 0);
 }
+
+test "Native podcast country picker opens without duplicate widgets" {
+    const Fixture = struct {
+        var frame: usize = 0;
+
+        fn drawPicker() !void {
+            frame += 1;
+            const window = dvui.currentWindow();
+            if (frame == 3) {
+                const scale = dvui.windowNaturalScale();
+                const point: dvui.Point.Physical = .{ .x = 20 * scale, .y = 15 * scale };
+                _ = try window.addEventMouseMotion(.{ .pt = point });
+                _ = try window.addEventMouseButton(.left, .press);
+                _ = try window.addEventMouseButton(.left, .release);
+            }
+            _ = @import("country_filter.zig").render(@src(), 0);
+            if (frame == 3) try std.testing.expect(window.subwindows.stack.items.len > 1);
+        }
+    };
+    Fixture.frame = 0;
+    try capture.capture(640, 480, "podcast-country-picker", null, Fixture.drawPicker, null);
+}

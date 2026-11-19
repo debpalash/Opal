@@ -31,7 +31,7 @@ class Feed(BaseHTTPRequestHandler):
         if title is None:
             self.send_error(404)
             return
-        body = f'<rss version="2.0"><channel><title>{title}</title><description>Original local test feed</description></channel></rss>'.encode()
+        body = f'<rss version="2.0"><channel><title>{title}</title><description>Original local test feed</description><item><title>Fixture episode</title><enclosure url="http://127.0.0.1/episode.mp3" type="audio/mpeg" length="100"/></item></channel></rss>'.encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/rss+xml')
         self.send_header('Content-Length', str(len(body)))
@@ -102,6 +102,20 @@ class ProgressiveAudioBrowse(unittest.TestCase):
         self.assertTrue(fast['loading'], 'fast rows must paint while slow siblings remain loading')
         self.assertFalse(any(r.get('name') == 'Fixture slow' for r in fast['results']))
         return fast
+
+    @unittest.skipUnless(os.name == 'posix', 'requires graceful SIGTERM')
+    def test_quit_with_episode_list_open_releases_feed(self):
+        self.api('podcasts/search?q=' + quote(self.base + '/fresh', safe=''))
+        self.until(lambda d: not d['loading'] and any(r.get('name') == 'Fresh replacement' for r in d['results']))
+        self.api('podcasts/episodes?idx=0')
+        self.until(lambda d: d['episode_total'] == 1 and not d['episodes_loading'])
+        process = self.opal.process
+        self.assertIsNotNone(process)
+        self.opal.stop_process()
+        log = self.opal.safe_log()
+        self.assertEqual(process.returncode, 0, log)
+        self.assertNotIn('in publishEpisodes', log)
+        self.assertIn('Clean shutdown: 0 memory leaks.', log)
 
     def test_fast_feed_paints_before_stalled_feed_then_merges(self):
         self.start_overlapping()
