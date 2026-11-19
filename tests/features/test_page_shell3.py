@@ -288,6 +288,48 @@ def test_episode_transport():
     return "pass", "prev/next episode in the transport, aired-clamped, TV-only"
 
 
+@test("Comics, OPDS and Audiobookshelf grids use the shared media card", "Page Shell")
+def test_reading_grids_media_card():
+    # Each reading/listening grid used to hand-roll its card with its own
+    # footer constant (40/54/50) and pitch math. They now render through
+    # ui/media_card.zig, and the virtualized pitch comes from rowPitch so the
+    # spacer math matches the card height exactly.
+    files = {
+        "comics": ("src/services/comics.zig", "fn renderCoverCard(", "CARD_FOOTER", ".poster", "CARD_FOOTER_H"),
+        "opds": ("src/services/opds.zig", "fn renderEntryCard(", "OPDS_CARD_FOOTER", ".poster", "OPDS_CARD_FOOTER_H"),
+        "audiobookshelf": ("src/services/audiobookshelf.zig", "fn renderBookCard(", "BOOK_CARD_FOOTER", ".square", "BOOK_FOOTER_H"),
+    }
+    problems = []
+    for name, (path, fn, footer, aspect, old_const) in files.items():
+        src = _src(path)
+        card = src.split(fn, 1)[1].split("\n}\n", 1)[0] if fn in src else ""
+        if 'const media_card = @import("../ui/media_card.zig");' not in src:
+            problems.append(name + ": no media_card import")
+        if "media_card.begin(@src()" not in card or "card.endCover()" not in card or "media_card.title(" not in card:
+            problems.append(name + ": card not built on media_card")
+        if f".aspect = {aspect}" not in card:
+            problems.append(name + f": card aspect is not {aspect}")
+        if "dvui.ButtonWidget" in card:
+            problems.append(name + ": hand-rolled cover button")
+        if f"media_card.rowPitch(" not in src or f"{aspect}, {footer})" not in src:
+            problems.append(name + ": grid pitch not from media_card.rowPitch")
+        if "media_card.skeletonGrid(" not in src:
+            problems.append(name + ": skeleton not shaped like the card")
+        if old_const in src:
+            problems.append(name + f": legacy {old_const} still present")
+    comics = _src("src/services/comics.zig")
+    content = comics.split("pub fn renderContent() void {", 1)[1].split("\nfn renderPluginSourceBadges", 1)[0]
+    # #171: paging past the first pages must stay wired to the virtualized grid.
+    if "visibleRows(total_rows, row_h" not in content or "loadMoreResults();" not in content:
+        problems.append("comics: grid virtualization/paging lost")
+    opds_card = _src("src/services/opds.zig").split("fn renderEntryCard(", 1)[1].split("/// Real local HTTP fixture", 1)[0]
+    if "media_card.iconAction(" not in opds_card or "media_card.actionRow()" not in opds_card:
+        problems.append("opds: open/read action row missing")
+    if problems:
+        return "fail", "; ".join(problems)
+    return "pass", "comics/OPDS/Audiobookshelf cards, skeletons and row pitch come from media_card"
+
+
 @test("Latest releases render as show cards", "Page Shell")
 def test_release_cards():
     # "Latest releases" on Watching used to be a list of raw torrent rows next to a

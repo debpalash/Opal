@@ -6,6 +6,7 @@ const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const shared_components = @import("../ui/components.zig");
+const media_card = @import("../ui/media_card.zig");
 const icons = @import("icons");
 const logs = @import("../core/logs.zig");
 
@@ -2098,11 +2099,11 @@ fn madaraSub() []const u8 {
 // ── Discovery grid sizing (user-cyclable card width) ──
 var card_w: f32 = 150;
 
-/// Card footer height below the cover (title caption). Referenced by BOTH the
-/// uniform card sizing (renderCoverCard pins min==max height) AND the grid's
-/// virtualization row pitch — single-sourced so the spacer math and the card
-/// can never drift. Mirrors jellyfin_ui.zig / anime.zig CARD_FOOTER_H.
-const CARD_FOOTER_H: f32 = 40;
+/// Card footer below the cover (title caption). Referenced by BOTH the uniform
+/// card (media_card.begin pins min==max height) AND the grid's virtualization
+/// row pitch (media_card.rowPitch) — single-sourced so the spacer math and the
+/// card can never drift.
+const CARD_FOOTER: media_card.Footer = .{ .title_lines = 1 };
 
 /// Release one cover slot's GPU texture + heap pixels. RENDER-THREAD ONLY — it
 /// is the sole owner of textures/pixels, so this never races a worker free.
@@ -3708,8 +3709,8 @@ pub fn renderContent() void {
     };
     if (visible_count == 0 and searching()) {
         const width = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
-        const columns: usize = @intFromFloat(@max(1, @floor(width / (card_w + 12))));
-        components.coverSkeletonGrid(@src(), 97000, columns, card_w, card_w * 1.5, CARD_FOOTER_H, 2);
+        const grid = media_card.pure.columns(width, card_w, media_card.pure.MARGIN, 1, 24);
+        media_card.skeletonGrid(@src(), 97000, grid.count, card_w, .poster, CARD_FOOTER, 2);
         return;
     }
     if (visible_count == 0) {
@@ -3731,16 +3732,17 @@ pub fn renderContent() void {
     // Responsive columns from the live page width (one-frame lag on first paint).
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
-    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / card_w)));
-    const cw: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
-    const cover_h: f32 = cw * 1.5; // comic covers ~2:3 portrait
+    const grid = media_card.pure.columns(avail_w, card_w, media_card.pure.MARGIN, 1, 24);
+    const cols = grid.count;
+    const cw = grid.card_w;
 
     // ── Virtualization (same shape as tmdb.zig/anime.zig/jellyfin_ui.zig) ──
-    // Cards are uniform (renderCoverCard pins min==max height), so rows have a
-    // fixed pitch: cover + footer + 3px top/bottom margins. Rows outside the
-    // viewport (±2 overscan) collapse into two spacer boxes, so the grid lays
-    // out a handful of rows per frame instead of all ~120 card widget trees.
-    const row_h: f32 = cover_h + CARD_FOOTER_H + 6;
+    // Cards are uniform (media_card.begin pins min==max height), so rows have
+    // a fixed pitch from media_card.rowPitch: 2:3 cover + measured footer +
+    // margins. Rows outside the viewport (±2 overscan) collapse into two
+    // spacer boxes, so the grid lays out a handful of rows per frame instead
+    // of all ~120 card widget trees.
+    const row_h: f32 = media_card.rowPitch(cw, .poster, CARD_FOOTER);
     const total_rows = (visible_count + cols - 1) / cols;
     const win = @import("tmdb_pure.zig").visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
 
@@ -3759,7 +3761,7 @@ pub fn renderContent() void {
         defer row.deinit();
         var col: usize = 0;
         while (col < cols and base + col < visible_count) : (col += 1) {
-            renderCoverCard(base + col, cw, cover_h);
+            renderCoverCard(base + col, cw);
         }
     }
 
@@ -3863,153 +3865,95 @@ fn renderChip(label: []const u8, id: usize, path: []const u8) void {
     }
 }
 
-/// One discovery card: cover art (or gradient placeholder) + title, clickable to
-/// load the issue. Hover reveals the full title over a dimmed scrim.
-fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
+/// One discovery card through the shared media card: cover art (or a book
+/// placeholder) + title, clickable to load the issue. Hover reveals the full
+/// title over a dimmed scrim.
+fn renderCoverCard(idx: usize, cw: f32) void {
     const identity = ownedSearchRow(idx) orelse return;
     search_rows_mutex.lock();
     const cover_failed = sr_cover_failed[idx];
     search_rows_mutex.unlock();
     var title_buf: [256]u8 = undefined;
     const title = @import("../core/text.zig").safeUtf8Buf(identity.title[0..identity.title_len], &title_buf);
-    // Deterministic gradient from a title hash (placeholder + glyph tint).
-    const hash: u32 = blk: {
-        var h: u32 = 2166136261;
-        for (identity.title[0..identity.title_len]) |c| {
-            h = (h ^ c) *% 16777619;
-        }
-        break :blk h;
-    };
-    const h1: u8 = @truncate(hash & 0xFF);
-    const h2: u8 = @truncate((hash >> 8) & 0xFF);
 
     // min == max height → uniform row pitch, which the grid's virtualization
-    // spacer math depends on (row_h = cover_h + CARD_FOOTER_H + margins).
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = idx,
-        .min_size_content = .{ .w = cw, .h = cover_h + CARD_FOOTER_H },
-        .max_size_content = .{ .w = cw, .h = cover_h + CARD_FOOTER_H },
-        .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
-    });
-    defer card.deinit();
+    // spacer math depends on (row_h = media_card.rowPitch(cw, .poster, CARD_FOOTER)).
+    var card = media_card.begin(@src(), .{ .id = idx, .width = cw, .aspect = .poster, .footer = CARD_FOOTER });
+    defer card.end();
 
-    // Cover image area — a single clickable button-widget hosting the image.
-    {
-        var bw: dvui.ButtonWidget = undefined;
-        bw.init(@src(), .{}, .{
-            .id_extra = idx + 100,
-            .background = true,
-            .color_fill = .{ .color = dvui.Color{ .r = 18 + h1 / 8, .g = 22 + h2 / 10, .b = 32 + h1 / 6, .a = 255 } },
-            .corners = dvui.CornerRect.all(8),
-            .min_size_content = .{ .w = cw, .h = cover_h },
-            .max_size_content = .{ .w = cw, .h = cover_h },
-            .padding = dvui.Rect.all(0),
-        });
-        bw.processEvents();
-        bw.drawBackground();
-
-        // Transfer the worker-owned pixels under the mutex. GPU work is UI-only
-        // and outside the publication lock.
-        if (sr_cover_tex[idx] == null) {
-            search_rows_mutex.lock();
-            const pixels = sr_cover_pixels[idx];
-            const width = sr_cover_w[idx];
-            const height = sr_cover_h[idx];
-            sr_cover_pixels[idx] = null;
-            cover_pixel_hash[idx] = 0;
-            search_rows_mutex.unlock();
-            if (pixels) |px| {
-                const np: usize = @as(usize, width) * @as(usize, height);
-                const pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(px.ptr)))[0..np];
-                sr_cover_tex[idx] = dvui.textureCreate(pma, .{ .width = width, .height = height, .format = .rgba_32, .interpolation = .linear, .wrap_u = .clamp, .wrap_v = .clamp }) catch null;
-                alloc.free(px);
-            }
-        }
-
-        {
-            var stack = dvui.overlay(@src(), .{ .id_extra = idx + 140, .expand = .both });
-            defer stack.deinit();
-
-            if (sr_cover_tex[idx]) |*tex| {
-                _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                    .id_extra = idx + 150,
-                    .expand = .both,
-                    .corners = dvui.CornerRect.all(8),
-                });
-            } else {
-                // Lazy-trigger fetch; meanwhile show a glyph placeholder. Skip a
-                // slot whose cover already failed (404/undecodable) so it can't
-                // re-spawn a curl worker every frame.
-                if (identity.cover_len > 0 and !cover_failed) fetchCover(idx);
-                if (identity.cover_len > 0 and !cover_failed)
-                    shared_components.coverSkeleton(@src(), idx + 150, 8)
-                else
-                    dvui.icon(@src(), "", icons.tvg.lucide.@"book-open", .{}, .{
-                        .id_extra = idx + 150,
-                        .gravity_x = 0.5,
-                        .gravity_y = 0.5,
-                        .color_text = .{ .color = dvui.Color{ .r = h1, .g = h2, .b = 200, .a = 70 } },
-                        .expand = .both,
-                    });
-                // Placeholder cards still show the title inside the cover area.
-                if (sr_cover_url_lens[idx] == 0) {
-                    _ = dvui.label(@src(), "{s}", .{title}, .{
-                        .id_extra = idx + 151,
-                        .expand = .horizontal,
-                        .gravity_y = 0.85,
-                        .color_text = .{ .color = theme.colors.text_secondary },
-                        .padding = dvui.Rect.all(6),
-                    });
-                }
-            }
-
-            // Hover scrim with the full (wrapping) title.
-            if (bw.hovered()) {
-                var ov = dvui.box(@src(), .{ .dir = .vertical }, .{
-                    .id_extra = idx + 160,
-                    .expand = .both,
-                    .background = true,
-                    .color_fill = .{ .color = theme.playerGlass(224) },
-                    .corners = dvui.CornerRect.all(8),
-                    .padding = dvui.Rect.all(8),
-                });
-                defer ov.deinit();
-                _ = dvui.label(@src(), "{s}", .{title}, .{
-                    .id_extra = idx + 161,
-                    .expand = .horizontal,
-                    .gravity_y = 0.5,
-                    .color_text = .{ .color = theme.colors.text_primary },
-                    .font = dvui.themeGet().font_heading,
-                });
-            }
-        }
-
-        const clicked = bw.clicked();
-        bw.drawFocus();
-        bw.deinit();
-        if (clicked) {
-            // Stage the card's title so the reader header has a name immediately.
-            // The readallcomics path overwrites it from the issue page's <title>;
-            // the MangaDex path keeps it and appends the chapter number (its JSON
-            // reader chain never sees an HTML <title> to parse).
-            const t = identity.title[0..identity.title_len];
-            const tl = @min(t.len, state.app.comic.title.len);
-            @memcpy(state.app.comic.title[0..tl], t[0..tl]);
-            state.app.comic.title_len = tl;
-
-            const issue = if (browser_lookup) |lookup| (if (lookup.generation == search_gen.load(.acquire) and comic_handoff.matches(&lookup.target, t)) lookup.target.issue else null) else null;
-            loadComicIssue(identity.url[0..identity.url_len], issue);
+    // Transfer the worker-owned pixels under the mutex. GPU work is UI-only
+    // and outside the publication lock.
+    if (sr_cover_tex[idx] == null) {
+        search_rows_mutex.lock();
+        const pixels = sr_cover_pixels[idx];
+        const width = sr_cover_w[idx];
+        const height = sr_cover_h[idx];
+        sr_cover_pixels[idx] = null;
+        cover_pixel_hash[idx] = 0;
+        search_rows_mutex.unlock();
+        if (pixels) |px| {
+            const np: usize = @as(usize, width) * @as(usize, height);
+            const pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(px.ptr)))[0..np];
+            sr_cover_tex[idx] = dvui.textureCreate(pma, .{ .width = width, .height = height, .format = .rgba_32, .interpolation = .linear, .wrap_u = .clamp, .wrap_v = .clamp }) catch null;
+            alloc.free(px);
         }
     }
 
-    // Title caption below the cover (single-line, ellipsis via max height).
-    _ = dvui.label(@src(), "{s}", .{title}, .{
-        .id_extra = idx + 200,
-        .expand = .horizontal,
-        .color_text = .{ .color = theme.colors.text_primary },
-        .max_size_content = .{ .w = cw, .h = 40 },
-        .padding = .{ .x = 2, .y = 3, .w = 2, .h = 0 },
+    // Lazy-trigger fetch; meanwhile show a skeleton. Skip a slot whose cover
+    // already failed (404/undecodable) so it can't re-spawn a curl worker
+    // every frame.
+    if (sr_cover_tex[idx] == null and identity.cover_len > 0 and !cover_failed) fetchCover(idx);
+    media_card.art(sr_cover_tex[idx], .{
+        .loading = identity.cover_len > 0 and !cover_failed,
+        .placeholder = icons.tvg.lucide.@"book-open",
     });
+    // Placeholder cards still show the title inside the cover area.
+    if (sr_cover_tex[idx] == null and sr_cover_url_lens[idx] == 0) {
+        _ = dvui.label(@src(), "{s}", .{title}, .{
+            .id_extra = idx + 151,
+            .expand = .horizontal,
+            .gravity_y = 0.85,
+            .color_text = .{ .color = theme.colors.text_secondary },
+            .padding = dvui.Rect.all(6),
+        });
+    }
+
+    // Hover scrim with the full (wrapping) title.
+    if (card.cover.hovered()) {
+        var ov = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = idx + 160,
+            .expand = .both,
+            .background = true,
+            .color_fill = .{ .color = theme.playerGlass(224) },
+            .corners = dvui.CornerRect.all(theme.radius.lg),
+            .padding = dvui.Rect.all(8),
+        });
+        defer ov.deinit();
+        _ = dvui.label(@src(), "{s}", .{title}, .{
+            .id_extra = idx + 161,
+            .expand = .horizontal,
+            .gravity_y = 0.5,
+            .color_text = .{ .color = theme.colors.text_primary },
+            .font = dvui.themeGet().font_heading,
+        });
+    }
+
+    const open_cover = card.endCover();
+    // Title caption below the cover (single line, ellipsized; same target).
+    const open_title = media_card.title(title, CARD_FOOTER.title_lines);
+    if (open_cover or open_title) {
+        // Stage the card's title so the reader header has a name immediately.
+        // The readallcomics path overwrites it from the issue page's <title>;
+        // the MangaDex path keeps it and appends the chapter number (its JSON
+        // reader chain never sees an HTML <title> to parse).
+        const t = identity.title[0..identity.title_len];
+        const tl = @min(t.len, state.app.comic.title.len);
+        @memcpy(state.app.comic.title[0..tl], t[0..tl]);
+        state.app.comic.title_len = tl;
+
+        const issue = if (browser_lookup) |lookup| (if (lookup.generation == search_gen.load(.acquire) and comic_handoff.matches(&lookup.target, t)) lookup.target.issue else null) else null;
+        loadComicIssue(identity.url[0..identity.url_len], issue);
+    }
 }
 
 // ══════════════════════════════════════════════════════════

@@ -35,6 +35,7 @@ const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
+const media_card = @import("../ui/media_card.zig");
 const logs = @import("../core/logs.zig");
 const poster = @import("../core/poster.zig");
 const pure = @import("opds_pure.zig");
@@ -44,8 +45,8 @@ const tmdb_pure = @import("tmdb_pure.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 const c_alloc = std.heap.c_allocator;
 const OPDS_CARD_TARGET_W: f32 = 150;
-const OPDS_CARD_GAP: f32 = 4;
-const OPDS_CARD_FOOTER_H: f32 = 54;
+/// Title + kind/open row, measured by media_card (card, skeleton and row pitch).
+const OPDS_CARD_FOOTER: media_card.Footer = .{ .title_lines = 1, .action_row = true };
 var entry_covers: [300]components.CoverSlot = @as([300]components.CoverSlot, @splat(.{}));
 
 // Publish-side lock: the detached fetch worker snapshots feed entries into
@@ -1123,13 +1124,12 @@ fn renderFeed() void {
     const bounded_count = @min(count, state.app.opds.entries.len);
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
-    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / OPDS_CARD_TARGET_W)));
-    const cols_f: f32 = @floatFromInt(cols);
-    const card_w: f32 = @max(104, (avail_w - cols_f * 2 * OPDS_CARD_GAP) / cols_f);
-    const poster_h = card_w * 1.45;
-    const row_h = poster_h + OPDS_CARD_FOOTER_H + 2 * OPDS_CARD_GAP;
+    const grid = media_card.pure.columns(avail_w, OPDS_CARD_TARGET_W, media_card.pure.MARGIN, 1, 24);
+    const cols = grid.count;
+    const card_w = grid.card_w;
+    const row_h = media_card.rowPitch(card_w, .poster, OPDS_CARD_FOOTER);
     if (bounded_count == 0) {
-        components.coverSkeletonGrid(@src(), 88000, cols, card_w, poster_h, OPDS_CARD_FOOTER_H, 3);
+        media_card.skeletonGrid(@src(), 88000, cols, card_w, .poster, OPDS_CARD_FOOTER, 3);
         return;
     }
     const total_rows = (bounded_count + cols - 1) / cols;
@@ -1148,7 +1148,7 @@ fn renderFeed() void {
         defer row.deinit();
         var col: usize = 0;
         while (col < cols and base + col < bounded_count) : (col += 1)
-            renderEntryCard(base + col, card_w, poster_h);
+            renderEntryCard(base + col, card_w);
     }
     if (win.last < total_rows) {
         var sp = dvui.box(@src(), .{}, .{
@@ -1182,55 +1182,26 @@ fn renderFeed() void {
     }
 }
 
-fn renderEntryCard(idx: usize, card_w: f32, poster_h: f32) void {
+fn renderEntryCard(idx: usize, card_w: f32) void {
     const action = copiedEntryAction(idx, null) orelse return;
     const e = &action.row;
     const gutenberg = pure.gutenbergWorkId(e.hrefSlice()) != null;
-    const fallback = if (e.is_navigation and !gutenberg) icons.tvg.lucide.folder else icons.tvg.lucide.@"book-open";
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = idx + 90000,
-        .min_size_content = .{ .w = card_w, .h = poster_h + OPDS_CARD_FOOTER_H },
-        .max_size_content = .{ .w = card_w, .h = poster_h + OPDS_CARD_FOOTER_H },
-        .margin = dvui.Rect.all(OPDS_CARD_GAP),
-        .background = true,
-        .color_fill = .{ .color = theme.colors.bg_surface },
-        .color_fill_hover = .{ .color = theme.colors.bg_hover },
-        .corners = dvui.CornerRect.all(theme.radius.md),
-    });
-    defer card.deinit();
+    const folder = e.is_navigation and !gutenberg;
+    const fallback = if (folder) icons.tvg.lucide.folder else icons.tvg.lucide.@"book-open";
+    var card = media_card.begin(@src(), .{ .id = idx + 90000, .width = card_w, .aspect = .poster, .footer = OPDS_CARD_FOOTER });
+    defer card.end();
 
-    var bw: dvui.ButtonWidget = undefined;
-    bw.init(@src(), .{}, .{
-        .id_extra = idx + 90100,
-        .background = true,
-        .color_fill = .{ .color = theme.colors.bg_elevated },
-        .corners = dvui.CornerRect.all(theme.radius.md),
-        .min_size_content = .{ .w = card_w, .h = poster_h },
-        .max_size_content = .{ .w = card_w, .h = poster_h },
-        .padding = dvui.Rect.all(0),
-    });
-    bw.processEvents();
-    bw.drawBackground();
     const cover_url = e.coverSlice();
     const slot = &entry_covers[idx];
     components.syncCoverSlot(slot, cover_url);
     components.pollCoverSlot(slot);
     if (cover_url.len > 0 and !slot.failed and slot.tex == null and slot.pixels == null and !slot.fetching)
         fetchCoverAsync(cover_url, slot);
-    components.renderCoverSlot(@src(), idx + 90200, slot, cover_url.len > 0, fallback, theme.radius.md);
-    const clicked = bw.clicked();
-    bw.drawFocus();
-    bw.deinit();
-    if (clicked) openCatalogEntry(action.row, action.connection_identity);
+    components.renderCoverSlot(@src(), idx + 90200, slot, cover_url.len > 0, fallback, theme.radius.lg);
+    const open_cover = card.endCover();
+    const open_title = media_card.title(safeUtf8(e.titleSlice()), OPDS_CARD_FOOTER.title_lines);
+    if (open_cover or open_title) openCatalogEntry(action.row, action.connection_identity);
 
-    _ = dvui.label(@src(), "{s}", .{safeUtf8(e.titleSlice())}, .{
-        .id_extra = idx + 90300,
-        .color_text = .{ .color = theme.colors.text_primary },
-        .font = dvui.themeGet().font_heading.withSize(theme.font_size.small),
-        .min_size_content = .{ .w = card_w, .h = 22 },
-        .max_size_content = .{ .w = card_w, .h = 22 },
-        .padding = .{ .x = 5, .y = 5, .w = 5, .h = 0 },
-    });
     const subtitle: []const u8 = if (gutenberg)
         (if (e.author_len > 0) e.author[0..e.author_len] else "Project Gutenberg")
     else if (e.is_navigation)
@@ -1240,10 +1211,11 @@ fn renderEntryCard(idx: usize, card_w: f32, poster_h: f32) void {
         .external => "Ebook",
         .unsupported => "Download",
     };
-    var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = idx + 90400, .expand = .horizontal, .padding = .{ .x = 5, .y = 0, .w = 3, .h = 3 } });
-    defer meta.deinit();
-    _ = dvui.label(@src(), "{s}", .{subtitle}, .{ .id_extra = idx + 90500, .color_text = .{ .color = theme.colors.text_tertiary }, .expand = .horizontal, .gravity_y = 0.5 });
-    if (components.iconButton(@src(), if (e.is_navigation and !gutenberg) icons.tvg.lucide.@"folder-open" else icons.tvg.lucide.@"book-open", if (e.is_navigation and !gutenberg) "Open" else "Read", true))
+    var row = media_card.actionRow();
+    defer row.deinit();
+    media_card.rowText(safeUtf8(subtitle), card_w - 30, .secondary);
+    media_card.spacer();
+    if (media_card.iconAction(@src(), if (folder) icons.tvg.lucide.@"folder-open" else icons.tvg.lucide.@"book-open", if (folder) "Open" else "Read", idx, false))
         openCatalogEntry(action.row, action.connection_identity);
 }
 
