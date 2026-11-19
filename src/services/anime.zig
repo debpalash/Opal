@@ -4108,22 +4108,27 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
     // is one — Calendar fills it with Jikan's broadcast.string ("Mondays at
     // 01:00 (JST)"), the Lists plugin with the next episode ("Ep 1170 · Jul
     // 19"); every other load path zeroes broadcast_lens[], so a non-zero length
-    // always means "this card has a badge". Otherwise a synopsis snippet.
+    // always means "this card has a badge". Otherwise a synopsis snippet, and
+    // with neither the episode count moves up so the line is never blank.
+    var ep_buf: [32]u8 = undefined;
+    const eps = std.fmt.bufPrint(&ep_buf, "{d} eps", .{item.episodes}) catch "";
+    var eps_in_meta = false;
     if (idx < state.app.anime.broadcast_lens.len and state.app.anime.broadcast_lens[idx] > 0) {
         const bcast = state.app.anime.broadcast[idx][0..state.app.anime.broadcast_lens[idx]];
         media_card.meta(safeUtf8(bcast), idx + 640, .accent);
     } else if (item.overview_len > 0) {
         var snip_buf: [128]u8 = undefined;
         media_card.meta(safeUtf8Buf(item.overview[0..@min(item.overview_len, snip_buf.len)], &snip_buf), idx + 650, .tertiary);
-    } else media_card.meta("", idx + 640, .tertiary);
+    } else {
+        media_card.meta(eps, idx + 640, .secondary);
+        eps_in_meta = true;
+    }
 
     // Episodes, then the Synopsis toggle and a keyboard-accessible More menu.
     {
         var row = media_card.actionRow();
         defer row.deinit();
-        var ep_buf: [32]u8 = undefined;
-        const eps = std.fmt.bufPrint(&ep_buf, "{d} eps", .{item.episodes}) catch "";
-        media_card.rowText(eps, card_w - 48, .secondary);
+        if (!eps_in_meta) media_card.rowText(eps, card_w - 48, .secondary);
         media_card.spacer();
         if (item.overview_len > 0 and media_card.iconAction(@src(), icons.tvg.lucide.info, if (item.expanded) "Hide synopsis" else "Synopsis", idx + 650, item.expanded))
             item.expanded = !item.expanded;

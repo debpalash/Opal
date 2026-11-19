@@ -125,6 +125,10 @@ def test_catalog_cards_use_media_card():
     assert "dvui.context(" in card and "media_card.moreMenu(" in card
     assert "item.expanded = !item.expanded" in card and "renderHoverMeta(item, idx)" in card
     assert "state.app.anime.broadcast_lens[idx] > 0" in card
+    # No blank band: with no airtime or synopsis the episode count fills the
+    # meta line instead of leaving an empty row above "N eps" (CI capture).
+    assert 'media_card.meta("", idx' not in card
+    assert "media_card.meta(eps, idx + 640" in card and "if (!eps_in_meta) media_card.rowText(eps" in card
     cont = section(anime, "fn renderContinueCard(", "\n}\n")
     assert "media_card.begin(@src()" in cont and cont.count("jumpToAnime(") == 2
     assert "anime_pure.posterAction(" in cont and "media_card.badge(.bottom_left" in cont
