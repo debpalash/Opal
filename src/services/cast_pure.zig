@@ -13,6 +13,23 @@
 //!   atvremote --id <identifier> play_url=<url>
 //!     (blocks until playback ends; a local path is served by pyatv itself;
 //!      stopping = closing that connection, i.e. ending the process)
+//!
+//! AirPlay pairing (pyatv 0.18 scripts/atvremote.py, protocols/airplay/pairing.py):
+//!   atvremote --id <identifier> --protocol airplay --remote-name Opal pair
+//!     scans for the device, starts pair-setup (the TV shows a 4-digit PIN),
+//!     writes "Enter PIN on screen: " (no newline) and reads one stdin line.
+//!     Then prints "Pairing seems to have succeeded, yey!" (exit 0) or
+//!     "Pairing failed!" (exit 0); an exception logs "Pairing failed" plus a
+//!     traceback (exit 3); an unknown id logs "Could not find any Apple TV on
+//!     current network" (exit 2). atvremote logs to STDOUT.
+//!   Credentials: pyatv >= 0.14 saves them in its own settings file
+//!     ($HOME/.pyatv.conf, FileStorage.default_storage) on exit, and every
+//!     later atvremote/atvscript run loads them for that device, so play_url
+//!     needs no --airplay-credentials flag (which would also put the secret
+//!     in the process list).
+//!   atvscript scan JSON carries only {"protocol","port"} per service — no
+//!     pairing requirement — so "needs pairing" is learned from a play_url
+//!     failure (`playNeedsPairing`).
 
 const std = @import("std");
 
@@ -22,6 +39,10 @@ pub const max_devices = 16;
 
 pub const CastDevice = struct {
     protocol: Protocol = .chromecast,
+    /// AirPlay only: a cast was refused for missing/invalid credentials.
+    /// Learned at cast time (scan output has no pairing info); survives a
+    /// rescan via `carryNeedsPairing`, cleared by a successful pair.
+    needs_pairing: bool = false,
     name: [64]u8 = std.mem.zeroes([64]u8),
     name_len: usize = 0,
     ip: [46]u8 = std.mem.zeroes([46]u8),
@@ -146,7 +167,7 @@ pub const atv_scan_argv = [_][]const u8{ "atvscript", "scan" };
 /// Fixed-capacity argv whose slices borrow from the device, the URL and
 /// `arg_buf` — keep all three alive while the child runs.
 pub const Argv = struct {
-    items: [5][]const u8 = undefined,
+    items: [8][]const u8 = undefined,
     len: usize = 0,
     pub fn slice(self: *const Argv) []const []const u8 {
         return self.items[0..self.len];
@@ -179,6 +200,141 @@ pub fn stopArgv(dev: *const CastDevice) ?Argv {
         .chromecast => argvOf(&.{ "catt", "-d", dev.identSlice(), "stop" }),
         .airplay => null,
     };
+}
+
+/// argv to pair with an AirPlay device (null for Chromecast: catt needs no
+/// pairing). "--remote-name" is the name the TV lists the pairing under.
+pub fn pairArgv(dev: *const CastDevice) ?Argv {
+    return switch (dev.protocol) {
+        .chromecast => null,
+        .airplay => argvOf(&.{ "atvremote", "--id", dev.identSlice(), "--protocol", "airplay", "--remote-name", "Opal", "pair" }),
+    };
+}
+
+/// Append `chunk` to the tail buffer `buf[0..len]`, keeping only the newest
+/// `buf.len` bytes; returns the new length. Lets a reader classify the end of
+/// a long-running tool's output without an unbounded buffer.
+pub fn appendTail(buf: []u8, len: usize, chunk: []const u8) usize {
+    if (buf.len == 0) return 0;
+    if (chunk.len >= buf.len) {
+        @memcpy(buf, chunk[chunk.len - buf.len ..]);
+        return buf.len;
+    }
+    const cur = @min(len, buf.len);
+    const keep_len = @min(cur, buf.len - chunk.len);
+    if (keep_len < cur) std.mem.copyForwards(u8, buf[0..keep_len], buf[cur - keep_len .. cur]);
+    @memcpy(buf[keep_len .. keep_len + chunk.len], chunk);
+    return keep_len + chunk.len;
+}
+
+fn has(text: []const u8, needle: []const u8) bool {
+    return std.mem.indexOf(u8, text, needle) != null;
+}
+
+/// True when atvremote's output shows it is waiting for the TV's PIN.
+pub fn pairPromptSeen(output: []const u8) bool {
+    return has(output, "Enter PIN");
+}
+
+/// The PIN as typed, or null unless it is exactly 4 ASCII digits (surrounding
+/// whitespace ignored). AirPlay receivers show 4 digits; anything else would
+/// be zero-padded or rejected by pyatv after a wasted pairing attempt.
+pub fn validPin(text: []const u8) ?[4]u8 {
+    const t = std.mem.trim(u8, text, " \t\r\n");
+    if (t.len != 4) return null;
+    var out: [4]u8 = undefined;
+    for (t, 0..) |ch, i| {
+        if (!std.ascii.isDigit(ch)) return null;
+        out[i] = ch;
+    }
+    return out;
+}
+
+/// Where a pairing session is. idle/paired/failed have no running process.
+pub const PairPhase = enum {
+    idle,
+    /// atvremote is scanning / opening pair-setup.
+    starting,
+    /// The TV shows a PIN; waiting for /cast/pair/pin.
+    awaiting_pin,
+    /// PIN sent; atvremote is finishing pair-setup.
+    verifying,
+    paired,
+    failed,
+
+    pub fn active(self: PairPhase) bool {
+        return self == .starting or self == .awaiting_pin or self == .verifying;
+    }
+};
+
+pub const PairOutcome = enum { paired, not_found, backoff, connection_failed, rejected, failed };
+
+/// Classify a finished `atvremote ... pair` run from its stdout (tail) and
+/// exit code (null when it did not exit normally).
+pub fn pairOutcome(output: []const u8, exit_code: ?u8) PairOutcome {
+    if (exit_code == 0 and has(output, "Pairing seems to have succeeded")) return .paired;
+    if (has(output, "Could not find any Apple TV")) return .not_found;
+    if (has(output, "BackOffError")) return .backoff;
+    if (has(output, "ConnectionFailedError")) return .connection_failed;
+    if (has(output, "Pairing failed")) return .rejected;
+    return .failed;
+}
+
+pub fn pairOutcomeMessage(o: PairOutcome) []const u8 {
+    return switch (o) {
+        .paired => "Paired. Casting to this device now uses the saved credentials.",
+        .not_found => "Apple TV not found on the network. Scan again, then retry pairing.",
+        .backoff => "The Apple TV is refusing pairing attempts for now. Wait a minute and retry.",
+        .connection_failed => "Could not connect to the Apple TV to pair.",
+        .rejected => "Pairing failed. Check the PIN shown on the TV and try again.",
+        .failed => "Pairing failed (atvremote exited with an error). pyatv 0.14 or newer is required.",
+    };
+}
+
+pub const msg_pair_timeout = "Pairing timed out. Start again and enter the PIN shown on the TV.";
+pub const msg_pair_cancelled = "Pairing cancelled";
+pub const msg_pair_no_tool = "AirPlay pairing needs pyatv (pip install pyatv)";
+pub const msg_pair_busy = "A pairing is already in progress";
+pub const msg_pair_not_airplay = "Only AirPlay devices need pairing";
+pub const msg_pair_bad_pin = "Enter the 4-digit PIN shown on the TV";
+pub const msg_pair_no_prompt = "No pairing is waiting for a PIN";
+pub const msg_needs_pairing = "AirPlay refused the cast: this device needs pairing. Press Pair, then enter the PIN shown on the TV.";
+
+/// True when a failed `atvremote ... play_url=` run (stdout + stderr tails)
+/// was refused for missing or invalid credentials, which is what an AirPlay 2
+/// / tvOS 15+ receiver does before pairing. pyatv maps HTTP 401/403 to
+/// AuthenticationError("not authenticated"), HTTP 470 on the control channel
+/// to InvalidCredentialsError("invalid or missing credentials"), and absent
+/// credentials to NoCredentialsError. A bare "status code: 4xx" from play_url
+/// is NOT enough on its own (415 = unsupported media).
+pub fn playNeedsPairing(output: []const u8) bool {
+    return has(output, "not authenticated") or
+        has(output, "NoCredentialsError") or
+        has(output, "InvalidCredentialsError") or
+        has(output, "invalid or missing credentials") or
+        has(output, "status code: 401") or
+        has(output, "status code: 403") or
+        has(output, "status code: 470");
+}
+
+/// Copy `needs_pairing` from the previous device list onto a fresh scan, so a
+/// rescan does not forget a device the receiver has already refused.
+pub fn carryNeedsPairing(old: []const CastDevice, new: []CastDevice) void {
+    for (new) |*n| {
+        for (old) |*o| {
+            if (o.needs_pairing and n.sameTarget(o)) {
+                n.needs_pairing = true;
+                break;
+            }
+        }
+    }
+}
+
+/// Set `needs_pairing` on every listed device that is `target`.
+pub fn markNeedsPairing(list: []CastDevice, target: *const CastDevice, value: bool) void {
+    for (list) |*d| {
+        if (d.sameTarget(target)) d.needs_pairing = value;
+    }
 }
 
 /// Host part of a URL ("" when there is no "scheme://").
@@ -339,4 +495,89 @@ test "sameTarget compares protocol and identifier" {
     const c = makeDevice(.airplay, "A", "1.2.3.4", "1.2.3.4");
     try testing.expect(a.sameTarget(&b));
     try testing.expect(!a.sameTarget(&c));
+}
+
+test "pairArgv: atvremote pair over the airplay protocol, none for Chromecast" {
+    const ap = makeDevice(.airplay, "ATV", "10.0.0.2", "6D797FD3-3538");
+    const a = pairArgv(&ap).?;
+    const want = [_][]const u8{ "atvremote", "--id", "6D797FD3-3538", "--protocol", "airplay", "--remote-name", "Opal", "pair" };
+    try testing.expectEqual(want.len, a.slice().len);
+    for (want, a.slice()) |w, g| try testing.expectEqualStrings(w, g);
+    const cc = makeDevice(.chromecast, "TV", "1.2.3.4", "1.2.3.4");
+    try testing.expect(pairArgv(&cc) == null);
+}
+
+test "appendTail keeps the newest bytes" {
+    var buf: [8]u8 = undefined;
+    var n = appendTail(&buf, 0, "abc");
+    try testing.expectEqualStrings("abc", buf[0..n]);
+    n = appendTail(&buf, n, "defgh");
+    try testing.expectEqualStrings("abcdefgh", buf[0..n]);
+    n = appendTail(&buf, n, "XY");
+    try testing.expectEqualStrings("cdefghXY", buf[0..n]);
+    n = appendTail(&buf, n, "0123456789");
+    try testing.expectEqualStrings("23456789", buf[0..n]);
+    var empty: [0]u8 = undefined;
+    try testing.expectEqual(@as(usize, 0), appendTail(&empty, 0, "x"));
+}
+
+test "pairPromptSeen matches atvremote's PIN prompt only" {
+    try testing.expect(pairPromptSeen("Enter PIN on screen: "));
+    try testing.expect(!pairPromptSeen("2026-01-01 ERROR [pyatv.scripts.atvremote]: Could not find any Apple TV on current network\n"));
+    try testing.expect(!pairPromptSeen(""));
+}
+
+test "validPin: exactly four digits" {
+    try testing.expectEqualStrings("0427", &validPin("0427").?);
+    try testing.expectEqualStrings("1234", &validPin(" 1234\n").?);
+    for ([_][]const u8{ "", "123", "12345", "12a4", "-123", "12 4" }) |bad| try testing.expect(validPin(bad) == null);
+}
+
+test "pairOutcome: atvremote 0.18 success, failure and not-found output" {
+    try testing.expectEqual(PairOutcome.paired, pairOutcome("Enter PIN on screen: Pairing seems to have succeeded, yey!\nYou may now use these credentials: abc:def\n", 0));
+    // has_paired == false still exits 0.
+    try testing.expectEqual(PairOutcome.rejected, pairOutcome("Enter PIN on screen: Pairing failed!\n", 0));
+    try testing.expectEqual(PairOutcome.rejected, pairOutcome("Enter PIN on screen: 2026-01-01 ERROR [pyatv.scripts.atvremote]: Pairing failed\nTraceback ...\npyatv.exceptions.PairingError: x\n", 3));
+    try testing.expectEqual(PairOutcome.backoff, pairOutcome("ERROR [x]: Pairing failed\npyatv.exceptions.BackOffError: wait\n", 3));
+    try testing.expectEqual(PairOutcome.connection_failed, pairOutcome("ERROR [x]: Pairing failed\npyatv.exceptions.ConnectionFailedError: [Errno 61]\n", 3));
+    try testing.expectEqual(PairOutcome.not_found, pairOutcome("2026-01-01 ERROR [pyatv.scripts.atvremote]: Could not find any Apple TV on current network\n", 2));
+    // Success text without a clean exit is not trusted.
+    try testing.expectEqual(PairOutcome.failed, pairOutcome("Pairing seems to have succeeded, yey!\n", null));
+    try testing.expectEqual(PairOutcome.failed, pairOutcome("", 1));
+}
+
+test "PairPhase.active covers only phases with a running process" {
+    try testing.expect(PairPhase.starting.active());
+    try testing.expect(PairPhase.awaiting_pin.active());
+    try testing.expect(PairPhase.verifying.active());
+    try testing.expect(!PairPhase.idle.active());
+    try testing.expect(!PairPhase.paired.active());
+    try testing.expect(!PairPhase.failed.active());
+}
+
+test "playNeedsPairing: credential refusals yes, other play_url errors no" {
+    try testing.expect(playNeedsPairing("2026-01-01 ERROR [pyatv.scripts.atvremote]: Authentication error: not authenticated\n"));
+    try testing.expect(playNeedsPairing("ERROR [x]: Authentication error: status code: 403\n"));
+    try testing.expect(playNeedsPairing("pyatv.exceptions.InvalidCredentialsError: invalid or missing credentials\n"));
+    try testing.expect(playNeedsPairing("pyatv.exceptions.NoCredentialsError: no credentials\n"));
+    // 415 from play_url is unsupported media, not pairing.
+    try testing.expect(!playNeedsPairing("ERROR [x]: Authentication error: status code: 415\n"));
+    try testing.expect(!playNeedsPairing("pyatv.exceptions.ConnectionFailedError: [Errno 64] Host is down\n"));
+    try testing.expect(!playNeedsPairing(""));
+}
+
+test "carryNeedsPairing survives a rescan; markNeedsPairing sets and clears by target" {
+    var old = [_]CastDevice{ makeDevice(.airplay, "ATV", "10.0.0.2", "ID1"), makeDevice(.chromecast, "CC", "10.0.0.3", "10.0.0.3") };
+    old[0].needs_pairing = true;
+    var new = [_]CastDevice{ makeDevice(.chromecast, "CC", "10.0.0.3", "10.0.0.3"), makeDevice(.airplay, "ATV renamed", "10.0.0.9", "ID1"), makeDevice(.airplay, "Other", "10.0.0.4", "ID2") };
+    carryNeedsPairing(&old, &new);
+    try testing.expect(!new[0].needs_pairing);
+    try testing.expect(new[1].needs_pairing);
+    try testing.expect(!new[2].needs_pairing);
+    markNeedsPairing(&new, &new[2], true);
+    try testing.expect(new[2].needs_pairing);
+    const target = makeDevice(.airplay, "", "", "ID1");
+    markNeedsPairing(&new, &target, false);
+    try testing.expect(!new[1].needs_pairing);
+    try testing.expect(new[2].needs_pairing);
 }

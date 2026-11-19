@@ -2028,3 +2028,32 @@ def test_cast_airplay_wiring():
     }
     bad = [k for k, ok in checks.items() if not ok]
     return ("fail", "missing: " + ", ".join(bad)) if bad else ("pass", f"{len(checks)} cast/AirPlay wiring checks")
+
+
+@test("AirPlay pairing: atvremote pair worker, PIN endpoints, needs_pairing and web prompt", "Player")
+def test_airplay_pairing_wiring():
+    cast, pure, remote = _src("src/services/cast.zig"), _src("src/services/cast_pure.zig"), _src("src/services/remote.zig")
+    js, html, ops = _src("web/js/now-playing.js"), _src("web/index.html"), _src("src/services/ops_pure.zig")
+    openapi = _src("docs/openapi.json")
+    checks = {
+        "pair argv in pure": '"--protocol", "airplay", "--remote-name", "Opal", "pair"' in pure,
+        "production routes through pure": all(f"pure.{f}(" in cast for f in (
+            "pairArgv", "pairPromptSeen", "validPin", "pairOutcome", "playNeedsPairing", "carryNeedsPairing", "markNeedsPairing", "appendTail")),
+        "pure pairing tests": all(f'test "{t}' in pure for t in ("pairArgv", "validPin", "pairOutcome", "playNeedsPairing", "carryNeedsPairing")),
+        # Spawn guard + mutex-owned stdin handed over exactly once.
+        "pairing guard atomic": "pub var is_pairing: std.atomic.Value(bool)" in cast and "is_pairing.swap(true, .acq_rel)" in cast,
+        "stdin taken under mutex": "pair_stdin = child.takeStdin();" in cast and "pair_stdin = null;" in cast,
+        "cancel/timeout kill atvremote": "fn abortPair(" in cast and "io_g.terminateProcess(id)" in cast
+            and "fn pairWatchdog(" in cast and "pure.msg_pair_timeout" in cast,
+        "credentials wiped from the output buffer": "std.crypto.secureZero(u8, &out)" in cast,
+        "play_url failure captured": "drainTail(&child, &tail)" in cast,
+        "routes": all(f'"/cast/pair/{s}"' in remote for s in ("start", "pin", "cancel")),
+        "needs_pairing + pairing in /cast/devices": '\\"needs_pairing\\":' in remote and '\\"pairing\\":' in remote,
+        "ops registry": all(f'"cast_pair_{s}"' in ops for s in ("start", "pin", "cancel")),
+        "openapi documents it": all(f'"/cast/pair/{s}"' in openapi for s in ("start", "pin", "cancel")),
+        "web pair button + PIN prompt": "cast-pair-btn" in js and "/cast/pair/start?idx=" in js
+            and "/cast/pair/pin?pin=" in js and "/cast/pair/cancel" in js
+            and 'id="cast-pair-pin"' in html and 'inputmode="numeric"' in html,
+    }
+    bad = [k for k, ok in checks.items() if not ok]
+    return ("fail", "missing: " + ", ".join(bad)) if bad else ("pass", f"{len(checks)} AirPlay pairing checks")

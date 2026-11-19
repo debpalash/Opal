@@ -192,6 +192,37 @@ $('np-retry').onclick = async () => {
 // Cast is already a complete remote API; the web page previously left it to
 // the browser extension, so phone users could not choose a living-room screen.
 let castWatch = null, castPolls = 0;
+// AirPlay pairing: /cast/pair/start runs atvremote on the Opal machine, the
+// TV shows a PIN, /cast/pair/pin sends it. Progress is d.pairing.
+let castPairShown = false;
+const castPairActive = p => ['starting', 'awaiting_pin', 'verifying'].includes(p.phase);
+function renderCastPair(p){
+  const active = castPairActive(p);
+  const show = active || (castPairShown && (p.phase === 'paired' || p.phase === 'failed'));
+  $('cast-pair').hidden = !show;
+  if (!show) return;
+  $('cast-pair-status').textContent = (p.device ? p.device + ': ' : '') + (p.message || '');
+  const awaiting = p.phase === 'awaiting_pin';
+  const entry = $('cast-pair-entry');
+  // Only touch the field on a phase change, so polling never wipes typing.
+  if (entry.hidden === awaiting) {
+    entry.hidden = !awaiting;
+    if (awaiting) { $('cast-pair-pin').value = ''; $('cast-pair-pin').focus(); }
+  }
+  $('cast-pair-cancel').textContent = active ? 'Cancel' : 'Close';
+}
+$('cast-pair').onsubmit = async e => {
+  e.preventDefault();
+  const pin = $('cast-pair-pin').value.trim();
+  if (!/^\d{4}$/.test(pin)) { toast('Enter the 4-digit PIN shown on the TV'); return; }
+  try { await apiMutation('/cast/pair/pin?pin=' + encodeURIComponent(pin)); }
+  catch (err) { toast(err.message || 'Could not send the PIN'); }
+  loadCastDevices();
+};
+$('cast-pair-cancel').onclick = async () => {
+  if ($('cast-pair-cancel').textContent === 'Cancel') await apiMutation('/cast/pair/cancel').catch(()=>{});
+  castPairShown = false; $('cast-pair').hidden = true; loadCastDevices();
+};
 function setCastOpen(open){
   $('cast-panel').hidden = !open;
   $('b-cast').setAttribute('aria-expanded', open ? 'true' : 'false');
@@ -207,11 +238,25 @@ async function loadCastDevices(){
       : devices.length ? `${devices.length} device${devices.length === 1 ? '' : 's'} found` : 'No Chromecast or AirPlay devices found.';
     $('cast-stop').hidden = !d.casting;
     $('cast-devices').innerHTML = devices.map((x, i) => `
-      <button type="button" class="cast-device ${d.active === i ? 'active' : ''}" data-i="${i}"
-        aria-pressed="${d.active === i ? 'true' : 'false'}">
-        <span>${esc(x.name || 'Cast device')}</span>
-        <small><span class="cast-proto">${x.protocol === 'airplay' ? 'AirPlay' : 'Chromecast'}</span> ${esc(x.ip || '')}</small>
-      </button>`).join('');
+      <div class="cast-item">
+        <button type="button" class="cast-device ${d.active === i ? 'active' : ''}" data-i="${i}"
+          aria-pressed="${d.active === i ? 'true' : 'false'}">
+          <span>${esc(x.name || 'Cast device')}</span>
+          <small><span class="cast-proto">${x.protocol === 'airplay' ? 'AirPlay' : 'Chromecast'}</span> ${esc(x.ip || '')}</small>
+          ${x.needs_pairing ? '<small class="cast-needs-pair">Needs pairing</small>' : ''}
+        </button>
+        ${x.protocol === 'airplay' ? `<button type="button" class="text-btn cast-pair-btn" data-i="${i}"
+          aria-label="Pair with ${esc(x.name || 'AirPlay device')}">Pair</button>` : ''}
+      </div>`).join('');
+    $('cast-devices').querySelectorAll('.cast-pair-btn').forEach(b => b.onclick = async () => {
+      try {
+        await apiMutation('/cast/pair/start?idx=' + b.dataset.i);
+        castPairShown = true;
+      } catch (e) { toast(e.message || 'Could not start pairing'); }
+      loadCastDevices();
+    });
+    const pairing = d.pairing || { phase: 'idle' };
+    renderCastPair(pairing);
     $('cast-devices').querySelectorAll('.cast-device').forEach(b => b.onclick = async () => {
       const device = devices[+b.dataset.i];
       try {
@@ -220,7 +265,9 @@ async function loadCastDevices(){
       } catch (e) { toast(e.message || 'Could not cast'); }
       castPolls = 0; loadCastDevices();
     });
-    if (d.scanning && castPolls++ < 20) castWatch = setTimeout(loadCastDevices, 900);
+    // The server times a pairing out, so polling while it runs always ends.
+    if (castPairActive(pairing)) castWatch = setTimeout(loadCastDevices, 1000);
+    else if (d.scanning && castPolls++ < 20) castWatch = setTimeout(loadCastDevices, 900);
   } catch { $('cast-hint').textContent = 'Could not scan — install catt (Chromecast) or pyatv (AirPlay) on the Opal machine.'; }
 }
 $('b-cast').onclick = () => {

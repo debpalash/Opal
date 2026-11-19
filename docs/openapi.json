@@ -1112,7 +1112,7 @@
     "/cast/devices": {
       "get": {
         "operationId": "cast_devices",
-        "summary": "Cast devices found so far (name, ip, protocol chromecast or airplay), whether a scan is running and whether something is casting. Starts a scan when none are known yet.",
+        "summary": "Cast devices found so far (name, ip, protocol chromecast or airplay, needs_pairing), whether a scan is running, whether something is casting, and the AirPlay pairing progress (phase idle, starting, awaiting_pin, verifying, paired or failed, with a message). Starts a scan when none are known yet.",
         "tags": [
           "read"
         ],
@@ -1804,6 +1804,86 @@
       "post": {
         "operationId": "cast_stop",
         "summary": "Stop casting to the Chromecast or AirPlay device.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/cast/pair/start": {
+      "post": {
+        "operationId": "cast_pair_start",
+        "summary": "Pair with an AirPlay device from cast_devices (needed when needs_pairing is true; newer Apple TVs refuse casts until paired). The TV then shows a 4-digit PIN: watch the pairing object in cast_devices for phase awaiting_pin, then send it with cast_pair_pin. pyatv keeps the credentials for later casts.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "parameters": [
+          {
+            "name": "idx",
+            "in": "query",
+            "required": true,
+            "description": "Zero-based position in cast_devices.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 15
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/cast/pair/pin": {
+      "post": {
+        "operationId": "cast_pair_pin",
+        "summary": "Send the 4-digit PIN the TV shows during cast_pair_start. The result appears in the pairing object of cast_devices (paired or failed).",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "parameters": [
+          {
+            "name": "pin",
+            "in": "query",
+            "required": true,
+            "description": "The 4 digits shown on the TV.",
+            "schema": {
+              "type": "string",
+              "maxLength": 4
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/cast/pair/cancel": {
+      "post": {
+        "operationId": "cast_pair_cancel",
+        "summary": "Cancel a running AirPlay pairing.",
         "tags": [
           "playback"
         ],

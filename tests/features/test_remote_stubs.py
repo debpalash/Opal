@@ -54,6 +54,8 @@ def test_party_cast_routes():
         "cast devices are real": "cast.scanDevices()" in rm and "cast.snapshot(&snap)" in rm
             and "snap.devices[0..snap.count]" in rm and '"{\\"devices\\":[]}"' not in rm,
         "cast start/stop/scan": all(f'"/cast/{s}"' in rm for s in ("start", "stop", "scan", "devices")),
+        "cast pair start/pin/cancel": all(f'"/cast/pair/{s}"' in rm for s in ("start", "pin", "cancel"))
+            and "cast.startPairing(idx)" in rm and "cast.submitPin(pin)" in rm and "cast.cancelPairing()" in rm,
         # cast.zig used to reach into state.app.players itself, unlocked.
         "cast url passed by value": "pub fn castTo(device_idx: usize, url: []const u8)" in cast
             and "pub fn castActive(" in cast,
