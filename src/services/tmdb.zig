@@ -770,7 +770,9 @@ fn renderTimeChip(idx: usize, tw: state.TmdbTimeWindow, label: []const u8) void 
 /// card having the same pitch, so these are THE constants: card height is
 /// poster_h + CARD_FOOTER_H (min == max in renderPosterCard), each card has
 /// CARD_VMARGIN above and below, and skeleton tiles use the same size.
-const CARD_FOOTER_H: f32 = 152;
+/// Title (two lines) + one "year · type" row carrying the Details and More
+/// actions. Rating and TV badges live on the artwork instead of the footer.
+const CARD_FOOTER_H: f32 = if (@import("../core/platform_pure.zig").mobile) 92 else 80;
 const CARD_VMARGIN: f32 = 3;
 
 /// Shelves and the virtualized gallery must reserve the same card footprint.
@@ -1138,6 +1140,8 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
             .min_size_content = .{ .w = card_w, .h = poster_h },
             .max_size_content = .{ .w = card_w, .h = poster_h },
             .padding = dvui.Rect.all(0),
+            .margin = dvui.Rect.all(0),
+            .border = dvui.Rect.all(0),
         });
         bw.processEvents();
         bw.drawBackground();
@@ -1184,8 +1188,8 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
             }
 
             // Hover reveals richer metadata (overview / rating / year) over a
-            // dimmed scrim, so cards stay compact by default.
-            if (bw.hovered()) renderHoverMeta(item, idx);
+            // dimmed scrim; otherwise the artwork carries compact badges.
+            if (bw.hovered()) renderHoverMeta(item, idx) else renderPosterBadges(item, idx);
         }
 
         const poster_clicked = bw.clicked();
@@ -1194,65 +1198,28 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
         if (poster_clicked) openOrSearch(item);
     }
 
-    // Rating badge + type label
-    {
-        var meta_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = idx + 300,
-            .expand = .horizontal,
-            .padding = .{ .x = 2, .y = 2, .w = 2, .h = 0 },
-        });
-        defer meta_row.deinit();
-
-        // A missing vote is not a 0% review. Show the native /10 score only
-        // when the catalog supplies one.
-        if (item.rating > 0) {
-            const sc = if (item.rating >= 7) theme.colors.success else if (item.rating >= 5) theme.colors.warning else theme.colors.text_secondary;
-            var rb: [16]u8 = undefined;
-            if (@import("opal-fmt").bufPrintZ(&rb, "{d:.1}/10", .{item.rating})) |rating| {
-                _ = dvui.label(@src(), "{s}", .{rating}, .{ .id_extra = idx + 310, .color_text = .{ .color = sc } });
-            } else |_| {}
-        } else {
-            // Keep the slot so unrated titles don't look like a render gap.
-            _ = dvui.label(@src(), "NR", .{}, .{ .id_extra = idx + 311, .color_text = .{ .color = theme.colors.text_secondary } });
-        }
-
-        // Spacer
-        {
-            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            sp.deinit();
-        }
-
-        // Media type badge
-        if (item.media_type_len > 0) {
-            const mt = item.media_type[0..@min(item.media_type_len, item.media_type.len)];
-            const mt_color = if (std.mem.eql(u8, mt, "tv"))
-                theme.colors.accent
-            else
-                theme.colors.text_secondary;
-            const mt_label = if (std.mem.eql(u8, mt, "tv")) "TV" else "Film";
-            _ = dvui.label(@src(), "{s}", .{mt_label}, .{ .id_extra = idx + 320, .color_text = .{ .color = mt_color } });
-        }
-    }
-
     // Keep the clickable title within its footer budget. Hover metadata and
     // Details still expose the complete title if it needs more lines.
     var title_lines: [520]u8 = undefined;
-    const title_font = theme.mediaTitleFont(title, dvui.themeGet().font_body);
+    const title_font = theme.mediaTitleFont(title, dvui.themeGet().font_heading.withSize(theme.font_size.body));
     const wrapped_title = shared_components.twoLineTitle(title, title_font, card_w - 4, &title_lines);
-    // Left-aligned like the rating row and year below it (dvui.button
-    // centres its label, which left the title floating mid-card).
+    // Left-aligned like the meta row below it (dvui.button centres its
+    // label, which left the title floating mid-card).
     var title_btn: dvui.ButtonWidget = undefined;
     title_btn.init(@src(), .{}, .{
         .font = title_font,
         .id_extra = idx + 500,
         .expand = .horizontal,
-        .min_size_content = .{ .w = card_w - 4, .h = title_font.textHeight() * 2 + 6 },
-        .max_size_content = .{ .w = card_w - 4, .h = title_font.textHeight() * 2 + 6 },
+        .min_size_content = .{ .w = card_w - 4, .h = title_font.textHeight() * 2 + 4 },
+        .max_size_content = .{ .w = card_w - 4, .h = title_font.textHeight() * 2 + 4 },
         .color_text = .{ .color = theme.colors.text_primary },
         .color_fill = .{ .color = theme.transparent },
         .color_fill_hover = .{ .color = theme.colors.bg_hover },
         .color_fill_press = .{ .color = theme.colors.bg_elevated },
-        .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+        .corners = dvui.CornerRect.all(4),
+        .margin = dvui.Rect.all(0),
+        .border = dvui.Rect.all(0),
+        .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
     });
     title_btn.processEvents();
     title_btn.drawBackground();
@@ -1262,30 +1229,37 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
     title_btn.deinit();
     if (title_clicked) openOrSearch(item);
 
-    // Year
-    if (item.year_len > 0) {
-        _ = dvui.label(@src(), "{s}", .{item.year[0..item.year_len]}, .{
+    // Year, then one explicit Details action and a named,
+    // keyboard-accessible action menu — all on one quiet row.
+    {
+        var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = idx + 400, .expand = .horizontal, .padding = .{ .x = 2, .y = 0, .w = 0, .h = 0 } });
+        defer acts.deinit();
+        const is_tv = std.mem.eql(u8, item.media_type[0..@min(item.media_type_len, item.media_type.len)], "tv");
+        // The artwork's TV badge already carries the type; the year alone
+        // keeps both actions on narrow cards.
+        const meta = item.year[0..@min(item.year_len, item.year.len)];
+        _ = dvui.label(@src(), "{s}", .{meta}, .{
             .id_extra = idx + 520,
             .color_text = .{ .color = theme.colors.text_secondary },
-            .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+            .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+            .gravity_y = 0.5,
         });
-    }
-
-    // One explicit primary action and a named, keyboard-accessible action menu.
-    {
-        var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = idx + 400, .expand = .horizontal, .padding = dvui.Rect.all(2) });
-        defer acts.deinit();
-        if (shared_components.actionButton(@src(), "Details", .secondary, idx + 11000)) {
-            poster_details_id = item.id;
-            poster_details_tv = std.mem.eql(u8, item.media_type[0..@min(item.media_type_len, item.media_type.len)], "tv");
-            poster_details_open = true;
-        }
-        if (@import("builtin").is_test and idx == 0) first_details_bounds_for_test = shared_components.action_bounds_for_test;
         var gap = dvui.box(@src(), .{}, .{ .expand = .horizontal });
         gap.deinit();
-        var menu = dvui.menu(@src(), .horizontal, .{ .id_extra = idx + 7000 });
+        if (cardIconAction(@src(), icons.tvg.lucide.info, "Details", idx + 11000)) {
+            poster_details_id = item.id;
+            poster_details_tv = is_tv;
+            poster_details_open = true;
+        }
+        var menu = dvui.menu(@src(), .horizontal, .{ .id_extra = idx + 7000, .gravity_y = 0.5 });
         defer menu.deinit();
-        if (dvui.menuItemIcon(@src(), "More actions", icons.tvg.lucide.@"ellipsis-vertical", .{ .submenu = true }, .{ .color_text = .{ .color = theme.colors.text_secondary }, .padding = dvui.Rect.all(4) })) |rect| {
+        if (dvui.menuItemIcon(@src(), "More actions", icons.tvg.lucide.@"ellipsis-vertical", .{ .submenu = true }, .{
+            .color_text = .{ .color = theme.colors.text_secondary },
+            .min_size_content = .{ .w = 14, .h = 14 },
+            .max_size_content = .{ .w = 14, .h = 14 },
+            .padding = dvui.Rect.all(4),
+            .corners = dvui.CornerRect.all(4),
+        })) |rect| {
             var floating = dvui.floatingMenu(@src(), .{ .from = rect }, .{ .color_fill = .{ .color = theme.colors.bg_surface } });
             defer floating.deinit();
             var choices = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = .{ .color = theme.colors.bg_surface }, .padding = dvui.Rect.all(4) });
@@ -1302,6 +1276,81 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
                 }
             }
         }
+    }
+}
+
+/// Small themed icon action for poster footers (Details). Records the first
+/// card's bounds so the shelf test can prove the action stays on screen.
+fn cardIconAction(src: std.builtin.SourceLocation, icon: []const u8, label: []const u8, id: usize) bool {
+    var wd: dvui.WidgetData = undefined;
+    const clicked = dvui.buttonIcon(src, label, icon, .{}, .{}, .{
+        .id_extra = id,
+        .data_out = &wd,
+        .gravity_y = 0.5,
+        .min_size_content = .{ .w = 14, .h = 14 },
+        .max_size_content = .{ .w = 14, .h = 14 },
+        .padding = dvui.Rect.all(4),
+        .margin = dvui.Rect.all(0),
+        .border = dvui.Rect.all(0),
+        .corners = dvui.CornerRect.all(4),
+        .color_text = .{ .color = theme.colors.text_secondary },
+        .color_fill = .{ .color = theme.transparent },
+        .color_fill_hover = .{ .color = theme.colors.bg_hover },
+        .color_fill_press = .{ .color = theme.colors.bg_elevated },
+    });
+    shared_components.tip(src, wd, label);
+    if (@import("builtin").is_test and id == 11000) first_details_bounds_for_test = wd.borderRectScale().r;
+    return clicked;
+}
+
+/// Artwork badges: the catalog score (only when one exists — a missing vote
+/// is not a 0% review) top-left, and a TV marker top-right.
+fn renderPosterBadges(item: *const state.TmdbItem, idx: usize) void {
+    if (item.rating > 0) {
+        const sc = if (item.rating >= 7) theme.colors.success else if (item.rating >= 5) theme.colors.warning else theme.colors.text_secondary;
+        var pill = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = idx + 310,
+            .gravity_x = 0,
+            .gravity_y = 0,
+            .background = true,
+            .color_fill = .{ .color = theme.playerGlass(214) },
+            .corners = dvui.CornerRect.all(theme.radius.pill),
+            .padding = .{ .x = 5, .y = 2, .w = 6, .h = 2 },
+            .margin = dvui.Rect.all(5),
+        });
+        defer pill.deinit();
+        dvui.icon(@src(), "rating", icons.tvg.lucide.star, .{ .fill_color = .{ .color = sc } }, .{
+            .id_extra = idx + 311,
+            .color_text = .{ .color = sc },
+            .min_size_content = .{ .w = 9, .h = 9 },
+            .max_size_content = .{ .w = 9, .h = 9 },
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
+        });
+        var rb: [16]u8 = undefined;
+        if (std.fmt.bufPrint(&rb, "{d:.1}", .{item.rating})) |rating| {
+            _ = dvui.label(@src(), "{s}", .{rating}, .{
+                .id_extra = idx + 312,
+                .color_text = .{ .color = theme.colors.text_primary },
+                .font = dvui.themeGet().font_heading.withSize(theme.font_size.small),
+                .gravity_y = 0.5,
+                .padding = dvui.Rect.all(0),
+            });
+        } else |_| {}
+    }
+    if (std.mem.eql(u8, item.media_type[0..@min(item.media_type_len, item.media_type.len)], "tv")) {
+        _ = dvui.label(@src(), "TV", .{}, .{
+            .id_extra = idx + 320,
+            .gravity_x = 1,
+            .gravity_y = 0,
+            .background = true,
+            .color_fill = .{ .color = theme.colors.accent },
+            .color_text = .{ .color = theme.colors.text_on_accent },
+            .font = dvui.themeGet().font_heading.withSize(theme.font_size.micro),
+            .corners = dvui.CornerRect.all(theme.radius.pill),
+            .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
+            .margin = dvui.Rect.all(5),
+        });
     }
 }
 

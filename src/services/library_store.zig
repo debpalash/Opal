@@ -51,6 +51,17 @@ fn refreshRailsLocked() void {
     rail_version = current;
 }
 
+/// Native fixtures have no database; seed the Continue snapshot directly.
+pub fn seedContinueForTest(rows: []const pure.LibraryItem) void {
+    rail_mutex.lock();
+    defer rail_mutex.unlock();
+    const n = @min(rows.len, continue_rows.len);
+    @memcpy(continue_rows[0..n], rows[0..n]);
+    continue_len = n;
+    hidden_continue = 0;
+    rail_version = version.load(.acquire);
+}
+
 /// Record/refresh progress for an item. Preserves an existing `is_favorite`
 /// (progress updates must not clear a star). `deep_link` is what resumes it.
 pub fn upsertProgress(

@@ -454,6 +454,8 @@ pub const AppState = struct {
     last_clicked_time: i64 = 0,
     nsfw_filter_enabled: bool = true,
     continue_hide_nsfw: bool = true,
+    /// Opt-in: mask Continue covers and titles until hovered (shared screens).
+    continue_private: bool = false,
     // Route image-gallery / art / booru URLs to gallery-dl instead of the HTTP
     // downloader. Effective only when a gallery-dl binary is installed (see
     // services/gallerydl.zig enabled()); default ON.

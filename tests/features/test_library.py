@@ -153,7 +153,13 @@ def watch_items_are_removable():
         "pinned cards sort first": "ORDER BY home_pinned DESC" in store,
         "pin control wired": "setHomePinned(" in home and "Pin to front" in home,
         "hide control wired": "setHomeHidden(" in home and "Remove from Continue" in home,
-        "private until hover": "renderPrivateTitle(" in home and "const revealed = !manage_continue or hovered" in home,
+        # Masking is opt-in: the default shows covers and titles.
+        "private until hover is opt-in": "renderPrivateTitle(" in home
+            and "const revealed = !(manage_continue and state.app.continue_private) or hovered" in home
+            and _src("src/core/state.zig").count("continue_private: bool = false") == 1
+            and '"continue_private"' in _src("src/core/config.zig")
+            and "&state.app.continue_private" in _src("src/ui/settings.zig"),
+        "rail sized to its cards": "const rail_h = poster_h + card_chrome" in home,
         "hidden cards restorable": "restoreHiddenContinue()" in home and "Restore removed Continue" in home,
         "no progress deletion": "DELETE FROM library_items" not in store,
     }

@@ -1222,6 +1222,9 @@ fn renderGeneralTab() void {
         const before = state.app.continue_hide_nsfw;
         components.toggleRow(@src(), "Hide NSFW from Continue", "Filter adult titles and source links from Continue", &state.app.continue_hide_nsfw);
         if (before != state.app.continue_hide_nsfw) state.markConfigDirty();
+        const private_before = state.app.continue_private;
+        components.toggleRow(@src(), "Blur Continue until hover", "Hide covers and titles on Home for shared screens", &state.app.continue_private);
+        if (private_before != state.app.continue_private) state.markConfigDirty();
     }
 
     // Personalized suggestions (local-only) — gates the taste engine

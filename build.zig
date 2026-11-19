@@ -500,6 +500,10 @@ fn buildSupported(b: *std.Build) void {
         if (native_test_lib_path) |path| fixture.run.setEnvironmentVariable("LD_LIBRARY_PATH", path);
         const profile = std.fs.path.resolve(b.allocator, &.{ b.root.root_dir.path orelse ".", native_profile_root, fixture.name }) catch @panic("native fixture profile path");
         fixture.run.setEnvironmentVariable("HOME", profile);
+        // Hidden fixture windows must not activate the test process on macOS:
+        // each capture otherwise steals focus and yanks the user out of
+        // fullscreen Spaces. SDL reads this hint from the environment.
+        fixture.run.setEnvironmentVariable("SDL_MAC_BACKGROUND_APP", "1");
         fixture.run.setEnvironmentVariable("USERPROFILE", profile);
         fixture.run.setEnvironmentVariable("XDG_CONFIG_HOME", b.fmt("{s}/config", .{profile}));
         fixture.run.setEnvironmentVariable("XDG_CACHE_HOME", b.fmt("{s}/cache", .{profile}));
@@ -1528,6 +1532,16 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_loading_pure).step);
+
+    // Launch never restores a saved fullscreen window state.
+    const test_window_geometry_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/window_geometry_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_window_geometry_pure).step);
 
     // Installed-source table: capacity (sized in FIELDS, not sources), the
     // filename-safety rule shared by install/uninstall, and the overflow

@@ -1115,7 +1115,8 @@ fn continueAction(src: std.builtin.SourceLocation, icon: []const u8, label: []co
 fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []const u8, heading_icon: []const u8, base_id: usize, card_w: f32, slots: []LibSlot, hidden_count: usize) bool {
     const n = @min(items.len, slots.len);
     const manage_continue = base_id == 7600;
-    if (!manage_continue and n == 0 and hidden_count == 0) return false;
+    // Nothing to resume and nothing to restore: no orphan heading.
+    if (n == 0 and hidden_count == 0) return false;
 
     // Header (icon + label; no TMDB "See all").
     {
@@ -1156,6 +1157,16 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
     if (n == 0) return true;
 
     const poster_h = card_w * 1.5;
+    // Title line, plus (Continue only) a caption row with the pin/remove
+    // controls. The rail is exactly one card tall — reserving the TMDB shelf
+    // footprint here left a large dead band under Continue.
+    const title_base = dvui.themeGet().font_heading.withSize(theme.font_size.body);
+    const title_h = title_base.lineHeight() + 6;
+    const meta_h: f32 = 30; // 22px row (14px icons + 4px padding) + 4px gap + slack
+    const card_chrome: f32 = title_h + (if (manage_continue) meta_h else 2);
+    const card_pad: f32 = 4;
+    const card_margin: f32 = 4;
+    const rail_h = poster_h + card_chrome + 2 * (card_pad + card_margin);
     const scrollbar_slot: usize = if (base_id == 7600) 6 else 7;
     var user_scroll: dvui.Point = .{};
     var scroll = dvui.scrollArea(@src(), .{
@@ -1167,8 +1178,8 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         .id_extra = base_id + 1,
         .expand = .horizontal,
         .background = false,
-        .min_size_content = .{ .w = 10, .h = poster_h + STRIP_CHROME },
-        .max_size_content = .{ .w = std.math.floatMax(f32), .h = poster_h + STRIP_CHROME },
+        .min_size_content = .{ .w = 10, .h = rail_h },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = rail_h },
         .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },
     });
     const scroll_id = scroll.data().id;
@@ -1180,81 +1191,41 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
     defer row.deinit();
 
     const poster = @import("../core/poster.zig");
+    const cc = @import("color_compat.zig");
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const item = &items[i];
         if (manage_continue and (state.app.continue_hide_nsfw or state.app.nsfw_filter_enabled) and
             (@import("../services/iptv_pure.zig").isNsfw(item.title[0..item.title_len], item.deep_link[0..item.deep_link_len]) or
                 @import("../services/anime_pure.zig").titleLooksAdult(item.title[0..item.title_len]))) continue;
-        const card_chrome: f32 = if (manage_continue) 84 else 38;
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = i + base_id + 10,
             .min_size_content = .{ .w = card_w, .h = poster_h + card_chrome },
             .max_size_content = .{ .w = card_w, .h = poster_h + card_chrome },
             .background = true,
-            .color_fill = @import("color_compat.zig").wrap(transparent),
-            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_surface),
-            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
-            .border = dvui.Rect.all(1),
+            .color_fill = cc.wrap(transparent),
+            .color_fill_hover = cc.wrap(theme.colors.bg_surface),
             .corners = dvui.CornerRect.all(theme.radius.lg),
-            .padding = dvui.Rect.all(5),
-            .margin = dvui.Rect.all(6),
+            .padding = dvui.Rect.all(card_pad),
+            .margin = dvui.Rect.all(card_margin),
         });
         defer card.deinit();
         const hovered = card.data().borderRectScale().r.contains(dvui.currentWindow().mouse_pt);
-        const revealed = !manage_continue or hovered;
-
-        if (manage_continue) {
-            var tools = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = i + base_id + 20,
-                .min_size_content = .{ .w = card_w - 10, .h = 40 },
-                .max_size_content = .{ .w = card_w - 10, .h = 40 },
-                .gravity_y = 0.0,
-            });
-            defer tools.deinit();
-            const kind = library_pure.parseKind(item.kind[0..@min(item.kind_len, item.kind.len)]);
-            const kind_label: []const u8 = switch (kind) {
-                .watch, .movie, .tv => "Watch",
-                .anime => "Anime",
-                .podcast => "Podcast",
-                .audiobook => "Audiobook",
-                .music, .radio => "Listen",
-                .comics => "Comic",
-                .novels => "Read",
-                .iptv => "Live",
-                .search => "Saved title",
-                .other => "Continue",
-            };
-            _ = dvui.label(@src(), "{s}", .{if (revealed) kind_label else "Private"}, .{
-                .id_extra = i + base_id + 21,
-                .color_text = @import("color_compat.zig").wrap(if (item.home_pinned) theme.colors.accent else theme.colors.text_tertiary),
-                .font = dvui.themeGet().font_heading.withSize(theme.font_size.small),
-                .gravity_y = 0.5,
-                .max_size_content = .{ .w = @max(0, card_w - 62), .h = 24 },
-            });
-            var spacer = dvui.box(@src(), .{}, .{ .id_extra = i + base_id + 22, .expand = .horizontal });
-            spacer.deinit();
-            if (continueAction(@src(), if (item.home_pinned) icons.tvg.lucide.@"pin-off" else icons.tvg.lucide.pin, if (item.home_pinned) "Unpin from front" else "Pin to front", item.home_pinned)) {
-                library_store.setHomePinned(item.kind[0..item.kind_len], item.item_id[0..item.item_id_len], !item.home_pinned);
-                dvui.refresh(null, @src(), null);
-            }
-            // Always available, including while the private card is masked.
-            // This hides only the Home column and preserves resume progress.
-            if (continueAction(@src(), icons.tvg.lucide.x, "Remove from Continue · keeps progress", false)) {
-                library_store.setHomeHidden(item.kind[0..item.kind_len], item.item_id[0..item.item_id_len], true);
-                dvui.refresh(null, @src(), null);
-                continue;
-            }
-        }
+        // Masking is opt-in ("Blur Continue until hover" in Settings).
+        const revealed = !(manage_continue and state.app.continue_private) or hovered;
+        const kind = library_pure.parseKind(item.kind[0..@min(item.kind_len, item.kind.len)]);
 
         var bw: dvui.ButtonWidget = undefined;
         bw.init(@src(), .{}, .{
             .id_extra = i + base_id + 30,
             .background = true,
-            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_fill = cc.wrap(theme.colors.bg_elevated),
             .corners = dvui.CornerRect.all(theme.radius.lg),
             .min_size_content = .{ .w = card_w, .h = poster_h },
             .max_size_content = .{ .w = card_w, .h = poster_h },
+            .padding = dvui.Rect.all(0),
+            .margin = dvui.Rect.all(0),
+            .border = dvui.Rect.all(0),
         });
         bw.processEvents();
         bw.drawBackground();
@@ -1271,20 +1242,24 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
                 slot.h = 0;
                 slot.url_hash = h;
             }
-            if (manage_continue) uploadPrivacyBlur(slot);
+            if (manage_continue and state.app.continue_private) uploadPrivacyBlur(slot);
             _ = poster.uploadIfReady(&slot.pixels, slot.w, slot.h, &slot.tex);
             if (slot.tex == null and !slot.fetching and slot.pixels == null)
                 poster.fetchAsync(purl, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
         }
-        if (revealed and slot.tex != null) {
-            const tex = &slot.tex.?;
-            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corners = dvui.CornerRect.all(theme.radius.lg) });
-        } else if (!revealed and slot.blur_tex != null) {
-            _ = dvui.image(@src(), .{ .source = .{ .texture = slot.blur_tex.? } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corners = dvui.CornerRect.all(theme.radius.lg) });
-        } else if (!revealed) {
-            renderPrivateCoverPlaceholder(i + base_id + 40, heading_icon);
-        } else {
-            renderPrivateCoverPlaceholder(i + base_id + 40, heading_icon);
+        {
+            var stack = dvui.overlay(@src(), .{ .id_extra = i + base_id + 35, .expand = .both });
+            defer stack.deinit();
+            if (revealed and slot.tex != null) {
+                _ = dvui.image(@src(), .{ .source = .{ .texture = slot.tex.? } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corners = dvui.CornerRect.all(theme.radius.lg) });
+            } else if (!revealed and slot.blur_tex != null) {
+                _ = dvui.image(@src(), .{ .source = .{ .texture = slot.blur_tex.? } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corners = dvui.CornerRect.all(theme.radius.lg) });
+            } else {
+                renderPrivateCoverPlaceholder(i + base_id + 40, if (manage_continue) kindIcon(kind) else heading_icon);
+            }
+            if (manage_continue and revealed) coverBadge(i + base_id + 21, kindLabel(kind), item.home_pinned);
+            if (manage_continue and std.math.isFinite(item.percent) and item.percent > 0)
+                coverProgress(i + base_id + 60, card_w, item.percent);
         }
         const clicked = bw.clicked();
         bw.drawFocus();
@@ -1296,52 +1271,138 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         if (revealed) {
             _ = dvui.label(@src(), "{s}", .{visible_title}, .{
                 .id_extra = i + base_id + 50,
-                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
-                .font = dvui.themeGet().font_heading.withSize(theme.font_size.body),
-                .min_size_content = .{ .w = card_w, .h = 18 },
-                .max_size_content = .{ .w = card_w, .h = 18 },
-                .padding = .{ .x = 1, .y = 4, .w = 1, .h = 0 },
+                .color_text = cc.wrap(theme.colors.text_primary),
+                .font = theme.mediaTitleFont(visible_title, title_base),
+                .min_size_content = .{ .w = card_w - 4, .h = title_base.lineHeight() },
+                .max_size_content = .{ .w = card_w - 4, .h = title_base.lineHeight() },
+                .padding = .{ .x = 2, .y = 6, .w = 2, .h = 0 },
+                .margin = dvui.Rect.all(0),
             });
         } else {
             renderPrivateTitle(i + base_id + 50, card_w);
         }
-        if (revealed and manage_continue) {
-            const next_label = item.next_label[0..@min(item.next_label_len, item.next_label.len)];
-            var remaining_buf: [40]u8 = undefined;
-            const caption = if (next_label.len > 0)
-                next_label
-            else if (library_pure.remainingMinutes(library_pure.parseKind(item.kind[0..@min(item.kind_len, item.kind.len)]), item.resume_secs, item.duration_secs)) |minutes|
-                std.fmt.bufPrint(&remaining_buf, "{d} min left", .{minutes}) catch ""
-            else
-                "";
-            if (caption.len > 0) _ = dvui.label(@src(), "{s}", .{caption}, .{
-                .id_extra = i + base_id + 80,
-                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
-                .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
-                .min_size_content = .{ .w = card_w, .h = 18 },
-                .max_size_content = .{ .w = card_w, .h = 18 },
-            });
+        if (!manage_continue) continue;
+
+        // Caption ("S2 E4" / "23m left") with quiet pin and remove
+        // controls. Removing keeps resume progress.
+        var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i + base_id + 20,
+            .expand = .horizontal,
+            .min_size_content = .{ .h = 22 },
+            .padding = .{ .x = 2, .y = 4, .w = 0, .h = 2 },
+        });
+        defer meta.deinit();
+        // Pin shows when it carries state (pinned) or on hover, so the
+        // caption keeps its room on narrow cards.
+        const show_pin = item.home_pinned or hovered;
+        const next_label = item.next_label[0..@min(item.next_label_len, item.next_label.len)];
+        var remaining_buf: [40]u8 = undefined;
+        const caption = if (!revealed)
+            ""
+        else if (next_label.len > 0)
+            next_label
+        else if (library_pure.remainingMinutes(kind, item.resume_secs, item.duration_secs)) |minutes|
+            std.fmt.bufPrint(&remaining_buf, "{d}m left", .{minutes}) catch ""
+        else
+            "";
+        _ = dvui.label(@src(), "{s}", .{caption}, .{
+            .id_extra = i + base_id + 80,
+            .color_text = cc.wrap(theme.colors.text_secondary),
+            .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+            .gravity_y = 0.5,
+            .padding = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
+            .max_size_content = .{ .w = @max(0, card_w - (if (show_pin) @as(f32, 56) else 32)), .h = 22 },
+        });
+        var spacer = dvui.box(@src(), .{}, .{ .id_extra = i + base_id + 22, .expand = .horizontal });
+        spacer.deinit();
+        if (show_pin and continueAction(@src(), icons.tvg.lucide.pin, if (item.home_pinned) "Unpin from front" else "Pin to front", item.home_pinned)) {
+            library_store.setHomePinned(item.kind[0..item.kind_len], item.item_id[0..item.item_id_len], !item.home_pinned);
+            dvui.refresh(null, @src(), null);
         }
-        if (std.math.isFinite(item.percent) and item.percent > 0) {
-            var progress = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = i + base_id + 60,
-                .background = true,
-                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
-                .min_size_content = .{ .w = card_w, .h = 3 },
-                .max_size_content = .{ .w = card_w, .h = 3 },
-            });
-            var fill = dvui.box(@src(), .{}, .{
-                .id_extra = i + base_id + 70,
-                .background = true,
-                .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
-                .min_size_content = .{ .w = card_w * @as(f32, @floatCast(std.math.clamp(item.percent / 100, 0, 1))), .h = 3 },
-                .max_size_content = .{ .w = card_w * @as(f32, @floatCast(std.math.clamp(item.percent / 100, 0, 1))), .h = 3 },
-            });
-            fill.deinit();
-            progress.deinit();
+        // Always available, including while a private card is masked.
+        // This hides only the Home column and preserves resume progress.
+        if (continueAction(@src(), icons.tvg.lucide.x, "Remove from Continue · keeps progress", false)) {
+            library_store.setHomeHidden(item.kind[0..item.kind_len], item.item_id[0..item.item_id_len], true);
+            dvui.refresh(null, @src(), null);
         }
     }
     return true;
+}
+
+fn kindLabel(kind: library_pure.ContentKind) []const u8 {
+    return switch (kind) {
+        .watch, .movie => "Film",
+        .tv => "TV",
+        .anime => "Anime",
+        .podcast => "Podcast",
+        .audiobook => "Audiobook",
+        .music, .radio => "Listen",
+        .comics => "Comic",
+        .novels => "Novel",
+        .iptv => "Live",
+        .search => "Saved",
+        .other => "Video",
+    };
+}
+
+fn kindIcon(kind: library_pure.ContentKind) []const u8 {
+    return switch (kind) {
+        .watch, .movie, .other => icons.tvg.lucide.film,
+        .tv, .iptv => icons.tvg.lucide.tv,
+        .anime => icons.tvg.lucide.sparkles,
+        .podcast => icons.tvg.lucide.podcast,
+        .audiobook => icons.tvg.lucide.headphones,
+        .music => icons.tvg.lucide.music,
+        .radio => icons.tvg.lucide.radio,
+        .comics, .novels => icons.tvg.lucide.@"book-open",
+        .search => icons.tvg.lucide.search,
+    };
+}
+
+/// Glass pill in the cover's top-left: what kind of thing resumes here, with
+/// the accent fill when the card is pinned to the front.
+fn coverBadge(id: usize, label: []const u8, pinned: bool) void {
+    const cc = @import("color_compat.zig");
+    _ = dvui.label(@src(), "{s}", .{label}, .{
+        .id_extra = id,
+        .gravity_x = 0,
+        .gravity_y = 0,
+        .background = true,
+        .color_fill = cc.wrap(if (pinned) theme.colors.accent else theme.playerGlass(214)),
+        .color_text = cc.wrap(if (pinned) theme.colors.text_on_accent else theme.colors.text_primary),
+        .font = dvui.themeGet().font_heading.withSize(theme.font_size.micro),
+        .corners = dvui.CornerRect.all(theme.radius.pill),
+        .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
+        .margin = dvui.Rect.all(6),
+    });
+}
+
+/// Resume progress drawn inside the cover's bottom edge.
+fn coverProgress(id: usize, card_w: f32, percent: f64) void {
+    const cc = @import("color_compat.zig");
+    const inset: f32 = 6;
+    const track_w = @max(0, card_w - inset * 2);
+    var track = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = id,
+        .gravity_y = 1,
+        .background = true,
+        .color_fill = cc.wrap(theme.playerGlass(200)),
+        .corners = dvui.CornerRect.all(theme.radius.pill),
+        .min_size_content = .{ .w = track_w, .h = 4 },
+        .max_size_content = .{ .w = track_w, .h = 4 },
+        .margin = .{ .x = inset, .y = 0, .w = inset, .h = inset },
+    });
+    defer track.deinit();
+    const fill_w = track_w * @as(f32, @floatCast(std.math.clamp(percent / 100, 0, 1)));
+    var fill = dvui.box(@src(), .{}, .{
+        .id_extra = id + 1,
+        .background = true,
+        .color_fill = cc.wrap(theme.colors.accent),
+        .corners = dvui.CornerRect.all(theme.radius.pill),
+        .min_size_content = .{ .w = fill_w, .h = 4 },
+        .max_size_content = .{ .w = fill_w, .h = 4 },
+    });
+    fill.deinit();
 }
 
 fn renderPrivateCoverPlaceholder(id: usize, glyph: []const u8) void {
