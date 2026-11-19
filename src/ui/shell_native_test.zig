@@ -256,6 +256,15 @@ fn draw() !void {
         if (current.tab == .Comics) @import("../services/comics.zig").setNativeFixtureForTest(&textures) else @import("../services/novels.zig").setNativeFixtureForTest(if (current.novels_empty) &.{} else &textures);
         if (current.novels_empty) for (textures) |art| dvui.textureDestroyLater(art);
     }
+    if (first_frame and current.route == .browse and (current.tab == .Iptv or current.tab == .Radio or current.tab == .Drama)) {
+        var textures: [8]dvui.Texture = undefined;
+        for (&textures, 0..) |*art, i| art.* = try texture(i);
+        switch (current.tab) {
+            .Iptv => @import("../services/iptv.zig").setNativeFixtureForTest(&textures),
+            .Radio => @import("../services/radio.zig").setNativeFixtureForTest(&textures),
+            else => @import("../services/drama.zig").setNativeFixtureForTest(&textures),
+        }
+    }
     if (first_frame and (current.route == .home or (current.route == .browse and current.tab == .TMDB))) {
         state.app.tmdb.loaded_once = true;
         state.app.tmdb.view = .Search;
@@ -552,6 +561,9 @@ fn cleanup() void {
     @import("../services/anime.zig").setNativeFixtureForTest(&.{});
     @import("../services/comics.zig").setNativeFixtureForTest(&.{});
     @import("../services/novels.zig").setNativeFixtureForTest(&.{});
+    @import("../services/iptv.zig").setNativeFixtureForTest(&.{});
+    @import("../services/radio.zig").setNativeFixtureForTest(&.{});
+    @import("../services/drama.zig").setNativeFixtureForTest(&.{});
 }
 test "Native shell offline route pixel capture" {
     try resolver.verifyConnectedFeedForTest();

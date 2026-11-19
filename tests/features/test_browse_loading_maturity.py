@@ -140,3 +140,26 @@ def test_catalog_cards_use_media_card():
     assert "const row_h: f32 = 126" not in novels and "native_card_rects[index] = card.outer" in novels
     assert "components.coverArt(@src(), 54500 + index" in novels
     return "pass", "Four catalog screens use media_card begin/endCover/title with measured footers and shared row pitch"
+
+
+@test("Live TV, Radio and Drama browse captures seed offline card fixtures", "Browse")
+def test_browse_offline_card_fixtures():
+    shell = _src("src/ui/shell_native_test.zig")
+    seed = section(shell, "fn draw()", "first_frame = false;")
+    teardown = section(shell, "fn cleanup()", "\n}\n")
+    for name in ("iptv", "radio", "drama"):
+        source = _src("src/services/" + name + ".zig")
+        fixture = section(source, "pub fn setNativeFixtureForTest(textures: []const dvui.Texture) void {", "\n}\n")
+        assert 'if (!@import("builtin").is_test) @compileError(' in fixture, name
+        assert "deinitPoster" in fixture, name  # reset releases fixture textures
+        call = '@import("../services/' + name + '.zig").setNativeFixtureForTest('
+        assert call + "&textures)" in seed, name
+        assert call + "&.{})" in teardown, name
+    iptv = section(_src("src/services/iptv.zig"), "pub fn setNativeFixtureForTest(", "\n}\n")
+    # Fully-loaded window: ensureWindow must never re-query the catalog DB.
+    assert "win_base = 0;" in iptv and "total_matches = n;" in iptv
+    assert "fav_dirty = n == 0;" in iptv and "link_health.seedForTest(" in iptv
+    assert "link_health.seedForTest(" in _src("src/services/radio.zig")
+    health = section(_src("src/services/link_health.zig"), "pub fn seedForTest(", "\n}\n")
+    assert "@compileError(" in health and "probe_attempted.put(" in health
+    return "pass", "Iptv/Radio/Drama fixtures are test-only, seeded in draw and reset in cleanup; health/favourites deterministic"
