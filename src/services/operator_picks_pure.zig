@@ -226,6 +226,42 @@ fn stringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     return if (v == .string) v.string else null;
 }
 
+/// One Cinemeta catalog/meta object as a candidate; null without a valid IMDb
+/// id or a name. Shared by the search parser here and the library artwork
+/// lookup (`release_name_pure.parseMetaCandidate`).
+pub fn candidateFromObject(obj: std.json.ObjectMap, kind: Media) ?Candidate {
+    const id = stringField(obj, "imdb_id") orelse stringField(obj, "id") orelse return null;
+    if (!validImdb(id)) return null;
+    const name = stringField(obj, "name") orelse return null;
+    if (name.len == 0 or name.len > 128 or !std.unicode.utf8ValidateSlice(name)) return null;
+    var c = Candidate{ .kind = kind };
+    @memcpy(c.imdb[0..id.len], id);
+    c.imdb_len = @intCast(id.len);
+    @memcpy(c.title[0..name.len], name);
+    c.title_len = @intCast(name.len);
+    c.year = leadingYear(stringField(obj, "year") orelse stringField(obj, "releaseInfo") orelse "");
+    if (c.year == 0) c.year = leadingYear(stringField(obj, "released") orelse "");
+    if (stringField(obj, "poster")) |p| {
+        if (p.len > 0 and p.len + 4 <= c.poster.len and (std.mem.startsWith(u8, p, "https://") or std.mem.startsWith(u8, p, "http://"))) {
+            const host = "https://images.metahub.space/";
+            const jpg = std.mem.startsWith(u8, p, host) and std.mem.endsWith(u8, p, "/img");
+            @memcpy(c.poster[0..p.len], p);
+            var len = p.len;
+            if (jpg) {
+                @memcpy(c.poster[len..][0..4], ".jpg");
+                len += 4;
+            }
+            c.poster_len = @intCast(len);
+        }
+    }
+    if (stringField(obj, "imdbRating")) |r| c.rating = std.fmt.parseFloat(f32, r) catch 0;
+    if (stringField(obj, "description")) |d| {
+        const keep = @min(d.len, c.overview.len);
+        c.overview_len = @intCast(cleanText(c.overview[0..keep], d[0..keep]));
+    }
+    return c;
+}
+
 /// Read up to `out.len` catalog rows from `{"metas":[...]}`. Rows without a valid
 /// IMDb id or a name are skipped. Returns how many were written.
 pub fn parseCandidates(allocator: std.mem.Allocator, body: []const u8, kind: Media, out: []Candidate) usize {
@@ -238,37 +274,7 @@ pub fn parseCandidates(allocator: std.mem.Allocator, body: []const u8, kind: Med
     for (metas.array.items) |m| {
         if (n >= out.len) break;
         if (m != .object) continue;
-        const obj = m.object;
-        const id = stringField(obj, "imdb_id") orelse stringField(obj, "id") orelse continue;
-        if (!validImdb(id)) continue;
-        const name = stringField(obj, "name") orelse continue;
-        if (name.len == 0 or name.len > 128 or !std.unicode.utf8ValidateSlice(name)) continue;
-        var c = Candidate{ .kind = kind };
-        @memcpy(c.imdb[0..id.len], id);
-        c.imdb_len = @intCast(id.len);
-        @memcpy(c.title[0..name.len], name);
-        c.title_len = @intCast(name.len);
-        c.year = leadingYear(stringField(obj, "year") orelse stringField(obj, "releaseInfo") orelse "");
-        if (c.year == 0) c.year = leadingYear(stringField(obj, "released") orelse "");
-        if (stringField(obj, "poster")) |p| {
-            if (p.len > 0 and p.len + 4 <= c.poster.len and (std.mem.startsWith(u8, p, "https://") or std.mem.startsWith(u8, p, "http://"))) {
-                const host = "https://images.metahub.space/";
-                const jpg = std.mem.startsWith(u8, p, host) and std.mem.endsWith(u8, p, "/img");
-                @memcpy(c.poster[0..p.len], p);
-                var len = p.len;
-                if (jpg) {
-                    @memcpy(c.poster[len..][0..4], ".jpg");
-                    len += 4;
-                }
-                c.poster_len = @intCast(len);
-            }
-        }
-        if (stringField(obj, "imdbRating")) |r| c.rating = std.fmt.parseFloat(f32, r) catch 0;
-        if (stringField(obj, "description")) |d| {
-            const keep = @min(d.len, c.overview.len);
-            c.overview_len = @intCast(cleanText(c.overview[0..keep], d[0..keep]));
-        }
-        out[n] = c;
+        out[n] = candidateFromObject(m.object, kind) orelse continue;
         n += 1;
     }
     return n;

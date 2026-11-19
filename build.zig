@@ -2242,6 +2242,16 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_display_name).step);
 
+    // Release-name parsing + matching for Home's library artwork.
+    const test_release_name = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/release_name_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_release_name).step);
+
     // /api/host must expose the same version injected from build.zig.zon.
     const test_remote_host = addBoundTest(b, .{
         .root_module = b.createModule(.{
