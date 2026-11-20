@@ -21,6 +21,13 @@ fn buildSupported(b: *std.Build) void {
     b.graph.poisonCache();
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    // Debug builds still compile dvui (and the SDL it builds) optimized: a
+    // playing video drives one full UI frame per video frame, and an
+    // unoptimized dvui made 1080p HEVC stutter under `zig build run` while
+    // mpv needed only ~7 ms per frame. `-Ddebug-deps` keeps them in Debug
+    // when stepping through dvui itself.
+    const debug_deps = b.option(bool, "debug-deps", "Build dvui/SDL in Debug too (slow playback; for debugging dvui)") orelse false;
+    const dvui_optimize = @import("src/core/build_optimize_pure.zig").dependencyOptimize(optimize, debug_deps);
     for ([_][]const u8{ "src/core/repeat_pure.zig", "src/core/fmt_compat.zig", "src/core/enum_compat.zig" }, 0..) |path, i| {
         compatibility_modules[i] = b.createModule(.{ .root_source_file = b.path(path), .target = target, .optimize = optimize });
     }
@@ -84,7 +91,7 @@ fn buildSupported(b: *std.Build) void {
         native_bindings.addSystemFrameworkPath(.{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks", .{sdk}) });
     }
     native_bindings.addIncludePath(b.dependency("ghostty", .{ .target = target, .optimize = .fast, .@"emit-lib-vt" = true, .simd = false }).path("include"));
-    native_bindings.addIncludePath(b.dependency("dvui", .{ .target = target, .optimize = optimize, .backend = .sdl2 }).path("vendor/stb"));
+    native_bindings.addIncludePath(b.dependency("dvui", .{ .target = target, .optimize = dvui_optimize, .backend = .sdl2 }).path("vendor/stb"));
     // Standalone tests need only SQLite. Keep GUI/media headers out of the
     // unit gate, including on runners that provision only libsqlite3-dev.
     const sqlite_bindings: Translator = .init(b.dependency("translate_c", .{}), .{
@@ -141,7 +148,7 @@ fn buildSupported(b: *std.Build) void {
     });
     const dvui_dep = b.dependency("dvui", .{
         .target = target,
-        .optimize = optimize,
+        .optimize = dvui_optimize,
         // Opal uses SDL2. The default builds every backend and fetches unused
         // SDL3/Codeberg packages even for headless and system-SDL2 builds.
         .backend = .sdl2,
@@ -2200,6 +2207,16 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_media_ext).step);
+
+    // Dependency optimize policy (dvui optimized in Debug app builds).
+    const test_build_optimize = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/build_optimize_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_build_optimize).step);
 
     // Browser media streaming: HTTP Range parsing, content types, SRT→VTT.
     const test_remote_stream_pure = addBoundTest(b, .{
