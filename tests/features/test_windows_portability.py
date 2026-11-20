@@ -769,6 +769,10 @@ def test_mingw64_libtorrent_pinned():
             return "fail", "vendored libtorrent patch missing: " + patch
     if "! install_package" not in script or "-DBUILD_SHARED_LIBS=ON" not in script:
         return "fail", "fallback must run when the package install fails and build the DLL"
+    # Regression: a bare /mingw64 prefix made native cmake install to
+    # <drive>:\\mingw64, outside MSYS2, so the DLL check failed after a good build.
+    if 'cygpath -m "$MINGW_PREFIX"' not in script or "MSYS2_ARG_CONV_EXCL" in script:
+        return "fail", "source fallback must pass cmake the Windows path of the MINGW64 prefix"
     for wf in (".github/workflows/ci.yml", ".github/workflows/release.yml"):
         text = _read(wf)
         if "mingw-w64-x86_64-libtorrent-rasterbar\n" in text:

@@ -47,9 +47,11 @@ build_from_source() {
     # patch 2.5.9 first, which asserts on these hunks.
     git -C "$src/deps/libdatachannel" apply -p1 "$PATCH_DIR/0001-libdatachannel-include-algorithm.patch"
     git -C "$src" apply -p1 "$PATCH_DIR/0002-include-iterator.patch"
-    MSYS2_ARG_CONV_EXCL="-DCMAKE_INSTALL_PREFIX=" cmake -Wno-dev -G Ninja \
+    # Native cmake reads a bare /mingw64 as <drive>:\mingw64, outside the
+    # MSYS2 root; hand it the Windows path of the prefix.
+    cmake -Wno-dev -G Ninja \
         -S "$src" -B "$WORK_DIR/build" \
-        -DCMAKE_INSTALL_PREFIX="$MINGW_PREFIX" -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX="$(cygpath -m "$MINGW_PREFIX")" -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=ON -Dbuild_tests=OFF -Dbuild_examples=OFF -Dbuild_tools=OFF
     cmake --build "$WORK_DIR/build"
     cmake --install "$WORK_DIR/build"
@@ -58,4 +60,5 @@ build_from_source() {
 if [ "${OPAL_LIBTORRENT_FROM_SOURCE:-0}" = 1 ] || ! install_package; then
     build_from_source
 fi
-test -f "$MINGW_PREFIX/bin/libtorrent-rasterbar.dll"
+test -f "$MINGW_PREFIX/bin/libtorrent-rasterbar.dll" ||
+    { echo "libtorrent-rasterbar.dll missing from $MINGW_PREFIX/bin" >&2; exit 1; }
