@@ -267,7 +267,7 @@ pub const PairPhase = enum {
     }
 };
 
-pub const PairOutcome = enum { paired, not_found, backoff, connection_failed, rejected, failed };
+pub const PairOutcome = enum { paired, not_found, backoff, connection_failed, rejected, python_incompatible, failed };
 
 /// Classify a finished `atvremote ... pair` run from its stdout (tail) and
 /// exit code (null when it did not exit normally).
@@ -277,6 +277,7 @@ pub fn pairOutcome(output: []const u8, exit_code: ?u8) PairOutcome {
     if (has(output, "BackOffError")) return .backoff;
     if (has(output, "ConnectionFailedError")) return .connection_failed;
     if (has(output, "Pairing failed")) return .rejected;
+    if (pyatvEventLoopBroken(output)) return .python_incompatible;
     return .failed;
 }
 
@@ -287,9 +288,19 @@ pub fn pairOutcomeMessage(o: PairOutcome) []const u8 {
         .backoff => "The Apple TV is refusing pairing attempts for now. Wait a minute and retry.",
         .connection_failed => "Could not connect to the Apple TV to pair.",
         .rejected => "Pairing failed. Check the PIN shown on the TV and try again.",
+        .python_incompatible => msg_pyatv_python,
         .failed => "Pairing failed (atvremote exited with an error). pyatv 0.14 or newer is required.",
     };
 }
+
+/// pyatv 0.18.0 (latest, Nov 2026) calls asyncio.get_event_loop() at startup
+/// in atvscript and atvremote, which raises on Python 3.14. Every scan, cast
+/// and pair then exits with this traceback on stderr and finds nothing.
+pub fn pyatvEventLoopBroken(output: []const u8) bool {
+    return has(output, "There is no current event loop");
+}
+
+pub const msg_pyatv_python = "pyatv cannot run on Python 3.14 yet. Reinstall it on Python 3.13: uv tool install --python 3.13 pyatv";
 
 pub const msg_pair_timeout = "Pairing timed out. Start again and enter the PIN shown on the TV.";
 pub const msg_pair_cancelled = "Pairing cancelled";
@@ -580,4 +591,19 @@ test "carryNeedsPairing survives a rescan; markNeedsPairing sets and clears by t
     markNeedsPairing(&new, &target, false);
     try testing.expect(!new[1].needs_pairing);
     try testing.expect(new[2].needs_pairing);
+}
+
+test "pyatv on Python 3.14: event-loop crash is recognised for scan, cast and pair" {
+    // Verbatim tail of `atvscript scan` / `atvremote pair` from pyatv 0.18.0
+    // on CPython 3.14.5 (no AirPlay device was ever listed).
+    const crash =
+        \\  File "/lib/python3.14/site-packages/pyatv/scripts/atvscript.py", line 424, in main
+        \\    loop = asyncio.get_event_loop()
+        \\RuntimeError: There is no current event loop in thread 'MainThread'.
+    ;
+    try std.testing.expect(pyatvEventLoopBroken(crash));
+    try std.testing.expectEqual(PairOutcome.python_incompatible, pairOutcome(crash, 1));
+    try std.testing.expectEqualStrings(msg_pyatv_python, pairOutcomeMessage(.python_incompatible));
+    try std.testing.expect(!pyatvEventLoopBroken("Pairing failed!"));
+    try std.testing.expect(!playNeedsPairing(crash));
 }

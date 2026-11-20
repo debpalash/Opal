@@ -118,6 +118,33 @@ fn navigate(port: u16, path: []const u8, expected: []const u8) !void {
     const wanted = try std.fmt.bufPrint(&title, "{s} /{s}", .{ expected, path });
     try waitTitle(wanted);
 }
+fn waitRulesActive(port: u16) !void {
+    var path_buf: [32]u8 = undefined;
+    for (0..20) |attempt| {
+        const path = try std.fmt.bufPrint(&path_buf, "probe-{d}", .{attempt});
+        var url: [256:0]u8 = @splat(0);
+        _ = try std.fmt.bufPrint(&url, "http://127.0.0.1:{d}/{s}", .{ port, path });
+        native.api.opal_browser_navigate(&url);
+        var blocked_buf: [64]u8 = undefined;
+        const blocked = try std.fmt.bufPrint(&blocked_buf, "Image blocked /{s}", .{path});
+        var allowed_buf: [64]u8 = undefined;
+        const allowed = try std.fmt.bufPrint(&allowed_buf, "Image allowed /{s}", .{path});
+        var url_out: [2048]u8 = undefined;
+        var title: [256]u8 = undefined;
+        var err: [256]u8 = undefined;
+        var loading: c_int = 0;
+        var found: c_int = 0;
+        for (0..1500) |_| {
+            native.api.opal_browser_test_pump();
+            _ = native.api.opal_browser_poll(&url_out, url_out.len, &title, title.len, &err, err.len, &loading, &found);
+            if (loading != 0) continue;
+            const now = std.mem.sliceTo(&title, 0);
+            if (std.mem.eql(u8, now, blocked)) return;
+            if (std.mem.eql(u8, now, allowed)) break;
+        }
+    }
+    return error.Timeout;
+}
 fn waitExtension(slot: usize) !void {
     for (0..3000) |_| {
         native.api.opal_browser_test_pump();
@@ -302,8 +329,15 @@ test "Native browser protections load actual extensions and block owned ad reque
     @memcpy(path[0..directory.len], directory);
     privacy.api.opal_extension_load(1, &path);
     try waitExtension(1);
+    // Extensions without background content report Enabled as soon as the
+    // context loads; WebKit compiles their declarativeNetRequest rules after
+    // that. Wait until a probe page is blocked, then assert the owned request
+    // never reaches the server (main CI 44657610385 raced past the compile).
+    try waitRulesActive(server.socket.address.getPort());
+    const armed = fixture.images.load(.acquire);
+    try std.testing.expect(armed >= before);
     try navigate(server.socket.address.getPort(), "blocked", "Image blocked");
-    try std.testing.expectEqual(before, fixture.images.load(.acquire));
+    try std.testing.expectEqual(armed, fixture.images.load(.acquire));
     var result: [256]u8 = undefined;
     try std.testing.expectEqualStrings("active", try evaluate("document.documentElement.dataset.opalExtension", &result));
     // The popup must fit its content, rather than a fixed 440x600 panel.

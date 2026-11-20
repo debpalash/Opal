@@ -100,11 +100,21 @@ pub fn deviceCount() usize {
     return device_count;
 }
 
-/// Read a spawned scan tool's stdout to EOF into `buf`, then reap it.
-fn collect(child: *io_g.Child, buf: []u8) usize {
+/// Read a spawned scan tool's stdout to EOF into `buf`, keep the newest
+/// stderr bytes in `err_tail` (when piped), then reap it. stderr is drained
+/// second: atvscript writes only a short exit traceback there, far below the
+/// pipe buffer, so it cannot block stdout while that is read.
+fn collect(child: *io_g.Child, buf: []u8, err_tail: []u8) struct { out: usize, err: usize } {
     const n = if (child.stdout) |*stdout| io_g.readAll(stdout, buf) catch 0 else 0;
+    var err_len: usize = 0;
+    var chunk: [512]u8 = undefined;
+    if (child.stderr) |*pipe| while (true) {
+        const got = io_g.read(pipe, &chunk) catch 0;
+        if (got == 0) break;
+        err_len = pure.appendTail(err_tail, err_len, chunk[0..got]);
+    };
     _ = child.wait() catch {};
-    return n;
+    return .{ .out = n, .err = err_len };
 }
 
 /// Read a running tool's stdout, then stderr, to EOF, keeping the newest
@@ -144,7 +154,7 @@ pub fn scanDevices() void {
             var atv = io_g.Child.init(&pure.atv_scan_argv, alloc);
             atv.stdin_behavior = .Ignore;
             atv.stdout_behavior = .Pipe;
-            atv.stderr_behavior = .Ignore;
+            atv.stderr_behavior = .Pipe; // a startup traceback explains an empty scan
             const have_atv = if (atv.spawn()) |_| true else |_| false;
 
             if (!have_catt and !have_atv) {
@@ -162,13 +172,16 @@ pub fn scanDevices() void {
 
             var found: [pure.max_devices]CastDevice = undefined;
             var n: usize = 0;
+            var err_tail: [2048]u8 = undefined;
             if (have_catt) {
-                const len = collect(&catt, buf);
-                n = pure.parseCattScan(buf[0..len], &found, n);
+                const got = collect(&catt, buf, err_tail[0..0]);
+                n = pure.parseCattScan(buf[0..got.out], &found, n);
             }
+            var atv_broken = false;
             if (have_atv) {
-                const len = collect(&atv, buf);
-                n = pure.parseAtvscriptScan(alloc, buf[0..len], &found, n);
+                const got = collect(&atv, buf, &err_tail);
+                n = pure.parseAtvscriptScan(alloc, buf[0..got.out], &found, n);
+                atv_broken = pure.pyatvEventLoopBroken(err_tail[0..got.err]);
             }
 
             mutex.lock();
@@ -182,7 +195,7 @@ pub fn scanDevices() void {
                 const toast = std.fmt.bufPrint(&msg, "Found {d} cast device(s)", .{n}) catch "Devices found";
                 state.showToast(toast);
             } else {
-                state.showToast("No cast devices found");
+                state.showToast(if (atv_broken) pure.msg_pyatv_python else "No cast devices found");
             }
         }
     }.worker, .{})) |t| workers.release(t) else |_| is_scanning.store(false, .release);
@@ -265,7 +278,9 @@ pub fn castTo(device_idx: usize, url: []const u8) ?[]const u8 {
             } else true;
             if (failed and still_ours) {
                 is_casting.store(false, .release);
-                if (d.protocol == .airplay and pure.playNeedsPairing(tail[0..tail_len])) {
+                if (d.protocol == .airplay and pure.pyatvEventLoopBroken(tail[0..tail_len])) {
+                    state.showToast(pure.msg_pyatv_python);
+                } else if (d.protocol == .airplay and pure.playNeedsPairing(tail[0..tail_len])) {
                     mutex.lock();
                     pure.markNeedsPairing(devices[0..device_count], &d, true);
                     mutex.unlock();
@@ -470,7 +485,7 @@ fn pairWorker(gen: u32, d: CastDevice) void {
     var child = io_g.Child.init(argv.slice(), alloc);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe; // atvremote logs (errors included) to stdout
-    child.stderr_behavior = .Ignore;
+    child.stderr_behavior = .Pipe; // only an exit traceback; drained after stdout
     child.spawn() catch {
         mutex.lock();
         if (pair_gen == gen and pair_phase.active()) {
@@ -520,6 +535,11 @@ fn pairWorker(gen: u32, d: CastDevice) void {
             }
         }
     }
+    if (child.stderr) |*se| while (true) {
+        const n = io_g.read(se, &chunk) catch 0;
+        if (n == 0) break;
+        out_len = pure.appendTail(&out, out_len, chunk[0..n]);
+    };
     const term = child.wait() catch null;
     const code: ?u8 = if (term) |t| switch (t) {
         .exited => |c| c,
