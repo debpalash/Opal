@@ -12,8 +12,10 @@ match the tag exactly.
 
 ## Unreleased
 
-## v0.9.7 — 2026-11-20
+## v0.9.7 — 2026-11-21
 
+- **Private-network fetches stay closed.** Downloads and scrapes requested through the web API need host-admin rights and refuse loopback, LAN, and link-local targets, including after a redirect. A hostname that resolves to a private address is refused. Playlist and remote-load URLs are http(s) or magnet only, and voice model downloads are checked against pinned hashes. Listening on the local network over plain HTTP warns that the session cookie travels in the clear.
+- **Smoother torrent playback.** Torrent read-ahead no longer asks libtorrent for its full status while holding the player lock, so the UI stops stalling during streams.
 - **One card everywhere.** Movies & TV, Home, Anime, Asian Drama, Live TV, Radio, Comics, Novels, Visual Novels, podcasts, music, Jellyfin, Plex and YouTube share the same card, so titles, scores and actions line up and footers no longer clip. Novels move to a poster grid. Home's Continue rail is tighter and shows time left; blurring it until hover is now an opt-in setting.
 - **Artwork for files you play.** Local files with release-style names get a clean title, an "S2 E4" label and a poster. Only the parsed title and year are looked up, never file paths. Accented titles match plain file names, so "Shōgun" finds `Shogun.2024`.
 - **Cast with AirPlay.** Apple TVs and AirPlay receivers appear beside Chromecasts in the web UI, with Pair and PIN entry for devices that need it (requires pyatv 0.14 or newer; pyatv does not run on Python 3.14 yet, and Opal says so). Chromecast scanning and Stop now work reliably.
