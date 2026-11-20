@@ -645,6 +645,11 @@ pub fn markUiThread() void {
     ui_thread_known.store(true, .release);
 }
 
+/// True on the thread that marked itself the UI thread (`markUiThread`).
+pub fn isUiThread() bool {
+    return onUiThread();
+}
+
 fn onUiThread() bool {
     if (!ui_thread_known.load(.acquire)) return false;
     return std.Thread.getCurrentId() == ui_thread_id.load(.acquire);

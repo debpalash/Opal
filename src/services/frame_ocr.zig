@@ -18,6 +18,7 @@ const logs = @import("../core/logs.zig");
 const player = @import("../player/player.zig");
 const sync = @import("../core/sync.zig");
 const alloc = @import("../core/alloc.zig");
+const c = @import("../core/c.zig");
 
 // Native ONNX Runtime OCR via the same C wrapper comics.zig uses.
 // Gated by the `-Docr=true` build flag; empty namespace when OCR is off so
@@ -86,6 +87,12 @@ pub fn ocrCurrentFrame(out_buf: []u8) usize {
     if (state.app.active_player_idx >= state.app.players.items.len) return 0;
     const p = state.app.players.items[state.app.active_player_idx];
 
+    // The GPU video path (player/gpu_video.zig) keeps frames in GPU
+    // textures; ask mpv for the decoded frame instead.
+    if (p.pixels.len == 0 and p.gpu != null) {
+        if (!ensureOcrInit()) return 0;
+        return ocrViaScreenshot(p.mpv_ctx, out_buf);
+    }
     // Pixel buffer must be allocated/ready (headless has none).
     if (p.pixels.len == 0) return 0;
     if (!ensureOcrInit()) return 0;
@@ -125,8 +132,56 @@ pub fn ocrCurrentFrame(out_buf: []u8) usize {
 
     // Opaque video frame: PMA bytes == straight RGBA bytes. Pass the SNAPSHOT
     // (not the live p.pixels) so a concurrent render/realloc can't corrupt us.
-    const rgba_ptr: [*]const u8 = buf.ptr;
+    return recognize(buf.ptr, w, h, out_buf);
+}
 
+/// GPU video path: mpv's `screenshot-raw video rgba` returns the decoded frame
+/// (subtitles/OSD excluded) without touching the video output.
+fn ocrViaScreenshot(ctx: *c.mpv.mpv_handle, out_buf: []u8) usize {
+    var args = [_][*c]const u8{ "screenshot-raw", "video", "rgba", null };
+    var result: c.mpv.mpv_node = undefined;
+    if (c.mpv.mpv_command_ret(ctx, @ptrCast(&args), &result) < 0) return 0;
+    defer c.mpv.mpv_free_node_contents(&result);
+    if (result.format != c.mpv.MPV_FORMAT_NODE_MAP) return 0;
+    const map = result.u.list orelse return 0;
+    var w: i64 = 0;
+    var h: i64 = 0;
+    var stride: i64 = 0;
+    var data: ?*c.mpv.mpv_byte_array = null;
+    for (0..@intCast(map.*.num)) |i| {
+        const key = std.mem.span(map.*.keys[i]);
+        const value = map.*.values[i];
+        if (value.format == c.mpv.MPV_FORMAT_INT64) {
+            if (std.mem.eql(u8, key, "w")) w = value.u.int64;
+            if (std.mem.eql(u8, key, "h")) h = value.u.int64;
+            if (std.mem.eql(u8, key, "stride")) stride = value.u.int64;
+        } else if (value.format == c.mpv.MPV_FORMAT_BYTE_ARRAY and std.mem.eql(u8, key, "data")) {
+            data = value.u.ba;
+        }
+    }
+    const ba = data orelse return 0;
+    if (w <= 0 or h <= 0 or w > 8192 or h > 8192 or stride < w * 4) return 0;
+    const row: usize = @intCast(w * 4);
+    const rows: usize = @intCast(h);
+    const pitch: usize = @intCast(stride);
+    if (ba.size < pitch * (rows - 1) + row) return 0;
+    const src: [*]const u8 = @ptrCast(ba.data orelse return 0);
+
+    scratch_mutex.lock();
+    defer scratch_mutex.unlock();
+    const byte_len = row * rows;
+    if (scratch == null or scratch.?.len < byte_len) {
+        if (scratch) |old| alloc.allocator.free(old);
+        scratch = null;
+        scratch = alloc.allocator.alloc(u8, byte_len) catch return 0;
+    }
+    const buf = scratch.?;
+    for (0..rows) |y| @memcpy(buf[y * row ..][0..row], src[y * pitch ..][0..row]);
+    return recognize(buf.ptr, @intCast(w), @intCast(h), out_buf);
+}
+
+/// OCR a tightly packed RGBA frame into `out_buf`. Caller holds scratch_mutex.
+fn recognize(rgba_ptr: [*]const u8, w: c_int, h: c_int, out_buf: []u8) usize {
     // OCR call is gated by `has_ocr` so the empty-struct stub (`ocr_c={}`)
     // built when -Docr=false is never type-checked.
     if (!has_ocr) return 0;

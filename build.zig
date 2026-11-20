@@ -2218,6 +2218,16 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_build_optimize).step);
 
+    // GPU video policy and render-slot rotation (player/gpu_video_pure.zig).
+    const test_gpu_video = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/gpu_video_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_gpu_video).step);
+
     // Browser media streaming: HTTP Range parsing, content types, SRT→VTT.
     const test_remote_stream_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
