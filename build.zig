@@ -2228,6 +2228,17 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_gpu_video).step);
 
+    // Download safety: file-list malware verdict, persistent info-hash
+    // blocklist, quarantine / Mark-of-the-Web values (torrent_guard.zig).
+    const test_download_safety_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/download_safety_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_download_safety_pure).step);
+
     // Browser media streaming: HTTP Range parsing, content types, SRT→VTT.
     const test_remote_stream_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{

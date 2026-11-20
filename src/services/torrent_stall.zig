@@ -137,6 +137,10 @@ pub fn tick() void {
     const ses = state.torrentSession() orelse return;
     const now_s = io_g.timestamp();
 
+    // Same thread, same cadence: stop and blocklist torrents whose file list
+    // holds an executable, and mark finished files as downloaded.
+    @import("torrent_guard.zig").tick(ses, &queueToast);
+
     // Retire slots whose torrent has been removed (ids are never reused, so a
     // dead id can be dropped for good).
     for (ids, 0..) |sid, i| {
