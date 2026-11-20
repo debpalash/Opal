@@ -130,7 +130,13 @@ pub fn matchCounts(name: []const u8, query: []const u8) Counts {
                 hi = p + 1;
             }
         } else {
-            if (std.mem.indexOf(u8, hay, word) != null) match_words += 1;
+            if (std.mem.indexOf(u8, hay, word) != null) {
+                match_words += 1;
+            } else if (word.len >= 4 and spansAdjacentWords(hay, word)) {
+                // "madmen" names "Mad Men": a typed compound equals a run of
+                // whole adjacent title words once spacing is ignored.
+                match_words += 1;
+            }
         }
     }
 
@@ -167,6 +173,7 @@ pub fn titlePenalty(name: []const u8, query: []const u8) u32 {
     const q = normalizedTitle(query, &qb);
     if (q.len == 0) return 256;
     if (std.mem.eql(u8, n, q)) return 0;
+    if (sameTitleIgnoringSpacing(name, query)) return 0;
     var offset: usize = 0;
     while (std.mem.indexOfPos(u8, n, offset, q)) |at| {
         const end = at + q.len;
@@ -189,6 +196,61 @@ pub fn titlePenalty(name: []const u8, query: []const u8) u32 {
     }
     return 192;
 }
+/// Lowercase letters/digits (and non-ASCII bytes) with every space and
+/// punctuation mark dropped: "Mad Men" and "madmen" compact to the same text.
+pub fn compactTitle(text: []const u8, out: []u8) []const u8 {
+    var n: usize = 0;
+    for (text) |byte| {
+        if (n == out.len) break;
+        if (std.ascii.isAlphanumeric(byte)) {
+            out[n] = std.ascii.toLower(byte);
+            n += 1;
+        } else if (byte >= 128) {
+            out[n] = byte;
+            n += 1;
+        }
+    }
+    return out[0..n];
+}
+
+/// True when `word` equals two or more consecutive whole words of `hay`
+/// joined without spaces ("madmen" in "mad men"; never "dmen").
+fn spansAdjacentWords(hay: []const u8, word: []const u8) bool {
+    var starts = std.mem.tokenizeAny(u8, hay, " .-_:'");
+    while (starts.next()) |first| {
+        if (!std.mem.startsWith(u8, word, first)) continue;
+        var joined = first.len;
+        var rest = std.mem.tokenizeAny(u8, hay[starts.index..], " .-_:'");
+        while (joined < word.len) {
+            const next = rest.next() orelse break;
+            if (!std.mem.startsWith(u8, word[joined..], next)) break;
+            joined += next.len;
+        }
+        if (joined == word.len and joined > first.len) return true;
+    }
+    return false;
+}
+
+/// True when two titles differ only in spacing, case or punctuation.
+pub fn sameTitleIgnoringSpacing(a: []const u8, b: []const u8) bool {
+    var ab: [256]u8 = undefined;
+    var bb: [256]u8 = undefined;
+    const ca = compactTitle(a, &ab);
+    return ca.len > 0 and std.mem.eql(u8, ca, compactTitle(b, &bb));
+}
+
+/// Score credit for a movie/show catalog title that its provider ranks among
+/// its top three, rates well and has artwork. Applied only among equal title
+/// matches, it puts a known work ("Mad Men") ahead of a same-named niche row
+/// (an untitled-cover manga) without ever outranking a playable local file.
+pub fn catalogProminence(provider_rank: u16, rating: f32, has_poster: bool) u32 {
+    if (provider_rank == 0 or provider_rank > 3 or !has_poster) return 0;
+    if (rating >= 6.5) return 20;
+    // Cinemeta search rows carry no rating; its search is popularity-ordered,
+    // so only the first title of its kind counts as known.
+    return if (rating == 0 and provider_rank == 1) 20 else 0;
+}
+
 /// A provider's ordered catalog results break otherwise-equal relevance ties.
 /// Rank is one-based and only compared after title and source/quality signals.
 pub fn relevanceScore(name: []const u8, query: []const u8, pct: u8, secondary: u32, provider_rank: u16) u32 {
@@ -719,4 +781,36 @@ test "provider ranking breaks title ties without overriding title relevance" {
 test "normalized exact titles survive the token gate" {
     try std.testing.expectEqual(@as(u8, 100), computeMatch(.{ .name = "Spider Man", .source = .jellyfin }, "Spider-Man", "auto").match_pct);
     try std.testing.expectEqual(@as(u8, 100), computeMatch(.{ .name = "It", .source = .jellyfin }, "it", "auto").match_pct);
+}
+
+test "Mad Men regression: a typed compound matches the spaced title exactly" {
+    try std.testing.expect(sameTitleIgnoringSpacing("Mad Men", "madmen"));
+    try std.testing.expect(sameTitleIgnoringSpacing("Spider-Man", "spiderman"));
+    try std.testing.expect(!sameTitleIgnoringSpacing("Mad Men", "madmen 2"));
+    try std.testing.expect(!sameTitleIgnoringSpacing("", ""));
+    try std.testing.expectEqual(@as(u32, 0), titlePenalty("Mad Men", "madmen"));
+    const counts = matchCounts("Mad Men", "madmen");
+    try std.testing.expectEqual(@as(u32, 1), counts.match_words);
+    // Only whole adjacent words join: "dmen" straddles a word boundary.
+    try std.testing.expectEqual(@as(u32, 0), matchCounts("Mad Men", "dmen").match_words);
+    try std.testing.expectEqual(@as(u32, 2), matchCounts("Mad Men Season 1", "madmen season").match_words);
+    try std.testing.expectEqual(@as(u32, 1), matchCounts("Spider-Man: No Way Home", "spiderman").match_words);
+}
+
+test "Mad Men regression: a prominent catalog title beats a same-named niche row" {
+    try std.testing.expectEqual(@as(u32, 20), catalogProminence(1, 8.7, true));
+    try std.testing.expectEqual(@as(u32, 0), catalogProminence(4, 8.7, true));
+    try std.testing.expectEqual(@as(u32, 0), catalogProminence(1, 8.7, false));
+    try std.testing.expectEqual(@as(u32, 0), catalogProminence(1, 5.0, true));
+    try std.testing.expectEqual(@as(u32, 0), catalogProminence(0, 9.0, true));
+    // Unrated (Cinemeta search): only the provider's first title of its kind.
+    try std.testing.expectEqual(@as(u32, 20), catalogProminence(1, 0, true));
+    try std.testing.expectEqual(@as(u32, 0), catalogProminence(2, 0, true));
+    // Resolver weights: comics 14 vs catalog 30, both unknown quality (15).
+    const comic = relevanceScore("Madmen", "madmen", 100, 14 + 15, 0);
+    const show = relevanceScore("Mad Men", "madmen", 100, 30 + 15 - catalogProminence(1, 8.7, true), 1);
+    try std.testing.expect(show < comic);
+    // A local file (weight 0) still outranks the prominent catalog title.
+    const local = relevanceScore("Mad Men", "madmen", 100, 0 + 15, 0);
+    try std.testing.expect(local < show);
 }

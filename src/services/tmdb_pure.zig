@@ -618,3 +618,55 @@ test "TV detail allocation proportional without lowering payload ceiling" {
     try std.testing.expectEqual(@as(?usize, null), detailBodyAllocationSize(DETAIL_BODY_LIMIT + 1));
     try std.testing.expectEqual(@as(?usize, null), detailBodyAllocationSize(0));
 }
+
+/// Catalog search merge when keyed TMDB results miss the typed title. TMDB
+/// matches whole words, so "madmen" never finds "Mad Men"; Cinemeta's search
+/// is fuzzy and popularity-ordered. Its rows come first, then TMDB rows that
+/// are not the same work (same kind and TMDB id). Returns rows written.
+pub fn mergeCatalogFallback(comptime T: type, fallback: []const T, primary: []const T, out: []T) usize {
+    var n: usize = 0;
+    for (fallback) |item| {
+        if (n == out.len) return n;
+        out[n] = item;
+        n += 1;
+    }
+    for (primary) |item| {
+        if (n == out.len) return n;
+        var duplicate = false;
+        for (out[0..n]) |seen| {
+            if (seen.id != 0 and seen.id == item.id and
+                std.mem.eql(u8, seen.media_type[0..seen.media_type_len], item.media_type[0..item.media_type_len]))
+            {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) continue;
+        out[n] = item;
+        n += 1;
+    }
+    return n;
+}
+
+test "Mad Men regression: fuzzy fallback rows lead and duplicates collapse" {
+    const Row = struct { id: i32, media_type: [8]u8, media_type_len: usize, name: []const u8 };
+    const tv = [8]u8{ 't', 'v', 0, 0, 0, 0, 0, 0 };
+    const movie = [8]u8{ 'm', 'o', 'v', 'i', 'e', 0, 0, 0 };
+    const cinemeta = [_]Row{
+        .{ .id = 1104, .media_type = tv, .media_type_len = 2, .name = "Mad Men" },
+        .{ .id = 34245, .media_type = tv, .media_type_len = 2, .name = "Bahloul, the Wisest of the Madmen" },
+    };
+    const tmdb = [_]Row{
+        .{ .id = 28426, .media_type = movie, .media_type_len = 5, .name = "The Madmen of Mandoras" },
+        .{ .id = 34245, .media_type = tv, .media_type_len = 2, .name = "Bahloul, the Wisest of the Madmen" },
+        .{ .id = 1104, .media_type = movie, .media_type_len = 5, .name = "same id, other kind" },
+    };
+    var out: [8]Row = undefined;
+    const n = mergeCatalogFallback(Row, &cinemeta, &tmdb, &out);
+    try std.testing.expectEqual(@as(usize, 4), n);
+    try std.testing.expectEqualStrings("Mad Men", out[0].name);
+    try std.testing.expectEqualStrings("The Madmen of Mandoras", out[2].name);
+    try std.testing.expectEqualStrings("same id, other kind", out[3].name);
+    var small: [1]Row = undefined;
+    try std.testing.expectEqual(@as(usize, 1), mergeCatalogFallback(Row, &cinemeta, &tmdb, &small));
+}

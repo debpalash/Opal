@@ -441,3 +441,22 @@ def test_audio_live_source_abundance():
     if failed:
         return "fail", f"Incomplete: {', '.join(failed)}"
     return "pass", "Podcast fan-out tolerates a failed provider; fyyd, Live Music Archive and 9 Live TV catalogs wired"
+
+
+@test("A show typed without its space is found, ranked first and featured", "Search")
+def test_compound_title_search():
+    # "madmen" returned no Mad Men: TMDB matches whole words, the scorer dropped
+    # "Mad Men" (0 matching words), and an exact-named coverless manga took the
+    # hero with an empty frame (2026-11-21).
+    api = _src("src/services/tmdb_api.zig")
+    resolver = _src("src/services/resolver.zig")
+    search = _src("src/services/search.zig")
+    components = _src("src/ui/components.zig")
+    catalog = api[api.index("pub fn searchCatalogInto("):api.index("fn hasTitle(")]
+    assert "!hasTitle(staged.items, query)" in catalog and "mergeCatalogFallback(state.TmdbItem, fuzzy.items" in catalog
+    assert "sameTitleIgnoringSpacing" in api
+    assert "catalogProminence(item.catalog_rank, item.rating, item.poster_url_len > 0)" in resolver
+    assert "!galleryCoverFailed(selected.identity)" in search
+    art = components[components.index("pub fn galleryCoverArt("):components.index("/// Fill the current parent")]
+    assert art.index("min_size_content = .{ .w = width, .h = height }") < art.rindex("renderCoverSlot("), "placeholder must sit in the cover's box"
+    return "pass", "Cinemeta fallback when TMDB misses the typed title; spacing-insensitive match; prominence; no empty hero"

@@ -75,7 +75,34 @@ pub fn retainSelection(identities: []const u64, selected: u64) ?usize {
 pub fn shouldFeature(query: []const u8, title: []const u8, has_art: bool, selected: bool) bool {
     if (selected) return true;
     if (!has_art) return false;
-    return std.ascii.eqlIgnoreCase(std.mem.trim(u8, query, " \t\r\n"), std.mem.trim(u8, title, " \t\r\n"));
+    return sameTitle(query, title);
+}
+
+/// Case, spacing and punctuation never decide a match: "madmen" is "Mad Men".
+/// (Mirrors services/resolver_rank.sameTitleIgnoringSpacing; this test module
+/// cannot import across src/ui.)
+fn sameTitle(a: []const u8, b: []const u8) bool {
+    var ia: usize = 0;
+    var ib: usize = 0;
+    var any = false;
+    while (true) {
+        while (ia < a.len and !(std.ascii.isAlphanumeric(a[ia]) or a[ia] >= 128)) ia += 1;
+        while (ib < b.len and !(std.ascii.isAlphanumeric(b[ib]) or b[ib] >= 128)) ib += 1;
+        if (ia == a.len or ib == b.len) return any and ia == a.len and ib == b.len;
+        if (std.ascii.toLower(a[ia]) != std.ascii.toLower(b[ib])) return false;
+        any = true;
+        ia += 1;
+        ib += 1;
+    }
+}
+
+test "Mad Men regression: the hero features the show typed without its space" {
+    try std.testing.expect(shouldFeature("madmen", "Mad Men", true, false));
+    try std.testing.expect(shouldFeature(" Breaking Bad ", "breaking bad", true, false));
+    try std.testing.expect(!shouldFeature("madmen", "Mad Men", false, false));
+    try std.testing.expect(!shouldFeature("madmen", "Mad Men 2", true, false));
+    try std.testing.expect(!shouldFeature("", "", true, false));
+    try std.testing.expect(shouldFeature("x", "y", false, true));
 }
 test "search cards retain meaningful aspect ratios at narrow and wide widths" {
     for ([_]f32{ 320, 640, 1440 }) |width| {

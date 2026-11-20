@@ -1789,6 +1789,12 @@ var gallery_covers: [196]GalleryCover = @splat(.{});
 var gallery_cover_clock: u64 = 0;
 var gallery_backdrop: components.CoverSlot = .{};
 
+/// True when this group's cover was fetched and failed (lookup only).
+fn galleryCoverFailed(identity: u64) bool {
+    for (&gallery_covers) |*entry| if (entry.identity == identity) return entry.slot.failed;
+    return false;
+}
+
 fn galleryCover(identity: u64) ?*components.CoverSlot {
     gallery_cover_clock +%= 1;
     var oldest: ?usize = null;
@@ -1997,7 +2003,10 @@ fn renderContentGallery(pending: *?ResultAction) void {
     // A raw release has no dependable feature artwork. It stays in the compact
     // source comparison until a matching catalog or library record arrives.
     const featured_item = &rows[selected.representative];
-    if (selected.category != .releases and gallery_layout.shouldFeature(view_cache.query[0..view_cache.query_len], featured_item.name[0..featured_item.name_len], featured_item.poster_url_len > 0 or featured_item.backdrop_url_len > 0, gallery_selected_manually)) renderGalleryHero(selected, width, pending) else @import("search_preview.zig").stop();
+    // A poster that failed to load is no artwork: never feature an empty frame.
+    const feature_art = featured_item.backdrop_url_len > 0 or
+        (featured_item.poster_url_len > 0 and !galleryCoverFailed(selected.identity));
+    if (selected.category != .releases and gallery_layout.shouldFeature(view_cache.query[0..view_cache.query_len], featured_item.name[0..featured_item.name_len], feature_art, gallery_selected_manually)) renderGalleryHero(selected, width, pending) else @import("search_preview.zig").stop();
     if (gallery_show_sources) {
         renderResultGroupHeading("Available sources", 94500);
         var source_indexes: [search_content.MAX_ROWS]u16 = undefined;
