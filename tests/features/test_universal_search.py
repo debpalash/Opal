@@ -395,16 +395,19 @@ def test_compact_release_two_lines():
     return 'pass', 'Two single-line labels; health/date inline, no text hover panels (GUI boundary)'
 
 
-@test("Poster cards top-align titles, show NR, and sidebar skips active focus ring", "Search")
+@test("Poster cards top-align titles, badge only real ratings, and sidebar skips active focus ring", "Search")
 def test_poster_card_polish():
     tmdb = _src('src/services/tmdb.zig')
-    card = tmdb.split('// Keep the clickable title within its footer budget', 1)[1].split('// Year', 1)[0]
-    assert '.gravity_y = 0 }' in card and '.gravity_y = 0.5 }' not in card, 'titles must be top-aligned'
-    assert '"NR"' in tmdb, 'unrated cards keep the rating slot'
+    mc = _src('src/ui/media_card.zig')
+    title_fn = mc.split('pub fn title(', 1)[1].split('\npub fn ', 1)[0]
+    assert '.gravity_y = 0, .padding' in title_fn and '.gravity_y = 0.5' not in title_fn, 'titles must be top-aligned'
+    card = tmdb.split('pub fn renderPosterCard(', 1)[1].split('\npub fn ', 1)[0]
+    assert 'media_card.title(title' in card, 'poster cards use the shared title'
+    assert 'if (item.rating > 0) media_card.ratingBadge(' in card, 'a missing vote must not render as a score badge'
     shell = _src('src/ui/shell.zig')
     assert 'if (!active) button.drawFocus();' in shell, 'active sidebar row must not draw focus ring'
     assert 'omnibox_prev_route == .search' in shell, 'stale query must clear when returning to browse'
-    return 'pass', 'Card title/NR + sidebar focus + stale-query clear present (GUI boundary)'
+    return 'pass', 'Card title/rating badge + sidebar focus + stale-query clear present (GUI boundary)'
 
 
 @test("Universal audio/live sources: resilient podcast fan-out and wider catalogs", "Search")

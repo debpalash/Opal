@@ -6,6 +6,7 @@ const state = @import("../core/state.zig");
 const anime_pure = @import("anime_pure.zig");
 const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
+const media_card = @import("../ui/media_card.zig");
 const icons = @import("icons");
 const logs = @import("../core/logs.zig");
 const player = @import("../player/player.zig");
@@ -127,10 +128,18 @@ fn usesLists() bool {
 /// User-cyclable card width (compact ↔ large), clamped 110–320 in the +/- wires.
 var card_w_pref: f32 = 150;
 
-/// Grid card footer height (title + meta rows) below the poster. Referenced
-/// by renderCard's uniform min==max sizing AND the grid's virtualization row
-/// pitch — keep single-sourced.
-const GRID_CARD_EXTRA_H: f32 = 92;
+/// Grid card footer: two-line title, one airtime/synopsis line, and the
+/// episodes + Synopsis/More row. Measured by media_card from the live fonts;
+/// renderCard's uniform min==max sizing, the skeleton tiles AND the grid's
+/// virtualization row pitch all read it — keep single-sourced.
+const GRID_FOOTER: media_card.Footer = .{ .title_lines = 2, .meta_lines = 1, .action_row = true };
+/// Continue card: title + "Continue E{n}/{total}" line.
+const CONTINUE_FOOTER: media_card.Footer = .{ .title_lines = 1, .meta_lines = 1 };
+
+/// Responsive columns for the user-cyclable card width (shared card margins).
+fn gridColumns(avail_w: f32) media_card.pure.Columns {
+    return media_card.pure.columns(avail_w, card_w_pref, media_card.pure.MARGIN, 1, 64);
+}
 
 // ── Mode dispatch (Trending | Seasonal | Calendar | Search | My List) ──
 // Every grid mode reuses results[]/renderGallery; only the fetch differs. A
@@ -3674,12 +3683,12 @@ fn renderContinueGrid() void {
 
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
-    const card_target_w: f32 = card_w_pref;
-    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / card_target_w)));
-    const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
+    const grid = gridColumns(avail_w);
+    const cols: usize = grid.count;
+    const card_w: f32 = @max(100, grid.card_w);
     const total = state.app.anime.result_count;
     if (total == 0) {
-        components.coverSkeletonGrid(@src(), 68000, cols, card_w, card_w * 1.45, GRID_CARD_EXTRA_H + 6, 3);
+        media_card.skeletonGrid(@src(), 68000, cols, card_w, .poster, CONTINUE_FOOTER, 3);
         return;
     }
 
@@ -3697,143 +3706,53 @@ fn renderContinueGrid() void {
 
 fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
     if (item.title_len == 0) return;
-    const title = item.title[0..item.title_len];
-    const hue: u32 = @as(u32, @intCast(idx * 7 + 42)) *% 2654435761;
-    const h1: u8 = @truncate(hue & 0xFF);
-    const h2: u8 = @truncate((hue >> 8) & 0xFF);
-    const poster_h: f32 = card_w * 1.45;
+    const title = safeUtf8(item.title[0..item.title_len]);
 
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = idx + 30000,
-        .min_size_content = .{ .w = card_w, .h = 10 },
-        .max_size_content = .{ .w = card_w, .h = poster_h + 70 },
-        .background = true,
-        .color_fill = .{ .color = theme.colors.bg_surface },
-        .corners = dvui.CornerRect.all(6),
-        .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
-        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
-    });
-    defer card.deinit();
+    var card = media_card.begin(@src(), .{ .id = idx + 30000, .width = card_w, .aspect = .poster, .footer = CONTINUE_FOOTER });
+    defer card.end();
 
-    {
-        var bw: dvui.ButtonWidget = undefined;
-        bw.init(@src(), .{}, .{
-            .id_extra = idx + 30100,
-            .background = true,
-            .color_fill = .{ .color = dvui.Color{ .r = 20 + h1 / 6, .g = 25 + h2 / 8, .b = 35 + h1 / 5, .a = 255 } },
-            .corners = .{ .tl = .theme(theme.radius.md), .tr = .theme(theme.radius.md), .br = .theme(0), .bl = .theme(0) },
-            .min_size_content = .{ .w = card_w, .h = poster_h },
-            .max_size_content = .{ .w = card_w, .h = poster_h },
-            .padding = dvui.Rect.all(0),
-        });
-        bw.processEvents();
-        bw.drawBackground();
-
-        // Upload pixels → texture once ready (same lifecycle as AnimeResult).
-        _ = poster.uploadIfReady(&item.poster_pixels, item.poster_w, item.poster_h, &item.poster_tex);
-
-        {
-            var stack = dvui.overlay(@src(), .{ .id_extra = idx + 30140, .expand = .both });
-            defer stack.deinit();
-
-            if (item.poster_tex) |*tex| {
-                _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                    .id_extra = idx + 30150,
-                    .expand = .both,
-                    .corners = dvui.CornerRect.all(6),
-                });
-            } else {
-                // Failure-latch (mirrors TmdbItem/JfItem): stop re-spawning a
-                // poster worker every frame for a dead/undecodable URL.
-                // Routed through anime_pure.posterAction so the shipped decision is the
-                // tested one (see its regression test: a retired texture must not latch).
-                switch (anime_pure.posterAction(.{
-                    .fetching = item.poster_fetching,
-                    .attempted = item.poster_attempted,
-                    .failed = item.poster_failed,
-                    .has_pixels = item.poster_pixels != null,
-                    .has_tex = item.poster_tex != null,
-                    .has_url = item.poster_url_len > 0,
-                })) {
-                    .mark_attempted => item.poster_attempted = true,
-                    .latch_failed => item.poster_failed = true,
-                    .fetch => {
-                        poster.fetchAsync(item.poster_url[0..item.poster_url_len], &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
-                        if (item.poster_fetching) item.poster_attempted = true;
-                    },
-                    .none => {},
-                }
-                if (!item.poster_failed and item.poster_url_len > 0)
-                    components.coverSkeleton(@src(), idx + 30150, 6)
-                else
-                    dvui.icon(@src(), "", icons.tvg.lucide.play, .{}, .{
-                        .id_extra = idx + 30150,
-                        .gravity_x = 0.5,
-                        .gravity_y = 0.5,
-                        .color_text = .{ .color = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 } },
-                        .expand = .both,
-                    });
-            }
-
-            // "E{last}/{total}" progress badge, bottom-left.
-            {
-                var badge: [24]u8 = undefined;
-                const bs = @import("opal-fmt").bufPrintZ(&badge, "E{d}/{d}", .{ item.last_episode, item.total_episodes }) catch "";
-                if (bs.len > 0) {
-                    var bb = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                        .id_extra = idx + 30160,
-                        .gravity_x = 0.02,
-                        .gravity_y = 0.98,
-                        .background = true,
-                        .color_fill = .{ .color = theme.playerGlass(220) },
-                        .corners = dvui.CornerRect.all(4),
-                        .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
-                    });
-                    defer bb.deinit();
-                    _ = dvui.label(@src(), "{s}", .{bs}, .{ .id_extra = idx + 30161, .color_text = .{ .color = theme.colors.accent } });
-                }
-            }
-        }
-
-        const clicked = bw.clicked();
-        bw.drawFocus();
-        bw.deinit();
-        if (clicked) jumpToAnime(item.mal_id[0..item.mal_id_len]);
-    }
-
-    // Info column.
-    {
-        var info = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 30200,
-            .expand = .horizontal,
-            .padding = .{ .x = 6, .y = 2, .w = 6, .h = 0 },
-        });
-        defer info.deinit();
-
-        if (dvui.button(@src(), safeUtf8(title), .{}, .{
-            .id_extra = idx + 30500,
-            .expand = .horizontal,
-            .color_text = .{ .color = theme.colors.text_primary },
-            .color_fill = .{ .color = theme.transparent },
-            .color_fill_hover = .{ .color = theme.colors.bg_hover },
-            .color_fill_press = .{ .color = theme.colors.bg_elevated },
-            .padding = dvui.Rect.all(0),
+    // Upload pixels → texture once ready (same lifecycle as AnimeResult).
+    _ = poster.uploadIfReady(&item.poster_pixels, item.poster_w, item.poster_h, &item.poster_tex);
+    if (item.poster_tex == null) {
+        // Failure-latch (mirrors TmdbItem/JfItem): stop re-spawning a
+        // poster worker every frame for a dead/undecodable URL.
+        // Routed through anime_pure.posterAction so the shipped decision is the
+        // tested one (see its regression test: a retired texture must not latch).
+        switch (anime_pure.posterAction(.{
+            .fetching = item.poster_fetching,
+            .attempted = item.poster_attempted,
+            .failed = item.poster_failed,
+            .has_pixels = item.poster_pixels != null,
+            .has_tex = item.poster_tex != null,
+            .has_url = item.poster_url_len > 0,
         })) {
-            jumpToAnime(item.mal_id[0..item.mal_id_len]);
-        }
-
-        // "Continue E{last+1}/{total}" resume line.
-        {
-            const next_ep: u32 = @as(u32, item.last_episode) + 1;
-            var rb: [40]u8 = undefined;
-            const rs = @import("opal-fmt").bufPrintZ(&rb, "Continue E{d}/{d}", .{ next_ep, item.total_episodes }) catch "Continue";
-            _ = dvui.label(@src(), "{s}", .{rs}, .{
-                .id_extra = idx + 30600,
-                .color_text = .{ .color = theme.colors.text_secondary },
-                .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
-            });
+            .mark_attempted => item.poster_attempted = true,
+            .latch_failed => item.poster_failed = true,
+            .fetch => {
+                poster.fetchAsync(item.poster_url[0..item.poster_url_len], &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
+                if (item.poster_fetching) item.poster_attempted = true;
+            },
+            .none => {},
         }
     }
+    media_card.art(item.poster_tex, .{
+        .loading = !item.poster_failed and item.poster_url_len > 0,
+        .placeholder = icons.tvg.lucide.play,
+    });
+
+    // "E{last}/{total}" progress badge, bottom-left.
+    var badge: [24]u8 = undefined;
+    const bs = std.fmt.bufPrint(&badge, "E{d}/{d}", .{ item.last_episode, item.total_episodes }) catch "";
+    if (bs.len > 0) media_card.badge(.bottom_left, bs, .accent);
+    if (card.endCover()) jumpToAnime(item.mal_id[0..item.mal_id_len]);
+
+    if (media_card.title(title, CONTINUE_FOOTER.title_lines)) jumpToAnime(item.mal_id[0..item.mal_id_len]);
+
+    // "Continue E{last+1}/{total}" resume line.
+    const next_ep: u32 = @as(u32, item.last_episode) + 1;
+    var rb: [40]u8 = undefined;
+    const rs = std.fmt.bufPrint(&rb, "Continue E{d}/{d}", .{ next_ep, item.total_episodes }) catch "Continue";
+    media_card.meta(rs, idx + 30600, .secondary);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -4017,20 +3936,20 @@ fn renderGallery() void {
     // paint falls back to a sane default). Card width is user-cyclable.
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
-    const card_target_w: f32 = card_w_pref;
-    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / card_target_w)));
-    const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
+    const grid = gridColumns(avail_w);
+    const cols: usize = grid.count;
+    const card_w: f32 = @max(100, grid.card_w);
     const total = state.app.anime.result_count;
     if (total == 0) {
-        components.coverSkeletonGrid(@src(), 68000, cols, card_w, card_w * 1.45, GRID_CARD_EXTRA_H + 6, 3);
+        media_card.skeletonGrid(@src(), 68000, cols, card_w, .poster, GRID_FOOTER, 3);
         return;
     }
 
     // ── Virtualization (same shape as tmdb.zig renderGallery) ──
-    // Uniform cards → fixed row pitch: content (poster + footer) + the card's
-    // 6px bottom padding + 3px top/bottom margins. Off-viewport rows (±2
-    // overscan) collapse into spacer boxes.
-    const row_h: f32 = card_w * 1.45 + GRID_CARD_EXTRA_H + 6 + 6;
+    // Uniform cards → fixed row pitch from the shared card: cover + measured
+    // footer + both margins. Off-viewport rows (±2 overscan) collapse into
+    // spacer boxes.
+    const row_h: f32 = media_card.rowPitch(card_w, .poster, GRID_FOOTER);
     const total_rows = (total + cols - 1) / cols;
     const win = @import("tmdb_pure.zig").visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
 
@@ -4106,7 +4025,7 @@ fn renderHoverMeta(item: *state.AnimeResult, idx: usize) void {
         .expand = .both,
         .background = true,
         .color_fill = .{ .color = theme.playerGlass(232) },
-        .corners = dvui.CornerRect.all(6),
+        .corners = dvui.CornerRect.all(theme.radius.lg),
         .padding = dvui.Rect.all(8),
     });
     defer ov.deinit();
@@ -4159,197 +4078,80 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
     // panics on invalid UTF-8 it reads after validation (Utf8Invalid…).
     var title_buf: [128]u8 = undefined;
     const title = safeUtf8Buf(item.name[0..item.name_len], &title_buf);
-    const hue: u32 = @as(u32, @intCast(idx * 7 + 42)) *% 2654435761;
-    const h1: u8 = @truncate(hue & 0xFF);
-    const h2: u8 = @truncate((hue >> 8) & 0xFF);
 
-    const poster_h: f32 = card_w * 1.45;
-    // min == max height → uniform row pitch, which the grid's virtualization
-    // spacer math depends on (see GRID_CARD_EXTRA_H).
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = idx + 1000,
-        .min_size_content = .{ .w = card_w, .h = poster_h + GRID_CARD_EXTRA_H },
-        .max_size_content = .{ .w = card_w, .h = poster_h + GRID_CARD_EXTRA_H },
-        .background = true,
-        .color_fill = .{ .color = theme.colors.bg_surface },
-        .corners = dvui.CornerRect.all(6),
-        .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
-        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
-    });
-    defer card.deinit();
+    // min == max height (inside media_card.begin) → uniform row pitch, which
+    // the grid's virtualization spacer math depends on (see GRID_FOOTER).
+    var card = media_card.begin(@src(), .{ .id = idx + 1000, .width = card_w, .aspect = .poster, .footer = GRID_FOOTER });
+    defer card.end();
 
-    // Poster placeholder / texture — a clickable button-widget hosting the
-    // image, with a hover overlay revealing full metadata. Clicking the poster
-    // loads episodes (same action as clicking the title).
+    // Poster — the shared cover is one clickable, focusable button. Hover (or
+    // the Synopsis toggle) reveals richer metadata over a dimmed scrim;
+    // clicking loads episodes (same action as clicking the title).
     {
-        var bw: dvui.ButtonWidget = undefined;
-        bw.init(@src(), .{}, .{
-            .id_extra = idx + 100,
-            .background = true,
-            .color_fill = .{ .color = dvui.Color{ .r = 20 + h1 / 6, .g = 25 + h2 / 8, .b = 35 + h1 / 5, .a = 255 } },
-            .corners = .{ .tl = .theme(theme.radius.md), .tr = .theme(theme.radius.md), .br = .theme(0), .bl = .theme(0) },
-            .min_size_content = .{ .w = card_w, .h = poster_h },
-            .max_size_content = .{ .w = card_w, .h = poster_h },
-            .padding = dvui.Rect.all(0),
+        const visible = card.cover.button.data().visible();
+        if (visible) _ = poster.uploadIfReady(&item.poster_pixels, item.poster_w, item.poster_h, &item.poster_tex);
+        const url = item.poster_url[0..item.poster_url_len];
+        const artwork = item.poster_tex orelse (if (visible) anime_images.get(url) else null);
+        media_card.art(artwork, .{
+            .loading = visible and url.len > 0 and !anime_images.failed(url),
+            .placeholder = icons.tvg.lucide.film,
         });
-        bw.processEvents();
-        bw.drawBackground();
-
-        // Upload pixels to GPU texture once ready
-        if (bw.data().visible()) _ = poster.uploadIfReady(&item.poster_pixels, item.poster_w, item.poster_h, &item.poster_tex);
-
-        // Stack the poster + (on hover) a meta overlay, both filling the button.
-        {
-            var stack = dvui.overlay(@src(), .{ .id_extra = idx + 140, .expand = .both });
-            defer stack.deinit();
-
-            const url = item.poster_url[0..item.poster_url_len];
-            const artwork = item.poster_tex orelse (if (bw.data().visible()) anime_images.get(url) else null);
-            if (artwork) |tex| {
-                _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
-                    .id_extra = idx + 150,
-                    .expand = .both,
-                    .corners = dvui.CornerRect.all(6),
-                });
-            } else {
-                if (bw.data().visible() and url.len > 0 and !anime_images.failed(url))
-                    components.coverSkeleton(@src(), idx + 150, 6)
-                else
-                    dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
-                        .id_extra = idx + 150,
-                        .gravity_x = 0.5,
-                        .gravity_y = 0.5,
-                        .color_text = .{ .color = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 } },
-                        .expand = .both,
-                    });
-            }
-
-            // Hover reveals richer metadata over a dimmed scrim.
-            if (bw.hovered()) renderHoverMeta(item, idx);
-        }
-
-        const poster_clicked = bw.clicked();
-        bw.drawFocus();
-        bw.deinit();
-        if (poster_clicked) loadEpisodes(idx);
+        // A missing score is not a 0% review, so unrated titles get no badge.
+        if (card.cover.hovered() or item.expanded) renderHoverMeta(item, idx) else if (item.score > 0) media_card.ratingBadge(.top_left, item.score);
+        if (card.endCover()) loadEpisodes(idx);
     }
 
-    // Info column
+    // Title — click to load episodes.
+    if (media_card.title(title, GRID_FOOTER.title_lines)) loadEpisodes(idx);
+
+    // One meta line: the airtime badge aligned to this result index when there
+    // is one — Calendar fills it with Jikan's broadcast.string ("Mondays at
+    // 01:00 (JST)"), the Lists plugin with the next episode ("Ep 1170 · Jul
+    // 19"); every other load path zeroes broadcast_lens[], so a non-zero length
+    // always means "this card has a badge". Otherwise a synopsis snippet, and
+    // with neither the episode count moves up so the line is never blank.
+    var ep_buf: [32]u8 = undefined;
+    const eps = std.fmt.bufPrint(&ep_buf, "{d} eps", .{item.episodes}) catch "";
+    var eps_in_meta = false;
+    if (idx < state.app.anime.broadcast_lens.len and state.app.anime.broadcast_lens[idx] > 0) {
+        const bcast = state.app.anime.broadcast[idx][0..state.app.anime.broadcast_lens[idx]];
+        media_card.meta(safeUtf8(bcast), idx + 640, .accent);
+    } else if (item.overview_len > 0) {
+        var snip_buf: [128]u8 = undefined;
+        media_card.meta(safeUtf8Buf(item.overview[0..@min(item.overview_len, snip_buf.len)], &snip_buf), idx + 650, .tertiary);
+    } else {
+        media_card.meta(eps, idx + 640, .secondary);
+        eps_in_meta = true;
+    }
+
+    // Episodes, then the Synopsis toggle and a keyboard-accessible More menu.
     {
-        var info = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 200,
-            .expand = .horizontal,
-            .padding = .{ .x = 6, .y = 2, .w = 6, .h = 0 },
-        });
-        defer info.deinit();
-
-        // Title — click to load episodes
-        if (dvui.button(@src(), title, .{}, .{
-            .id_extra = idx + 500,
-            .expand = .horizontal,
-            .color_text = .{ .color = theme.colors.text_primary },
-            .color_fill = .{ .color = theme.transparent },
-            .color_fill_hover = .{ .color = theme.colors.bg_hover },
-            .color_fill_press = .{ .color = theme.colors.bg_elevated },
-            .padding = dvui.Rect.all(0),
-        })) {
-            loadEpisodes(idx);
-        }
-
-        // Meta row: episodes + score
-        {
-            var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = idx + 600,
-                .expand = .horizontal,
-                .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+        var row = media_card.actionRow();
+        defer row.deinit();
+        if (!eps_in_meta) media_card.rowText(eps, card_w - 48, .secondary);
+        media_card.spacer();
+        if (item.overview_len > 0 and media_card.iconAction(@src(), icons.tvg.lucide.info, if (item.expanded) "Hide synopsis" else "Synopsis", idx + 650, item.expanded))
+            item.expanded = !item.expanded;
+        const more = media_card.moreMenu(idx + 3200);
+        defer more.deinit();
+        if (more.anchor) |rect| {
+            var floating = dvui.floatingMenu(@src(), .{ .from = rect }, .{
+                .id_extra = idx + 3200,
+                .color_fill = .{ .color = theme.colors.bg_surface },
+                .color_border = .{ .color = theme.colors.border_subtle },
             });
-            defer meta.deinit();
-
-            // Episode count
-            var ep_buf: [32]u8 = undefined;
-            if (@import("opal-fmt").bufPrintZ(&ep_buf, "{d} eps", .{item.episodes})) |eps| {
-                _ = dvui.label(@src(), "{s}", .{eps}, .{ .id_extra = idx + 610, .color_text = .{ .color = theme.colors.text_secondary } });
-            } else |_| {}
-
-            _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 620, .color_text = .{ .color = theme.colors.text_secondary } });
-
-            // Score percentage
-            const pct = @as(u8, @intFromFloat(std.math.clamp(item.score * 10.0, 0.0, 100.0)));
-            const sc = if (pct >= 70) theme.colors.success else if (pct >= 50) theme.colors.warning else theme.colors.danger;
-            var pb: [8]u8 = undefined;
-            if (@import("opal-fmt").bufPrintZ(&pb, "{d}%", .{pct})) |ps| {
-                _ = dvui.label(@src(), "{s}", .{ps}, .{ .id_extra = idx + 310, .color_text = .{ .color = sc } });
-            } else |_| {}
-        }
-
-        // Airtime badge aligned to this result index: Calendar fills it with
-        // Jikan's broadcast.string ("Mondays at 01:00 (JST)"), the Lists plugin
-        // with the next episode ("Ep 1170 · Jul 19"). Every other load path zeroes
-        // broadcast_lens[], so a non-zero length here always means "this card has
-        // a badge" — no mode check needed.
-        if (idx < state.app.anime.broadcast_lens.len and
-            state.app.anime.broadcast_lens[idx] > 0)
-        {
-            const bcast = state.app.anime.broadcast[idx][0..state.app.anime.broadcast_lens[idx]];
-            var bb = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = idx + 640,
-                .background = true,
-                .color_fill = .{ .color = theme.colors.bg_elevated },
-                .corners = dvui.CornerRect.all(4),
-                .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
-                .padding = .{ .x = 5, .y = 1, .w = 5, .h = 1 },
-            });
-            defer bb.deinit();
-            dvui.icon(@src(), "", icons.tvg.lucide.clock, .{}, .{
-                .id_extra = idx + 641,
-                .color_text = .{ .color = theme.colors.accent },
-                .min_size_content = .{ .w = 11, .h = 11 },
-                .gravity_y = 0.5,
-            });
-            _ = dvui.label(@src(), "{s}", .{safeUtf8(bcast)}, .{
-                .id_extra = idx + 642,
-                .color_text = .{ .color = theme.colors.text_secondary },
-                .padding = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
-            });
-        }
-
-        // Synopsis snippet (click to expand)
-        if (item.overview_len > 0) {
-            var btn_buf: [128]u8 = undefined;
-            var snip_buf: [64]u8 = undefined;
-            const snip_len = @min(item.overview_len, 60);
-            const snip = safeUtf8Buf(item.overview[0..snip_len], &snip_buf);
-            const suffix: []const u8 = if (item.overview_len > 60) "..." else "";
-            if (@import("opal-fmt").bufPrintZ(&btn_buf, "{s}{s}", .{ snip, suffix })) |snip_z| {
-                if (dvui.button(@src(), snip_z, .{}, .{
-                    .id_extra = idx + 650,
-                    .color_text = .{ .color = theme.colors.text_secondary },
-                    .expand = .horizontal,
-                    .color_fill = .{ .color = theme.transparent },
-                    .color_fill_hover = .{ .color = theme.colors.bg_hover },
-                    .color_fill_press = .{ .color = theme.colors.bg_elevated },
-                    .padding = dvui.Rect.all(0),
-                })) {
-                    item.expanded = !item.expanded;
-                }
-            } else |_| {}
-        }
-
-        // Full overview when expanded
-        if (item.expanded and item.overview_len > 0) {
-            var ov_buf: [512]u8 = undefined;
-            _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(item.overview[0..@min(item.overview_len, ov_buf.len)], &ov_buf)}, .{
-                .id_extra = idx + 700,
-                .color_text = .{ .color = theme.colors.text_secondary },
-                .expand = .horizontal,
-                .padding = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
-            });
+            defer floating.deinit();
+            if (dvui.menuItemLabel(@src(), "Copy Title", .{}, .{ .expand = .horizontal, .id_extra = idx + 3150, .color_text = .{ .color = theme.colors.text_primary } }) != null) {
+                dvui.clipboardTextSet(title);
+                state.showToast("Title copied");
+                floating.close();
+            }
         }
     }
 
     // ── Right-click context menu ──
     {
-        const ctext = dvui.context(@src(), .{ .rect = card.data().borderRectScale().r }, .{ .id_extra = idx + 3000 });
+        const ctext = dvui.context(@src(), .{ .rect = card.outer.data().borderRectScale().r }, .{ .id_extra = idx + 3000 });
         defer ctext.deinit();
 
         if (ctext.activePoint()) |cp| {

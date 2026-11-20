@@ -12,7 +12,7 @@ def test_reading_parallel_wiring():
         src = _src('src/services/'+category+'.zig')
         assert '@import("browse_fanout.zig").run(' in src and provider in src
         assert 'appendPosition(' in src and 'usefulPublication(' in src
-        assert 'coverSkeletonGrid(' in src and 'setLoadingFixtureForTest' in src
+        assert ('coverSkeletonGrid(' in src or 'media_card.skeletonGrid(' in src) and 'setLoadingFixtureForTest' in src
         assert 'browse_generation = ' in src and '.cancel_epoch = browseEpoch()' in src
         assert gate in src and 'scrapeFetchWithCancellation' in src
     comics = _src('src/services/comics.zig')

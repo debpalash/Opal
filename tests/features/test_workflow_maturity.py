@@ -152,7 +152,7 @@ def test_gutenberg_discover_feed():
     assert "discovery_next_len" in opds and "discoveryMoreWorker" in opds
     assert "openDiscoveryCategory" in opds and "discoverySnapshot" in opds
     assert "pure.gutenbergWorkId(href)" in opds and 'novels.zig").openCatalogResult' in opds
-    assert "components.coverSkeletonGrid" in opds
+    assert "media_card.skeletonGrid(@src(), 88000" in opds
     # curl fallback = reliable-fetch seam; Basic auth over stdin config.
     assert "opdsGetCancelled" in opds and 'reliable_fetch.zig").fetch(' in opds
     assert ".secret_headers = secret[0..secret_n]" in opds and ".cancel_epoch = cancellation" in opds

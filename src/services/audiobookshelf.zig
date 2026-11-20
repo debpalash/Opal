@@ -20,6 +20,7 @@ const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
+const media_card = @import("../ui/media_card.zig");
 const logs = @import("../core/logs.zig");
 const pure = @import("audiobookshelf_pure.zig");
 const http = @import("../core/http.zig");
@@ -117,8 +118,9 @@ var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 /// "no more results" (see audiobookshelf_pure.libraryItemsUrl).
 const ABS_PAGE_LIMIT: u32 = 64;
 const BOOK_CARD_TARGET_W: f32 = 150;
-const BOOK_CARD_GAP: f32 = 4;
-const BOOK_FOOTER_H: f32 = 50;
+/// Title + author line under a square cover, measured by media_card (card,
+/// skeleton and virtualized row pitch all read it).
+const BOOK_CARD_FOOTER: media_card.Footer = .{ .title_lines = 1, .meta_lines = 1 };
 var book_covers: [320]components.CoverSlot = @as([320]components.CoverSlot, @splat(.{}));
 
 fn setLoginError(msg: []const u8) void {
@@ -1274,14 +1276,13 @@ fn renderBooks() void {
     const count = @min(state.app.abs.book_count, state.app.abs.books.len);
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
-    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / BOOK_CARD_TARGET_W)));
-    const cols_f: f32 = @floatFromInt(cols);
-    const card_w: f32 = @max(104, (avail_w - cols_f * 2 * BOOK_CARD_GAP) / cols_f);
-    const poster_h = card_w * 1.45;
-    const row_h = poster_h + BOOK_FOOTER_H + 2 * BOOK_CARD_GAP;
+    const grid = media_card.pure.columns(avail_w, BOOK_CARD_TARGET_W, media_card.pure.MARGIN, 1, 24);
+    const cols = grid.count;
+    const card_w = grid.card_w;
+    const row_h = media_card.rowPitch(card_w, .square, BOOK_CARD_FOOTER);
     const total_rows = (count + cols - 1) / cols;
     if (count == 0) {
-        components.coverSkeletonGrid(@src(), 77000, cols, card_w, poster_h, BOOK_FOOTER_H, 3);
+        media_card.skeletonGrid(@src(), 77000, cols, card_w, .square, BOOK_CARD_FOOTER, 3);
         return;
     }
     const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
@@ -1300,7 +1301,7 @@ fn renderBooks() void {
         defer row.deinit();
         var col: usize = 0;
         while (col < cols and base + col < count) : (col += 1)
-            renderBookCard(base + col, card_w, poster_h);
+            renderBookCard(base + col, card_w);
     }
 
     if (win.last < total_rows) {
@@ -1335,37 +1336,17 @@ fn renderBooks() void {
     }
 }
 
-fn renderBookCard(i: usize, card_w: f32, poster_h: f32) void {
+fn renderBookCard(i: usize, card_w: f32) void {
     const b = &state.app.abs.books[i];
     var title_buf: [256]u8 = undefined;
     const title = safeUtf8Buf(b.title[0..b.title_len], &title_buf);
     var author_buf: [160]u8 = undefined;
     const author = safeUtf8Buf(b.author[0..b.author_len], &author_buf);
 
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = i + 80000,
-        .min_size_content = .{ .w = card_w, .h = poster_h + BOOK_FOOTER_H },
-        .max_size_content = .{ .w = card_w, .h = poster_h + BOOK_FOOTER_H },
-        .margin = dvui.Rect.all(BOOK_CARD_GAP),
-        .background = true,
-        .color_fill = .{ .color = theme.colors.bg_surface },
-        .color_fill_hover = .{ .color = theme.colors.bg_hover },
-        .corners = dvui.CornerRect.all(theme.radius.md),
-    });
-    defer card.deinit();
+    // Audiobook covers are square; min == max height keeps the row pitch.
+    var card = media_card.begin(@src(), .{ .id = i + 80000, .width = card_w, .aspect = .square, .footer = BOOK_CARD_FOOTER });
+    defer card.end();
 
-    var bw: dvui.ButtonWidget = undefined;
-    bw.init(@src(), .{}, .{
-        .id_extra = i + 81000,
-        .background = true,
-        .color_fill = .{ .color = theme.colors.bg_elevated },
-        .corners = dvui.CornerRect.all(theme.radius.md),
-        .min_size_content = .{ .w = card_w, .h = poster_h },
-        .max_size_content = .{ .w = card_w, .h = poster_h },
-        .padding = dvui.Rect.all(0),
-    });
-    bw.processEvents();
-    bw.drawBackground();
     var cover_buf: [1024]u8 = undefined;
     const cover = pure.coverUrl(
         state.app.abs.server_url[0..state.app.abs.server_url_len],
@@ -1373,26 +1354,9 @@ fn renderBookCard(i: usize, card_w: f32, poster_h: f32) void {
         state.app.abs.token[0..state.app.abs.token_len],
         &cover_buf,
     ) orelse "";
-    components.coverArt(@src(), i + 82000, &book_covers[i], cover, icons.tvg.lucide.@"book-audio", theme.radius.md);
-    const clicked = bw.clicked();
-    bw.drawFocus();
-    bw.deinit();
-    if (clicked) playBook(i);
-
-    _ = dvui.label(@src(), "{s}", .{title}, .{
-        .id_extra = i + 83000,
-        .color_text = .{ .color = theme.colors.text_primary },
-        .font = dvui.themeGet().font_heading.withSize(theme.font_size.small),
-        .min_size_content = .{ .w = card_w, .h = 20 },
-        .max_size_content = .{ .w = card_w, .h = 20 },
-        .padding = .{ .x = 5, .y = 5, .w = 5, .h = 0 },
-    });
-    _ = dvui.label(@src(), "{s}", .{if (author.len > 0) author else "Audiobook"}, .{
-        .id_extra = i + 84000,
-        .color_text = .{ .color = theme.colors.text_tertiary },
-        .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
-        .min_size_content = .{ .w = card_w, .h = 18 },
-        .max_size_content = .{ .w = card_w, .h = 18 },
-        .padding = .{ .x = 5, .y = 0, .w = 5, .h = 4 },
-    });
+    components.coverArt(@src(), i + 82000, &book_covers[i], cover, icons.tvg.lucide.@"book-audio", theme.radius.lg);
+    const open_cover = card.endCover();
+    const open_title = media_card.title(title, BOOK_CARD_FOOTER.title_lines);
+    if (open_cover or open_title) playBook(i);
+    media_card.meta(if (author.len > 0) author else "Audiobook", i, .tertiary);
 }

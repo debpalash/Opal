@@ -373,7 +373,15 @@ pub fn savePositionFull(name: []const u8, percent: f64, position_secs: f64, dura
     // Mirror into the unified read-model (services/library_store) so the home
     // "Continue" rail spans every vertical, not just TMDB. Keyed by the file
     // identity so the same title reconciles across sessions; `link` resumes it.
-    @import("../services/library_store.zig").upsertProgress("watch", file_key, safe_name, "", position_secs, duration_secs, "", safe_link);
+    // The card shows a clean title + episode label parsed from the release
+    // name; artwork arrives later from the background lookup (library_art).
+    if (file_key.len == 0) return;
+    const release = @import("../services/release_name_pure.zig");
+    const parsed = release.parseBest(safe_name, file_key);
+    var label_buf: [24]u8 = undefined;
+    const label = release.episodeLabel(&parsed, &label_buf);
+    @import("../services/library_store.zig").upsertWatchProgress(file_key, release.displayTitle(&parsed, safe_name), position_secs, duration_secs, label, safe_link);
+    @import("../services/library_art.zig").noteItem(file_key);
 }
 
 /// Update (or insert at front of) the in-memory cache. Null seconds leave the
@@ -628,6 +636,9 @@ pub fn restoreBackup() void {
 
 /// Load from SQLite into in-memory cache.
 pub fn load() void {
+    // Once the history is up, backfill artwork for library rows that have
+    // none (bounded, off-thread; runs after the finalize below).
+    defer @import("../services/library_art.zig").kick();
     init();
 
     const sql = "SELECT name, percent, link, position_secs, duration_secs, catalog_tmdb_id, updated_at FROM watch_history WHERE percent >= 0.5 ORDER BY updated_at DESC LIMIT 200";

@@ -54,7 +54,7 @@ def test_browse_loading_and_failure_retention():
         source = _src("src/services/" + name + ".zig")
         assert "pub fn setLoadingFixtureForTest(enabled: bool)" in source, name
         assert "Browse loading fixture is test-only" in source, name
-        assert "coverSkeletonGrid" in source, name
+        assert "coverSkeletonGrid" in source or "media_card.skeletonGrid(" in source, name
     content = section(anime, "pub fn renderContent()", "\n}\n")
     assert 'dvui.label(@src(), "Loading..."' not in content
     page = section(drama, "fn fetchPage(", "/// Drain worker-staged results")
@@ -94,3 +94,49 @@ def test_native_sidebar_navigation_contract():
         assert "if (state.app.anime.is_loading.load(.acquire)) return" not in worker
     assert "stale and !busy" in anime
     return "pass", "Grouped focusable sidebar, bounded viewport, single query, and superseding Anime selections"
+
+
+@test("Anime, Drama, VNDB and Novels cards render through the shared media card", "Browse")
+def test_catalog_cards_use_media_card():
+    # Each screen used to hand-roll its card with its own footer constant
+    # (anime 92, drama 72, VNDB 52, novels 112/126), so pitch, skeletons and
+    # footers drifted from every other catalog. They now share media_card.
+    files = {
+        "anime": ("fn renderCard(item: *state.AnimeResult", "GRID_FOOTER"),
+        "drama": ("fn renderCard(item: *state.DramaResult", "CARD_FOOTER"),
+        "vndb": ("fn renderCard(i: usize", "CARD_FOOTER"),
+        "novels": ("fn renderNovelCard(", "NOVEL_FOOTER"),
+    }
+    for name, (fn, footer) in files.items():
+        src = _src("src/services/" + name + ".zig")
+        card = section(src, fn, "\n}\n")
+        assert '@import("../ui/media_card.zig")' in src, name
+        assert "media_card.begin(@src()" in card and ".footer = " + footer in card, name
+        assert "card.endCover()" in card and "media_card.title(" in card, name
+        # Grid pitch and skeletons come from the same measured footer.
+        assert "media_card.rowPitch(" in src and "media_card.skeletonGrid(" in src, name
+        assert "const " + footer + ": media_card.Footer" in src, name
+        assert "dvui.button(@src(), title" not in card, name
+    anime = _src("src/services/anime.zig")
+    assert "GRID_CARD_EXTRA_H" not in anime and "card_w * 1.45" not in anime
+    card = section(anime, "fn renderCard(item: *state.AnimeResult", "\n}\n")
+    # Click targets, the Copy Title menus and the synopsis toggle survive.
+    assert card.count("loadEpisodes(idx)") == 2 and card.count('"Copy Title"') == 2
+    assert "dvui.context(" in card and "media_card.moreMenu(" in card
+    assert "item.expanded = !item.expanded" in card and "renderHoverMeta(item, idx)" in card
+    assert "state.app.anime.broadcast_lens[idx] > 0" in card
+    # No blank band: with no airtime or synopsis the episode count fills the
+    # meta line instead of leaving an empty row above "N eps" (CI capture).
+    assert 'media_card.meta("", idx' not in card
+    assert "media_card.meta(eps, idx + 640" in card and "if (!eps_in_meta) media_card.rowText(eps" in card
+    cont = section(anime, "fn renderContinueCard(", "\n}\n")
+    assert "media_card.begin(@src()" in cont and cont.count("jumpToAnime(") == 2
+    assert "anime_pure.posterAction(" in cont and "media_card.badge(.bottom_left" in cont
+    drama = _src("src/services/drama.zig")
+    assert "poster_h + 72" not in drama and "originLabel(o), .accent" in drama
+    vndb = _src("src/services/vndb.zig")
+    assert "CARD_COVER_H" not in vndb and "CARD_FOOTER_H" not in vndb
+    novels = _src("src/services/novels.zig")
+    assert "const row_h: f32 = 126" not in novels and "native_card_rects[index] = card.outer" in novels
+    assert "components.coverArt(@src(), 54500 + index" in novels
+    return "pass", "Four catalog screens use media_card begin/endCover/title with measured footers and shared row pitch"

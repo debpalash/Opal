@@ -26,6 +26,7 @@ const drama_pure = @import("drama_pure.zig");
 const tvmaze = @import("drama_tvmaze_pure.zig");
 const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
+const media_card = @import("../ui/media_card.zig");
 const icons = @import("icons");
 const poster = @import("../core/poster.zig");
 const logs = @import("../core/logs.zig");
@@ -810,13 +811,15 @@ pub fn renderContent() void {
     }
     const count = @min(state.app.drama.result_count, state.app.drama.results.len);
     const rect_w = scroll.data().rect.w;
-    const avail_w: f32 = @max(CARD_W + 8, (if (rect_w > 1) rect_w else 900) - 2 * theme.spacing.md);
-    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / (CARD_W + 8))));
+    const gutter: f32 = 2 * media_card.pure.MARGIN;
+    const avail_w: f32 = @max(CARD_W + gutter, (if (rect_w > 1) rect_w else 900) - 2 * theme.spacing.md);
+    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / (CARD_W + gutter))));
     if (count == 0) {
-        components.coverSkeletonGrid(@src(), 48000, cols, CARD_W, CARD_W * 1.5, 72, 3);
+        media_card.skeletonGrid(@src(), 48000, cols, CARD_W, .poster, CARD_FOOTER, 3);
         return;
     }
-    const row_h: f32 = CARD_W * 1.5 + 72 + 8;
+    // Fixed row pitch from the shared card (cover + measured footer + margins).
+    const row_h: f32 = media_card.rowPitch(CARD_W, .poster, CARD_FOOTER);
     const total_rows = (count + cols - 1) / cols;
     const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
 
@@ -876,89 +879,33 @@ pub fn renderContent() void {
 }
 
 const CARD_W: f32 = 150;
+/// Two-line title + one year line; the origin rides the cover as a badge.
+/// Measured by media_card so card, skeleton and row pitch share one number.
+const CARD_FOOTER: media_card.Footer = .{ .title_lines = 2, .meta_lines = 1 };
 
 fn renderCard(item: *state.DramaResult, idx: usize) void {
     if (item.name_len == 0) return;
     var title_buf: [160]u8 = undefined;
     const title = safeUtf8Buf(item.name[0..item.name_len], &title_buf);
 
-    const poster_h: f32 = CARD_W * 1.5;
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = idx + 1000,
-        .min_size_content = .{ .w = CARD_W, .h = poster_h + 72 },
-        .max_size_content = .{ .w = CARD_W, .h = poster_h + 72 },
-        .background = true,
-        .color_fill = .{ .color = theme.colors.bg_surface },
-        .corners = dvui.CornerRect.all(6),
-        .margin = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
+    // min == max height (inside media_card.begin) → uniform row pitch.
+    var card = media_card.begin(@src(), .{ .id = idx + 1000, .width = CARD_W, .aspect = .poster, .footer = CARD_FOOTER });
+    defer card.end();
+
+    // Poster (clickable → detail) with the origin badge.
+    _ = poster.uploadIfReady(&item.poster_pixels, item.poster_w, item.poster_h, &item.poster_tex);
+    if (item.poster_tex == null) ensurePoster(item);
+    media_card.art(item.poster_tex, .{
+        .loading = !item.poster_failed and item.poster_path_len > 0,
+        .placeholder = icons.tvg.lucide.clapperboard,
     });
-    defer card.deinit();
+    const o: drama_pure.Origin = @enumFromInt(@min(item.origin, 5));
+    media_card.badge(.top_left, drama_pure.originLabel(o), .accent);
+    if (card.endCover()) state.app.drama.selected_idx = idx;
 
-    // Poster (clickable → detail).
-    {
-        var bw: dvui.ButtonWidget = undefined;
-        bw.init(@src(), .{}, .{
-            .id_extra = idx + 100,
-            .background = true,
-            .color_fill = .{ .color = theme.colors.bg_elevated },
-            .corners = dvui.CornerRect.all(theme.radius.md),
-            .min_size_content = .{ .w = CARD_W, .h = poster_h },
-            .max_size_content = .{ .w = CARD_W, .h = poster_h },
-            .padding = dvui.Rect.all(0),
-        });
-        bw.processEvents();
-        bw.drawBackground();
-
-        _ = poster.uploadIfReady(&item.poster_pixels, item.poster_w, item.poster_h, &item.poster_tex);
-        if (item.poster_tex) |*tex| {
-            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                .id_extra = idx + 150,
-                .expand = .both,
-                .corners = dvui.CornerRect.all(theme.radius.md),
-            });
-        } else {
-            ensurePoster(item);
-            if (!item.poster_failed and item.poster_path_len > 0)
-                components.coverSkeleton(@src(), idx + 150, theme.radius.md)
-            else
-                dvui.icon(@src(), "", icons.tvg.lucide.clapperboard, .{}, .{
-                    .id_extra = idx + 150,
-                    .gravity_x = 0.5,
-                    .gravity_y = 0.5,
-                    .color_text = .{ .color = theme.colors.text_tertiary },
-                    .expand = .both,
-                });
-        }
-        const clicked = bw.clicked();
-        bw.drawFocus();
-        bw.deinit();
-        if (clicked) state.app.drama.selected_idx = idx;
-    }
-
-    // Title (truncated) — click opens detail too.
-    const show = title[0..@min(title.len, 40)];
-    if (dvui.button(@src(), show, .{}, .{
-        .id_extra = idx + 500,
-        .expand = .horizontal,
-        .color_text = .{ .color = theme.colors.text_primary },
-        .color_fill = .{ .color = theme.transparent },
-        .color_fill_hover = .{ .color = theme.colors.bg_hover },
-        .color_fill_press = .{ .color = theme.colors.bg_elevated },
-        .padding = .{ .x = 4, .y = 2, .w = 4, .h = 0 },
-    })) {
-        state.app.drama.selected_idx = idx;
-    }
-
-    // Meta row: origin badge + year.
-    {
-        var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = idx + 600, .expand = .horizontal, .padding = .{ .x = 4, .y = 0, .w = 4, .h = 0 } });
-        defer meta.deinit();
-        const o: drama_pure.Origin = @enumFromInt(@min(item.origin, 5));
-        _ = dvui.label(@src(), "{s}", .{drama_pure.originLabel(o)}, .{ .id_extra = idx + 601, .color_text = .{ .color = theme.colors.accent } });
-        if (item.year_len > 0) {
-            _ = dvui.label(@src(), "  {s}", .{item.year[0..item.year_len]}, .{ .id_extra = idx + 602, .color_text = .{ .color = theme.colors.text_tertiary } });
-        }
-    }
+    // Title — click opens detail too.
+    if (media_card.title(title, CARD_FOOTER.title_lines)) state.app.drama.selected_idx = idx;
+    media_card.meta(item.year[0..item.year_len], idx + 602, .tertiary);
 }
 
 fn ensurePoster(item: *state.DramaResult) void {

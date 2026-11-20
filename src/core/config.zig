@@ -85,6 +85,7 @@ fn saveChecked() !void {
     setKey("playlist_shuffle", if (state.app.playlist_shuffle) "1" else "0");
     setKey("playlist_shuffle_seed", fmtInt(&fb, @intCast(state.app.playlist_shuffle_seed)));
     setKey("continue_hide_nsfw", if (state.app.continue_hide_nsfw) "1" else "0");
+    setKey("continue_private", if (state.app.continue_private) "1" else "0");
     setKey("nsfw_filter", if (state.app.nsfw_filter_enabled) "1" else "0");
     setKey("gallerydl_enabled", if (state.app.gallerydl_enabled) "1" else "0");
     setKey("scrape_use_browser", if (state.app.scrape_use_browser) "1" else "0");
@@ -636,6 +637,8 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.playlist_shuffle_seed = std.fmt.parseInt(u64, val, 10) catch 0;
     } else if (std.mem.eql(u8, key, "continue_hide_nsfw")) {
         state.app.continue_hide_nsfw = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "continue_private")) {
+        state.app.continue_private = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "nsfw_filter")) {
         state.app.nsfw_filter_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "gallerydl_enabled")) {

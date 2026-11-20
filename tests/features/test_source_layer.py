@@ -67,7 +67,9 @@ def test_touch_shell_layout():
     if ".gravity_x = if (expanded) 0 else 0.5" not in shell or ".vertical_bar = if (touch) .hide else .auto" not in shell:
         problems.append("collapsed rail glyphs not centred / touch scrollbar gutter kept")
     # REGRESSION: dvui.button centred the poster title while rating/year were left-aligned.
-    if "title_btn.init(" not in tmdb or "dvui.button(@src(), wrapped_title" in tmdb:
+    card = _src("src/ui/media_card.zig")
+    title_fn = card.split("pub fn title(", 1)[1].split("\npub fn ", 1)[0]
+    if "media_card.title(" not in tmdb or "bw.init(" not in title_fn or ".gravity_x = 0, .gravity_y = 0" not in title_fn or "dvui.button(" in title_fn:
         problems.append("poster title not left-aligned")
     if "layout.immersive(safe, keyboard)" not in frame:
         problems.append("iOS shell not edge-to-edge")

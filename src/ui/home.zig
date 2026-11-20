@@ -14,6 +14,7 @@ const theme = @import("theme.zig");
 const state = @import("../core/state.zig");
 const tmdb = @import("../services/tmdb.zig");
 const browser = @import("../services/browser.zig");
+const media_card = @import("media_card.zig");
 const library_store = @import("../services/library_store.zig");
 const library_pure = @import("../services/library_pure.zig");
 const components = @import("components.zig");
@@ -23,7 +24,6 @@ const io_global = @import("../core/io_global.zig");
 const transparent = theme.transparent;
 
 const STRIP_MAX: usize = 24; // cap cards per strip (perf)
-const STRIP_CHROME: f32 = tmdb.POSTER_SHELF_CHROME;
 pub var shelf_actions_visible_for_test = false;
 const SCROLLBAR_HOLD_NS: i128 = 900 * std.time.ns_per_ms;
 
@@ -261,6 +261,8 @@ pub fn renderComingUpRail(card_w: f32) bool {
         });
     }
 
+    const footer: media_card.Footer = .{ .title_lines = 1, .meta_lines = 1 };
+    const strip_h = poster_h + media_card.footerHeight(footer) + 2 * media_card.pure.MARGIN;
     var user_scroll: dvui.Point = .{};
     var strip = dvui.scrollArea(@src(), .{
         .horizontal = .auto,
@@ -270,8 +272,8 @@ pub fn renderComingUpRail(card_w: f32) bool {
     }, .{
         .expand = .horizontal,
         .background = false,
-        .min_size_content = .{ .w = 10, .h = poster_h + STRIP_CHROME },
-        .max_size_content = .{ .w = std.math.floatMax(f32), .h = poster_h + STRIP_CHROME },
+        .min_size_content = .{ .w = 10, .h = strip_h },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = strip_h },
         .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },
     });
     const scroll_id = strip.data().id;
@@ -288,77 +290,40 @@ pub fn renderComingUpRail(card_w: f32) bool {
         const e = &upcoming[i];
         const it = cal.posterFor(e);
 
-        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = i + 47000,
-            .min_size_content = .{ .w = card_w, .h = poster_h + STRIP_CHROME },
-            .max_size_content = .{ .w = card_w, .h = poster_h + STRIP_CHROME },
-            .background = true,
-            .color_fill = @import("color_compat.zig").wrap(transparent),
-            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_surface),
-            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
-            .border = dvui.Rect.all(1),
-            .corners = dvui.CornerRect.all(theme.radius.lg),
-            .padding = dvui.Rect.all(5),
-            .margin = dvui.Rect.all(6),
-        });
-        defer card.deinit();
+        var card = media_card.begin(@src(), .{ .id = i + 47000, .width = card_w, .aspect = .poster, .footer = footer });
+        defer card.end();
 
-        // Poster — clickable; fetched through the shared poster daemon.
-        {
-            var bw: dvui.ButtonWidget = undefined;
-            bw.init(@src(), .{}, .{
-                .id_extra = i + 47100,
-                .background = true,
-                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
-                .corners = dvui.CornerRect.all(theme.radius.lg),
-                .min_size_content = .{ .w = card_w, .h = poster_h },
-                .max_size_content = .{ .w = card_w, .h = poster_h },
-                .padding = dvui.Rect.all(0),
-            });
-            bw.processEvents();
-            bw.drawBackground();
-            if (bw.clicked()) {
-                @import("../services/tmdb.zig").openTvDetailById(e.tmdb_id, e.name[0..e.name_len], e.poster_path[0..e.poster_path_len]);
+        // Poster fetched through the shared poster daemon.
+        _ = poster.uploadIfReady(&it.poster_pixels, it.poster_w, it.poster_h, &it.poster_tex);
+        if (it.poster_tex == null) {
+            // Failure-latch (mirrors the TMDB grid): the old code gated on
+            // !poster_failed but never SET it, so a dead poster re-spawned a
+            // fetch every frame. Run the full attempted->failed transition.
+            if (it.poster_fetching) {
+                it.poster_attempted = true;
+            } else if (it.poster_attempted and it.poster_pixels == null and it.poster_tex == null) {
+                it.poster_failed = true;
+            } else if (!it.poster_failed and it.poster_pixels == null and it.poster_path_len > 0) {
+                const path = it.poster_path[0..it.poster_path_len];
+                var url_buf: [512]u8 = undefined;
+                const url = if (std.mem.startsWith(u8, path, "https://") or std.mem.startsWith(u8, path, "http://"))
+                    path
+                else
+                    std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w342{s}", .{path}) catch "";
+                if (url.len > 0)
+                    poster.fetchAsync(url, &it.poster_pixels, &it.poster_w, &it.poster_h, &it.poster_fetching);
+                if (it.poster_fetching) it.poster_attempted = true;
             }
-            _ = poster.uploadIfReady(&it.poster_pixels, it.poster_w, it.poster_h, &it.poster_tex);
-            if (it.poster_tex) |*tex| {
-                _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                    .id_extra = i + 47200,
-                    .expand = .both,
-                    .corners = dvui.CornerRect.all(theme.radius.lg),
-                });
-            } else {
-                // Failure-latch (mirrors the TMDB grid): the old code gated on
-                // !poster_failed but never SET it, so a dead poster re-spawned a
-                // fetch every frame. Run the full attempted->failed transition.
-                if (it.poster_fetching) {
-                    it.poster_attempted = true;
-                } else if (it.poster_attempted and it.poster_pixels == null and it.poster_tex == null) {
-                    it.poster_failed = true;
-                } else if (!it.poster_failed and it.poster_pixels == null and it.poster_path_len > 0) {
-                    const path = it.poster_path[0..it.poster_path_len];
-                    var url_buf: [512]u8 = undefined;
-                    const url = if (std.mem.startsWith(u8, path, "https://") or std.mem.startsWith(u8, path, "http://"))
-                        path
-                    else
-                        std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w342{s}", .{path}) catch "";
-                    if (url.len > 0)
-                        poster.fetchAsync(url, &it.poster_pixels, &it.poster_w, &it.poster_h, &it.poster_fetching);
-                    if (it.poster_fetching) it.poster_attempted = true;
-                }
-                if (!it.poster_failed and it.poster_path_len > 0)
-                    components.coverSkeleton(@src(), i + 47200, 8);
-            }
-            bw.deinit();
         }
+        media_card.art(it.poster_tex, .{ .loading = !it.poster_failed and it.poster_path_len > 0, .placeholder = icons.tvg.lucide.tv });
+        if (e.available) media_card.badge(.top_right, "Out now", .success);
+        const open = card.endCover();
 
-        // Show name.
         var nm_buf: [96]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(e.name[0..@min(e.name_len, 60)], &nm_buf)}, .{
-            .id_extra = i + 47300,
-            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
-            .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
-        });
+        const open_title = media_card.title(text_mod.safeUtf8Buf(e.name[0..@min(e.name_len, 60)], &nm_buf), 1);
+        if (open or open_title) {
+            @import("../services/tmdb.zig").openTvDetailById(e.tmdb_id, e.name[0..e.name_len], e.poster_path[0..e.poster_path_len]);
+        }
 
         // Status caption: EZTV availability (green) or air-date countdown.
         var line_buf: [128]u8 = undefined;
@@ -370,11 +335,7 @@ pub fn renderComingUpRail(card_w: f32) bool {
             (std.fmt.bufPrint(&line_buf, "S{d:0>2}E{d:0>2} {s}", .{ @as(u32, @intCast(@max(0, e.next_season))), @as(u32, @intCast(@max(0, e.next_episode))), pure.countdownLabel(now_s, e.next_air_epoch, &cd_buf) }) catch "soon")
         else
             (std.fmt.bufPrint(&line_buf, "S{d:0>2}E{d:0>2} unwatched", .{ @as(u32, @intCast(@max(0, e.last_season))), @as(u32, @intCast(@max(0, e.last_episode))) }) catch "unwatched");
-        _ = dvui.label(@src(), "{s}", .{line}, .{
-            .id_extra = i + 47400,
-            .color_text = @import("color_compat.zig").wrap(if (e.available) theme.colors.success else theme.colors.text_tertiary),
-            .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
-        });
+        media_card.meta(line, i, if (e.available) .success else .tertiary);
     }
     return true;
 }
@@ -410,7 +371,7 @@ fn renderPicksRail(card_w: f32) bool {
         });
     }
 
-    const strip_h = poster_h + STRIP_CHROME + reason_h + action_h;
+    const strip_h = poster_h + tmdb.posterShelfChrome() + reason_h + action_h;
     var user_scroll: dvui.Point = .{};
     var strip = dvui.scrollArea(@src(), .{
         .horizontal = .auto,
@@ -1008,8 +969,8 @@ fn posterStrip(title: []const u8, icon: []const u8, items: *std.ArrayListUnmanag
         .expand = .horizontal,
         // Transparent — dvui's default scroll fill is light; show the dark page.
         .background = false,
-        .min_size_content = .{ .w = 10, .h = poster_h + STRIP_CHROME },
-        .max_size_content = .{ .w = std.math.floatMax(f32), .h = poster_h + STRIP_CHROME },
+        .min_size_content = .{ .w = 10, .h = poster_h + tmdb.posterShelfChrome() },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = poster_h + tmdb.posterShelfChrome() },
         .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },
     });
     const scroll_id = scroll.data().id;
@@ -1093,29 +1054,11 @@ fn renderLibraryRail(card_w: f32) bool {
     return renderLibraryItemsRail(items[0..n], "Your Library", icons.tvg.lucide.@"library-big", 7700, card_w, lib_slots[0..], 0);
 }
 
-fn continueAction(src: std.builtin.SourceLocation, icon: []const u8, label: []const u8, active: bool) bool {
-    var wd: dvui.WidgetData = undefined;
-    const clicked = dvui.buttonIcon(src, label, icon, .{}, .{}, .{
-        .data_out = &wd,
-        .min_size_content = .{ .w = 14, .h = 14 },
-        .max_size_content = .{ .w = 14, .h = 14 },
-        .padding = dvui.Rect.all(4),
-        .margin = dvui.Rect.all(0),
-        .border = dvui.Rect.all(0),
-        .corners = dvui.CornerRect.all(4),
-        .color_text = @import("color_compat.zig").wrap(if (active) theme.colors.accent else theme.colors.text_secondary),
-        .color_fill = @import("color_compat.zig").wrap(theme.transparent),
-        .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
-        .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
-    });
-    components.tip(src, wd, label);
-    return clicked;
-}
-
 fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []const u8, heading_icon: []const u8, base_id: usize, card_w: f32, slots: []LibSlot, hidden_count: usize) bool {
     const n = @min(items.len, slots.len);
     const manage_continue = base_id == 7600;
-    if (!manage_continue and n == 0 and hidden_count == 0) return false;
+    // Nothing to resume and nothing to restore: no orphan heading.
+    if (n == 0 and hidden_count == 0) return false;
 
     // Header (icon + label; no TMDB "See all").
     {
@@ -1156,6 +1099,12 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
     if (n == 0) return true;
 
     const poster_h = card_w * 1.5;
+    // Title line, plus (Continue only) a caption row with the pin/remove
+    // controls. The rail is exactly one card tall — reserving the TMDB shelf
+    // footprint here left a large dead band under Continue.
+    const footer: media_card.Footer = .{ .title_lines = 1, .action_row = manage_continue };
+    const card_chrome = media_card.footerHeight(footer);
+    const rail_h = poster_h + card_chrome + 2 * media_card.pure.MARGIN;
     const scrollbar_slot: usize = if (base_id == 7600) 6 else 7;
     var user_scroll: dvui.Point = .{};
     var scroll = dvui.scrollArea(@src(), .{
@@ -1167,8 +1116,8 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         .id_extra = base_id + 1,
         .expand = .horizontal,
         .background = false,
-        .min_size_content = .{ .w = 10, .h = poster_h + STRIP_CHROME },
-        .max_size_content = .{ .w = std.math.floatMax(f32), .h = poster_h + STRIP_CHROME },
+        .min_size_content = .{ .w = 10, .h = rail_h },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = rail_h },
         .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },
     });
     const scroll_id = scroll.data().id;
@@ -1186,78 +1135,12 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         if (manage_continue and (state.app.continue_hide_nsfw or state.app.nsfw_filter_enabled) and
             (@import("../services/iptv_pure.zig").isNsfw(item.title[0..item.title_len], item.deep_link[0..item.deep_link_len]) or
                 @import("../services/anime_pure.zig").titleLooksAdult(item.title[0..item.title_len]))) continue;
-        const card_chrome: f32 = if (manage_continue) 84 else 38;
-        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = i + base_id + 10,
-            .min_size_content = .{ .w = card_w, .h = poster_h + card_chrome },
-            .max_size_content = .{ .w = card_w, .h = poster_h + card_chrome },
-            .background = true,
-            .color_fill = @import("color_compat.zig").wrap(transparent),
-            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_surface),
-            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
-            .border = dvui.Rect.all(1),
-            .corners = dvui.CornerRect.all(theme.radius.lg),
-            .padding = dvui.Rect.all(5),
-            .margin = dvui.Rect.all(6),
-        });
-        defer card.deinit();
-        const hovered = card.data().borderRectScale().r.contains(dvui.currentWindow().mouse_pt);
-        const revealed = !manage_continue or hovered;
-
-        if (manage_continue) {
-            var tools = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = i + base_id + 20,
-                .min_size_content = .{ .w = card_w - 10, .h = 40 },
-                .max_size_content = .{ .w = card_w - 10, .h = 40 },
-                .gravity_y = 0.0,
-            });
-            defer tools.deinit();
-            const kind = library_pure.parseKind(item.kind[0..@min(item.kind_len, item.kind.len)]);
-            const kind_label: []const u8 = switch (kind) {
-                .watch, .movie, .tv => "Watch",
-                .anime => "Anime",
-                .podcast => "Podcast",
-                .audiobook => "Audiobook",
-                .music, .radio => "Listen",
-                .comics => "Comic",
-                .novels => "Read",
-                .iptv => "Live",
-                .search => "Saved title",
-                .other => "Continue",
-            };
-            _ = dvui.label(@src(), "{s}", .{if (revealed) kind_label else "Private"}, .{
-                .id_extra = i + base_id + 21,
-                .color_text = @import("color_compat.zig").wrap(if (item.home_pinned) theme.colors.accent else theme.colors.text_tertiary),
-                .font = dvui.themeGet().font_heading.withSize(theme.font_size.small),
-                .gravity_y = 0.5,
-                .max_size_content = .{ .w = @max(0, card_w - 62), .h = 24 },
-            });
-            var spacer = dvui.box(@src(), .{}, .{ .id_extra = i + base_id + 22, .expand = .horizontal });
-            spacer.deinit();
-            if (continueAction(@src(), if (item.home_pinned) icons.tvg.lucide.@"pin-off" else icons.tvg.lucide.pin, if (item.home_pinned) "Unpin from front" else "Pin to front", item.home_pinned)) {
-                library_store.setHomePinned(item.kind[0..item.kind_len], item.item_id[0..item.item_id_len], !item.home_pinned);
-                dvui.refresh(null, @src(), null);
-            }
-            // Always available, including while the private card is masked.
-            // This hides only the Home column and preserves resume progress.
-            if (continueAction(@src(), icons.tvg.lucide.x, "Remove from Continue · keeps progress", false)) {
-                library_store.setHomeHidden(item.kind[0..item.kind_len], item.item_id[0..item.item_id_len], true);
-                dvui.refresh(null, @src(), null);
-                continue;
-            }
-        }
-
-        var bw: dvui.ButtonWidget = undefined;
-        bw.init(@src(), .{}, .{
-            .id_extra = i + base_id + 30,
-            .background = true,
-            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
-            .corners = dvui.CornerRect.all(theme.radius.lg),
-            .min_size_content = .{ .w = card_w, .h = poster_h },
-            .max_size_content = .{ .w = card_w, .h = poster_h },
-        });
-        bw.processEvents();
-        bw.drawBackground();
+        var card = media_card.begin(@src(), .{ .id = i + base_id + 10, .width = card_w, .aspect = .poster, .footer = footer });
+        defer card.end();
+        const hovered = card.hovered();
+        // Masking is opt-in ("Blur Continue until hover" in Settings).
+        const revealed = !(manage_continue and state.app.continue_private) or hovered;
+        const kind = library_pure.parseKind(item.kind[0..@min(item.kind_len, item.kind.len)]);
 
         const slot = &slots[i];
         const purl = item.poster[0..@min(item.poster_len, item.poster.len)];
@@ -1271,96 +1154,91 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
                 slot.h = 0;
                 slot.url_hash = h;
             }
-            if (manage_continue) uploadPrivacyBlur(slot);
+            if (manage_continue and state.app.continue_private) uploadPrivacyBlur(slot);
             _ = poster.uploadIfReady(&slot.pixels, slot.w, slot.h, &slot.tex);
             if (slot.tex == null and !slot.fetching and slot.pixels == null)
                 poster.fetchAsync(purl, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
         }
-        if (revealed and slot.tex != null) {
-            const tex = &slot.tex.?;
-            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corners = dvui.CornerRect.all(theme.radius.lg) });
-        } else if (!revealed and slot.blur_tex != null) {
-            _ = dvui.image(@src(), .{ .source = .{ .texture = slot.blur_tex.? } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corners = dvui.CornerRect.all(theme.radius.lg) });
-        } else if (!revealed) {
-            renderPrivateCoverPlaceholder(i + base_id + 40, heading_icon);
+        const glyph = if (manage_continue) kindIcon(kind) else heading_icon;
+        if (revealed) {
+            media_card.art(slot.tex, .{ .loading = slot.fetching, .placeholder = glyph });
         } else {
-            renderPrivateCoverPlaceholder(i + base_id + 40, heading_icon);
+            media_card.art(slot.blur_tex, .{ .placeholder = glyph });
         }
-        const clicked = bw.clicked();
-        bw.drawFocus();
-        bw.deinit();
-        if (clicked) openLibItem(item);
+        if (manage_continue and revealed) media_card.badge(.top_left, kindLabel(kind), if (item.home_pinned) .accent else .glass);
+        if (manage_continue and std.math.isFinite(item.percent)) media_card.progress(card_w, item.percent / 100);
+        if (card.endCover()) openLibItem(item);
 
         var t_safe: [200]u8 = undefined;
         const visible_title = @import("../core/text.zig").safeUtf8Buf(item.title[0..@min(item.title_len, item.title.len)], &t_safe);
         if (revealed) {
-            _ = dvui.label(@src(), "{s}", .{visible_title}, .{
-                .id_extra = i + base_id + 50,
-                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
-                .font = dvui.themeGet().font_heading.withSize(theme.font_size.body),
-                .min_size_content = .{ .w = card_w, .h = 18 },
-                .max_size_content = .{ .w = card_w, .h = 18 },
-                .padding = .{ .x = 1, .y = 4, .w = 1, .h = 0 },
-            });
+            if (media_card.title(visible_title, 1)) openLibItem(item);
         } else {
             renderPrivateTitle(i + base_id + 50, card_w);
         }
-        if (revealed and manage_continue) {
-            const next_label = item.next_label[0..@min(item.next_label_len, item.next_label.len)];
-            var remaining_buf: [40]u8 = undefined;
-            const caption = if (next_label.len > 0)
-                next_label
-            else if (library_pure.remainingMinutes(library_pure.parseKind(item.kind[0..@min(item.kind_len, item.kind.len)]), item.resume_secs, item.duration_secs)) |minutes|
-                std.fmt.bufPrint(&remaining_buf, "{d} min left", .{minutes}) catch ""
-            else
-                "";
-            if (caption.len > 0) _ = dvui.label(@src(), "{s}", .{caption}, .{
-                .id_extra = i + base_id + 80,
-                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
-                .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
-                .min_size_content = .{ .w = card_w, .h = 18 },
-                .max_size_content = .{ .w = card_w, .h = 18 },
-            });
+        if (!manage_continue) continue;
+
+        // Caption ("S2 E4" / "23m left") with quiet pin and remove
+        // controls. Removing keeps resume progress.
+        var meta = media_card.actionRow();
+        defer meta.deinit();
+        // Pin shows when it carries state (pinned) or on hover, so the
+        // caption keeps its room on narrow cards.
+        const show_pin = item.home_pinned or hovered;
+        const next_label = item.next_label[0..@min(item.next_label_len, item.next_label.len)];
+        var remaining_buf: [40]u8 = undefined;
+        const caption = if (!revealed)
+            ""
+        else if (next_label.len > 0)
+            next_label
+        else if (library_pure.remainingMinutes(kind, item.resume_secs, item.duration_secs)) |minutes|
+            std.fmt.bufPrint(&remaining_buf, "{d}m left", .{minutes}) catch ""
+        else
+            "";
+        media_card.rowText(caption, card_w - (if (show_pin) @as(f32, 56) else 32), .secondary);
+        media_card.spacer();
+        if (show_pin and media_card.iconAction(@src(), icons.tvg.lucide.pin, if (item.home_pinned) "Unpin from front" else "Pin to front", i, item.home_pinned)) {
+            library_store.setHomePinned(item.kind[0..item.kind_len], item.item_id[0..item.item_id_len], !item.home_pinned);
+            dvui.refresh(null, @src(), null);
         }
-        if (std.math.isFinite(item.percent) and item.percent > 0) {
-            var progress = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = i + base_id + 60,
-                .background = true,
-                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
-                .min_size_content = .{ .w = card_w, .h = 3 },
-                .max_size_content = .{ .w = card_w, .h = 3 },
-            });
-            var fill = dvui.box(@src(), .{}, .{
-                .id_extra = i + base_id + 70,
-                .background = true,
-                .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
-                .min_size_content = .{ .w = card_w * @as(f32, @floatCast(std.math.clamp(item.percent / 100, 0, 1))), .h = 3 },
-                .max_size_content = .{ .w = card_w * @as(f32, @floatCast(std.math.clamp(item.percent / 100, 0, 1))), .h = 3 },
-            });
-            fill.deinit();
-            progress.deinit();
+        // Always available, including while a private card is masked.
+        // This hides only the Home column and preserves resume progress.
+        if (media_card.iconAction(@src(), icons.tvg.lucide.x, "Remove from Continue · keeps progress", i, false)) {
+            library_store.setHomeHidden(item.kind[0..item.kind_len], item.item_id[0..item.item_id_len], true);
+            dvui.refresh(null, @src(), null);
         }
     }
     return true;
 }
 
-fn renderPrivateCoverPlaceholder(id: usize, glyph: []const u8) void {
-    var backdrop = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = id,
-        .expand = .both,
-        .background = true,
-        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
-        .corners = dvui.CornerRect.all(theme.radius.lg),
-    });
-    defer backdrop.deinit();
-    _ = dvui.icon(@src(), "private-cover", glyph, .{}, .{
-        .id_extra = id,
-        .color_text = @import("color_compat.zig").wrap(theme.colors.accent_dim),
-        .min_size_content = theme.iconSize(.xl),
-        .max_size_content = dvui.Options.MaxSize.size(theme.iconSize(.xl)),
-        .gravity_x = 0.5,
-        .gravity_y = 0.5,
-    });
+fn kindLabel(kind: library_pure.ContentKind) []const u8 {
+    return switch (kind) {
+        .watch, .movie => "Film",
+        .tv => "TV",
+        .anime => "Anime",
+        .podcast => "Podcast",
+        .audiobook => "Audiobook",
+        .music, .radio => "Listen",
+        .comics => "Comic",
+        .novels => "Novel",
+        .iptv => "Live",
+        .search => "Saved",
+        .other => "Video",
+    };
+}
+
+fn kindIcon(kind: library_pure.ContentKind) []const u8 {
+    return switch (kind) {
+        .watch, .movie, .other => icons.tvg.lucide.film,
+        .tv, .iptv => icons.tvg.lucide.tv,
+        .anime => icons.tvg.lucide.sparkles,
+        .podcast => icons.tvg.lucide.podcast,
+        .audiobook => icons.tvg.lucide.headphones,
+        .music => icons.tvg.lucide.music,
+        .radio => icons.tvg.lucide.radio,
+        .comics, .novels => icons.tvg.lucide.@"book-open",
+        .search => icons.tvg.lucide.search,
+    };
 }
 
 fn renderPrivateTitle(id: usize, card_w: f32) void {

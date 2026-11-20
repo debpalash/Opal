@@ -351,8 +351,8 @@ pub const ops = [_]Op{
     .{ .name = "player_info", .summary = "Full state of the active player: position, volume, speed, subtitle delay, chapters, audio and subtitle tracks (ids for player_audio_track and player_subtitle_track), subtitle search results and audio outputs. Answers 'no player' when nothing is loaded.", .tier = .read, .method = .GET, .path = "/player" },
 
     // ── Cast: scanning is a background job, then read the devices ──
-    .{ .name = "cast_scan", .summary = "Scan the local network for Chromecast devices (needs the catt tool). Takes a few seconds; read cast_devices afterwards.", .tier = .read, .method = .GET, .path = "/cast/scan" },
-    .{ .name = "cast_devices", .summary = "Cast devices found so far (name, ip), whether a scan is running and whether something is casting. Starts a scan when none are known yet.", .tier = .read, .method = .GET, .path = "/cast/devices" },
+    .{ .name = "cast_scan", .summary = "Scan the local network for Chromecast (needs catt) and AirPlay (needs pyatv) devices. Takes a few seconds; read cast_devices afterwards.", .tier = .read, .method = .GET, .path = "/cast/scan" },
+    .{ .name = "cast_devices", .summary = "Cast devices found so far (name, ip, protocol chromecast or airplay, needs_pairing), whether a scan is running, whether something is casting, and the AirPlay pairing progress (phase idle, starting, awaiting_pin, verifying, paired or failed, with a message). Starts a scan when none are known yet.", .tier = .read, .method = .GET, .path = "/cast/devices" },
 
     // ── Live torrents (downloads_list covers direct downloads; these are the torrent sessions) ──
     .{
@@ -462,13 +462,30 @@ pub const ops = [_]Op{
     },
     .{
         .name = "cast_start",
-        .summary = "Cast what is playing now to a Chromecast from cast_devices. Local playback keeps going; stop with cast_stop.",
+        .summary = "Cast what is playing now to a Chromecast or AirPlay device from cast_devices. Local files work; localhost stream URLs are refused because the receiver cannot reach them. Local playback keeps going; stop with cast_stop.",
         .tier = .playback,
         .method = .POST,
         .path = "/cast/start",
         .params = &.{.{ .name = "device", .kind = .integer, .desc = "Zero-based position in cast_devices.", .required = true, .wire = "idx", .min = 0, .max = 15 }},
     },
-    .{ .name = "cast_stop", .summary = "Stop casting to the Chromecast.", .tier = .playback, .method = .POST, .path = "/cast/stop" },
+    .{ .name = "cast_stop", .summary = "Stop casting to the Chromecast or AirPlay device.", .tier = .playback, .method = .POST, .path = "/cast/stop" },
+    .{
+        .name = "cast_pair_start",
+        .summary = "Pair with an AirPlay device from cast_devices (needed when needs_pairing is true; newer Apple TVs refuse casts until paired). The TV then shows a 4-digit PIN: watch the pairing object in cast_devices for phase awaiting_pin, then send it with cast_pair_pin. pyatv keeps the credentials for later casts.",
+        .tier = .write,
+        .method = .POST,
+        .path = "/cast/pair/start",
+        .params = &.{.{ .name = "device", .kind = .integer, .desc = "Zero-based position in cast_devices.", .required = true, .wire = "idx", .min = 0, .max = 15 }},
+    },
+    .{
+        .name = "cast_pair_pin",
+        .summary = "Send the 4-digit PIN the TV shows during cast_pair_start. The result appears in the pairing object of cast_devices (paired or failed).",
+        .tier = .write,
+        .method = .POST,
+        .path = "/cast/pair/pin",
+        .params = &.{.{ .name = "pin", .kind = .string, .desc = "The 4 digits shown on the TV.", .required = true, .max_len = 4, .ident = true }},
+    },
+    .{ .name = "cast_pair_cancel", .summary = "Cancel a running AirPlay pairing.", .tier = .playback, .method = .POST, .path = "/cast/pair/cancel" },
     .{ .name = "jellyfin_play", .summary = "Play a movie, episode or video from the Jellyfin items in jellyfin_results, by id. Streams from the user's own server.", .tier = .playback, .method = .POST, .path = "/jellyfin/play", .params = &.{jf_id} },
 
     // ── Persistent changes ──
@@ -1898,6 +1915,19 @@ test "player, cast and home tools map to the exact routes with the right tiers" 
 
     for ([_][]const u8{ "home_summary", "player_info", "cast_scan", "cast_devices" }) |n| try testing.expectEqual(Tier.read, findOp(n).?.tier);
     for ([_][]const u8{ "player_audio_track", "player_subtitle_track", "subtitles_delay", "cast_start", "cast_stop" }) |n| try testing.expectEqual(Tier.playback, findOp(n).?.tier);
+}
+
+test "AirPlay pairing tools map to /cast/pair/* and validate the PIN" {
+    var buf: [512]u8 = undefined;
+    try testing.expectEqualStrings("/api/cast/pair/start?idx=2", try targetFor("cast_pair_start", "{\"device\":2}", &buf));
+    try testing.expectEqualStrings("/api/cast/pair/pin?pin=0427", try targetFor("cast_pair_pin", "{\"pin\":\"0427\"}", &buf));
+    try testing.expectEqualStrings("/api/cast/pair/cancel", try targetFor("cast_pair_cancel", "{}", &buf));
+    try rejects("cast_pair_start", "{\"device\":16}");
+    try rejects("cast_pair_pin", "{\"pin\":\"12345\"}");
+    try rejects("cast_pair_pin", "{\"pin\":\"1&x=\"}");
+    try testing.expectEqual(Tier.write, findOp("cast_pair_start").?.tier);
+    try testing.expectEqual(Tier.write, findOp("cast_pair_pin").?.tier);
+    try testing.expectEqual(Tier.playback, findOp("cast_pair_cancel").?.tier);
 }
 
 test "torrent tools map to the torrent routes and cancel is destructive" {

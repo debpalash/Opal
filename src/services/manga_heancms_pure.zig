@@ -30,8 +30,10 @@
 //!               → { "posts":[Post], "totalCount":N }   Post = id, slug, postTitle,
 //!               featuredImage, seriesType (NOVEL ⇒ text, skipped)
 //!   • DETAILS   GET {api}/api/post?postSlug={slug}        → { "post":{ id, postTitle, isNovel, … } }
-//!   • CHAPTERS  GET {api}/api/chapters?postId={id}&skip=0&take=100&order=asc
+//!   • CHAPTERS  GET {api}/api/chapters?postId={id}&skip=S&take=100&order=asc
 //!               → { "post":{ "chapters":[Chapter] }, "totalChapterCount":N }
+//!               totalChapterCount is the SERIES total (not the page size) →
+//!               page with skip += count until skip >= N (ikenNextSkip).
 //!               isLocked / !isAccessible / price>0 ⇒ paywalled → SKIP
 //!   • PAGES     GET {api}/api/chapter?postId={id}&chapterId={cid}
 //!               → { "chapter":{ "images":[{ "url", "order", … }] } }  (locked ⇒ images:[])
@@ -443,10 +445,38 @@ pub fn buildIkenPostUrl(out: []u8, api: []const u8, slug: []const u8) ?[]const u
     return std.fmt.bufPrint(out, "{s}/api/post?postSlug={s}", .{ api, slug }) catch null;
 }
 
-/// How many chapters one list call asks for. Ascending order + first-free means
-/// the head of the list is all the reader needs; a full `take=900` body (~0.8KB
-/// per chapter) would overflow the fetch buffer and truncate the JSON.
+/// How many chapters one list call asks for. The reader pages through the list
+/// (ikenNextSkip) until the requested chapter AND its free successor are known;
+/// a single `take=900` body (~0.7KB per chapter) would overflow the 512KB fetch
+/// buffer and truncate the JSON, so it stays one bounded page per request.
 pub const IKEN_CHAPTER_TAKE = 100;
+
+/// Upper bound on chapters walked while resolving one chapter (= 50 list
+/// requests). Longer series still open; chapters past the cap are unreachable
+/// by id and Next stops at the cap.
+pub const IKEN_CHAPTER_CAP: usize = 5000;
+
+/// The series' `totalChapterCount` from an `/api/chapters` body, or null when
+/// absent / not a number (older Iken builds omit it).
+pub fn ikenTotalChapterCount(json: []const u8) ?usize {
+    const raw = objField(json, "totalChapterCount") orelse return null;
+    return std.fmt.parseInt(usize, raw, 10) catch null;
+}
+
+/// The `skip` of the next `/api/chapters` page, or null when paging is done:
+/// the successor is already known, the page was empty, the series total is
+/// reached, or the walk hit IKEN_CHAPTER_CAP. With a known total, a short page
+/// (a host capping `take` below 100) does NOT end the walk — only `total` does;
+/// without one, a short page is the end of the list.
+pub fn ikenNextSkip(skip: usize, count: usize, total: ?usize, have_next: bool) ?usize {
+    if (have_next or count == 0) return null;
+    const next = skip + count;
+    if (total) |t| {
+        if (next >= t) return null;
+    } else if (count < IKEN_CHAPTER_TAKE) return null;
+    if (next >= IKEN_CHAPTER_CAP) return null;
+    return next;
+}
 
 /// `GET {api}/api/chapters?postId={id}&skip=0&take=100&order=asc`.
 pub fn buildIkenChapterListUrl(out: []u8, api: []const u8, post_id: []const u8) ?[]const u8 {
@@ -1004,6 +1034,105 @@ test "Iken chapter navigation survives pagination and skips locked chapters" {
     try std.testing.expectEqualStrings("21777", chapterIdFromRoute(route).?);
     try std.testing.expect(slugFromRoute("heancms:x?chapter=1&extra=2") == null);
     try std.testing.expectEqualStrings("https://api.x/api/chapters?postId=1&skip=100&take=100&order=asc", buildIkenChapterListPageUrl(&out, "https://api.x", "1", 100).?);
+}
+
+/// Test fixture: one `/api/chapters` page (ids 1..total, ascending) holding at
+/// most `take` rows from `skip`. Ids in `locked` carry a coin price.
+fn fakeIkenPage(out: []u8, skip: usize, take: usize, total: usize, locked: []const usize, with_total: bool) []const u8 {
+    var len: usize = 0;
+    len += (std.fmt.bufPrint(out[len..], "{{\"post\":{{\"chapters\":[", .{}) catch unreachable).len;
+    var id = skip + 1;
+    while (id <= @min(total, skip + take)) : (id += 1) {
+        const price: usize = if (std.mem.indexOfScalar(usize, locked, id) != null) 100 else 0;
+        const sep = if (id == skip + 1) "" else ",";
+        len += (std.fmt.bufPrint(out[len..], "{s}{{\"id\":{d},\"number\":{d},\"price\":{d}}}", .{ sep, id, id, price }) catch unreachable).len;
+    }
+    len += (std.fmt.bufPrint(out[len..], "]}}}}", .{}) catch unreachable).len;
+    if (with_total) len += (std.fmt.bufPrint(out[len - 1 ..], ",\"totalChapterCount\":{d}}}", .{total}) catch unreachable).len - 1;
+    return out[0..len];
+}
+
+/// Mirrors loadIkenPages' paging loop (nav.append + ikenNextSkip); returns
+/// the number of list requests made.
+fn walkFakeIken(nav: *IkenNavigation, requested: ?[]const u8, take: usize, total: usize, locked: []const usize, with_total: bool) usize {
+    var buf: [16 * 1024]u8 = undefined;
+    var skip: usize = 0;
+    var requests: usize = 0;
+    while (true) {
+        const page = fakeIkenPage(&buf, skip, take, total, locked, with_total);
+        requests += 1;
+        const count = nav.append(page, requested) orelse return requests;
+        skip = ikenNextSkip(skip, count, ikenTotalChapterCount(page), nav.next != null) orelse return requests;
+    }
+}
+
+test "regression: Iken reader opened only the first free chapter — prev/next resolved, locked skipped" {
+    // Open chapter 5 of 10 with 4 and 6 coin-locked: prev/next must jump to the
+    // nearest FREE chapters (3 and 7), never to a paywalled one.
+    var nav: IkenNavigation = .{};
+    _ = walkFakeIken(&nav, "5", IKEN_CHAPTER_TAKE, 10, &.{ 4, 6 }, true);
+    try std.testing.expectEqualStrings("3", nav.previous.?.idSlice());
+    try std.testing.expectEqualStrings("5", nav.current.?.idSlice());
+    try std.testing.expectEqualStrings("7", nav.next.?.idSlice());
+    // Default open (no id) = first free chapter, which still gets a Next.
+    var first: IkenNavigation = .{};
+    _ = walkFakeIken(&first, null, IKEN_CHAPTER_TAKE, 10, &.{1}, true);
+    try std.testing.expect(first.previous == null);
+    try std.testing.expectEqualStrings("2", first.current.?.idSlice());
+    try std.testing.expectEqualStrings("3", first.next.?.idSlice());
+    // Last chapter: Previous but no Next; a locked request opens nothing.
+    var last: IkenNavigation = .{};
+    _ = walkFakeIken(&last, "10", IKEN_CHAPTER_TAKE, 10, &.{}, true);
+    try std.testing.expectEqualStrings("9", last.previous.?.idSlice());
+    try std.testing.expect(last.next == null);
+    var locked: IkenNavigation = .{};
+    _ = walkFakeIken(&locked, "4", IKEN_CHAPTER_TAKE, 10, &.{4}, true);
+    try std.testing.expect(locked.current == null);
+    // The prev/next routes round-trip back into the reader's route parser.
+    var out: [128]u8 = undefined;
+    const route = buildIkenChapterRoute(&out, "series", nav.next.?.idSlice()).?;
+    try std.testing.expectEqualStrings("heancms:series?chapter=7", route);
+    try std.testing.expectEqualStrings("7", chapterIdFromRoute(route).?);
+}
+
+test "regression: Iken chapter list read only the first 100 chapters — pages through the full list" {
+    // Chapter 250 of 644 (Hive Scans post 15 has 644): past page 1, found on
+    // page 3; chapter 100/101 straddle a page boundary.
+    var out_page: [256]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "{\"post\":{\"chapters\":[{\"id\":1,\"number\":1,\"price\":0}]},\"totalChapterCount\":644}",
+        fakeIkenPage(&out_page, 0, 1, 644, &.{}, true),
+    );
+    var nav: IkenNavigation = .{};
+    try std.testing.expectEqual(@as(usize, 3), walkFakeIken(&nav, "250", IKEN_CHAPTER_TAKE, 644, &.{}, true));
+    try std.testing.expectEqualStrings("249", nav.previous.?.idSlice());
+    try std.testing.expectEqualStrings("251", nav.next.?.idSlice());
+    var edge: IkenNavigation = .{};
+    try std.testing.expectEqual(@as(usize, 2), walkFakeIken(&edge, "100", IKEN_CHAPTER_TAKE, 644, &.{}, true));
+    try std.testing.expectEqualStrings("101", edge.next.?.idSlice());
+    // The newest chapter: walks every page, then stops at the series total.
+    var tail: IkenNavigation = .{};
+    try std.testing.expectEqual(@as(usize, 7), walkFakeIken(&tail, "644", IKEN_CHAPTER_TAKE, 644, &.{}, true));
+    try std.testing.expectEqualStrings("643", tail.previous.?.idSlice());
+    try std.testing.expect(tail.next == null);
+    // A host that caps `take` at 50: the short page is NOT the end while
+    // totalChapterCount says more remain.
+    var capped: IkenNavigation = .{};
+    try std.testing.expectEqual(@as(usize, 4), walkFakeIken(&capped, "180", 50, 644, &.{}, true));
+    try std.testing.expectEqualStrings("180", capped.current.?.idSlice());
+    try std.testing.expectEqual(@as(?usize, 644), ikenTotalChapterCount(fakeIkenPage(&out_page, 0, 1, 644, &.{}, true)));
+    // No total: a short page ends the list (no runaway walk).
+    var no_total: IkenNavigation = .{};
+    try std.testing.expectEqual(@as(usize, 3), walkFakeIken(&no_total, "999", IKEN_CHAPTER_TAKE, 250, &.{}, false));
+    try std.testing.expect(no_total.current == null);
+    // ikenNextSkip edges: successor known / empty page / total reached / cap.
+    try std.testing.expectEqual(@as(?usize, 100), ikenNextSkip(0, 100, 644, false));
+    try std.testing.expectEqual(@as(?usize, null), ikenNextSkip(0, 100, 644, true));
+    try std.testing.expectEqual(@as(?usize, null), ikenNextSkip(100, 0, 644, false));
+    try std.testing.expectEqual(@as(?usize, null), ikenNextSkip(600, 44, 644, false));
+    try std.testing.expectEqual(@as(?usize, null), ikenNextSkip(IKEN_CHAPTER_CAP - 100, 100, 100_000, false));
+    try std.testing.expectEqual(@as(?usize, 11), ikenTotalChapterCount(IKEN_CHAPTERS));
+    try std.testing.expectEqual(@as(?usize, null), ikenTotalChapterCount("{\"post\":{\"chapters\":[]}}"));
 }
 
 /// Rebuild the header from series metadata, never from a prior chapter label.

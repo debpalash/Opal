@@ -49,7 +49,8 @@ pub fn validTitle(t: []const u8) bool {
 /// Comparison form of a title: lower case ASCII letters and digits, `&` read as
 /// "and", every other ASCII punctuation mark dropped (so "Schindler's List" equals
 /// "Schindlers List" and "Spider-Man" equals "Spider Man" only through the space rule
-/// below), runs of whitespace and dashes become one space, non-ASCII bytes kept.
+/// below), runs of whitespace and dashes become one space, accented Latin letters
+/// folded to their base letter ("Shōgun" equals "Shogun"), other non-ASCII bytes kept.
 pub fn normTitle(out: []u8, title: []const u8) []const u8 {
     var n: usize = 0;
     var pending_space = false;
@@ -64,6 +65,10 @@ pub fn normTitle(out: []u8, title: []const u8) []const u8 {
         var one: [1]u8 = undefined;
         if (ch == '&') {
             emit = "and";
+        } else if (i + 1 < title.len and foldLatin(ch, title[i + 1]) != null) {
+            one[0] = foldLatin(ch, title[i + 1]).?;
+            emit = one[0..1];
+            i += 1;
         } else if (std.ascii.isAlphanumeric(ch)) {
             one[0] = std.ascii.toLower(ch);
             emit = one[0..1];
@@ -85,6 +90,19 @@ pub fn normTitle(out: []u8, title: []const u8) []const u8 {
 }
 
 pub const NORM_MAX = 128;
+
+/// Base letter of a two-byte UTF-8 Latin-1 Supplement / Latin Extended-A letter
+/// (U+00C0..U+017F), lower case; null for non-decomposable ones (æ ß þ œ ĳ ŋ × ÷
+/// stay as raw bytes). File names are typed without diacritics while catalogs
+/// keep them, so exact matching needs this fold.
+fn foldLatin(b0: u8, b1: u8) ?u8 {
+    if (b0 < 0xC3 or b0 > 0xC5 or (b1 & 0xC0) != 0x80) return null;
+    const cp: u16 = (@as(u16, b0 & 0x1F) << 6) | (b1 & 0x3F);
+    const latin1 = "aaaaaaxceeeeiiiidnoooooxouuuuyxxaaaaaaxceeeeiiiidnoooooxouuuuyxy";
+    const ext_a = "aaaaaaccccccccddddeeeeeeeeeegggggggghhhhiiiiiiiiiixxjjkkxllllllllllnnnnnnxxxooooooxxrrrrrrssssssssttttttuuuuuuuuuuuuwwyyyzzzzzzx";
+    const c: u8 = if (cp >= 0xC0 and cp < 0x100) latin1[cp - 0xC0] else if (cp >= 0x100 and cp < 0x180) ext_a[cp - 0x100] else return null;
+    return if (c == 'x') null else c;
+}
 
 pub fn sameTitle(a: []const u8, b: []const u8) bool {
     var x: [NORM_MAX]u8 = undefined;
@@ -226,6 +244,42 @@ fn stringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     return if (v == .string) v.string else null;
 }
 
+/// One Cinemeta catalog/meta object as a candidate; null without a valid IMDb
+/// id or a name. Shared by the search parser here and the library artwork
+/// lookup (`release_name_pure.parseMetaCandidate`).
+pub fn candidateFromObject(obj: std.json.ObjectMap, kind: Media) ?Candidate {
+    const id = stringField(obj, "imdb_id") orelse stringField(obj, "id") orelse return null;
+    if (!validImdb(id)) return null;
+    const name = stringField(obj, "name") orelse return null;
+    if (name.len == 0 or name.len > 128 or !std.unicode.utf8ValidateSlice(name)) return null;
+    var c = Candidate{ .kind = kind };
+    @memcpy(c.imdb[0..id.len], id);
+    c.imdb_len = @intCast(id.len);
+    @memcpy(c.title[0..name.len], name);
+    c.title_len = @intCast(name.len);
+    c.year = leadingYear(stringField(obj, "year") orelse stringField(obj, "releaseInfo") orelse "");
+    if (c.year == 0) c.year = leadingYear(stringField(obj, "released") orelse "");
+    if (stringField(obj, "poster")) |p| {
+        if (p.len > 0 and p.len + 4 <= c.poster.len and (std.mem.startsWith(u8, p, "https://") or std.mem.startsWith(u8, p, "http://"))) {
+            const host = "https://images.metahub.space/";
+            const jpg = std.mem.startsWith(u8, p, host) and std.mem.endsWith(u8, p, "/img");
+            @memcpy(c.poster[0..p.len], p);
+            var len = p.len;
+            if (jpg) {
+                @memcpy(c.poster[len..][0..4], ".jpg");
+                len += 4;
+            }
+            c.poster_len = @intCast(len);
+        }
+    }
+    if (stringField(obj, "imdbRating")) |r| c.rating = std.fmt.parseFloat(f32, r) catch 0;
+    if (stringField(obj, "description")) |d| {
+        const keep = @min(d.len, c.overview.len);
+        c.overview_len = @intCast(cleanText(c.overview[0..keep], d[0..keep]));
+    }
+    return c;
+}
+
 /// Read up to `out.len` catalog rows from `{"metas":[...]}`. Rows without a valid
 /// IMDb id or a name are skipped. Returns how many were written.
 pub fn parseCandidates(allocator: std.mem.Allocator, body: []const u8, kind: Media, out: []Candidate) usize {
@@ -238,37 +292,7 @@ pub fn parseCandidates(allocator: std.mem.Allocator, body: []const u8, kind: Med
     for (metas.array.items) |m| {
         if (n >= out.len) break;
         if (m != .object) continue;
-        const obj = m.object;
-        const id = stringField(obj, "imdb_id") orelse stringField(obj, "id") orelse continue;
-        if (!validImdb(id)) continue;
-        const name = stringField(obj, "name") orelse continue;
-        if (name.len == 0 or name.len > 128 or !std.unicode.utf8ValidateSlice(name)) continue;
-        var c = Candidate{ .kind = kind };
-        @memcpy(c.imdb[0..id.len], id);
-        c.imdb_len = @intCast(id.len);
-        @memcpy(c.title[0..name.len], name);
-        c.title_len = @intCast(name.len);
-        c.year = leadingYear(stringField(obj, "year") orelse stringField(obj, "releaseInfo") orelse "");
-        if (c.year == 0) c.year = leadingYear(stringField(obj, "released") orelse "");
-        if (stringField(obj, "poster")) |p| {
-            if (p.len > 0 and p.len + 4 <= c.poster.len and (std.mem.startsWith(u8, p, "https://") or std.mem.startsWith(u8, p, "http://"))) {
-                const host = "https://images.metahub.space/";
-                const jpg = std.mem.startsWith(u8, p, host) and std.mem.endsWith(u8, p, "/img");
-                @memcpy(c.poster[0..p.len], p);
-                var len = p.len;
-                if (jpg) {
-                    @memcpy(c.poster[len..][0..4], ".jpg");
-                    len += 4;
-                }
-                c.poster_len = @intCast(len);
-            }
-        }
-        if (stringField(obj, "imdbRating")) |r| c.rating = std.fmt.parseFloat(f32, r) catch 0;
-        if (stringField(obj, "description")) |d| {
-            const keep = @min(d.len, c.overview.len);
-            c.overview_len = @intCast(cleanText(c.overview[0..keep], d[0..keep]));
-        }
-        out[n] = c;
+        out[n] = candidateFromObject(m.object, kind) orelse continue;
         n += 1;
     }
     return n;
@@ -399,6 +423,18 @@ test "titles compare by letters and digits, not punctuation or case" {
     try T.expect(!sameTitle("!!!", "???"));
     try T.expect(sameTitle("千と千尋の神隠し", "千と千尋の神隠し"));
     try T.expect(!sameTitle("千と千尋の神隠し", "もののけ姫"));
+}
+
+test "accented catalog titles match plain file names (Shōgun 2024 matched the 1980 Shogun)" {
+    try T.expect(sameTitle("Shōgun", "Shogun"));
+    try T.expect(sameTitle("Amélie", "Amelie"));
+    try T.expect(sameTitle("Pokémon", "POKEMON"));
+    try T.expect(sameTitle("Señor Ávila", "senor avila"));
+    try T.expect(sameTitle("Łódź", "lodz"));
+    try T.expect(!sameTitle("Shōgun", "Shogunned"));
+    // Not letters: kept raw, so they still only match themselves.
+    try T.expect(sameTitle("Straße", "Straße"));
+    try T.expect(!sameTitle("Straße", "Strasse"));
 }
 
 test "recommendations are validated, bounded and distinct" {

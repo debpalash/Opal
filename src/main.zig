@@ -193,6 +193,7 @@ fn platformStartOptions() dvui.App.StartOptions {
         // calls; packaged dependencies still resolve from the application dir.
         _ = win_instance.SetDefaultDllDirectories(win_instance.load_library_search_default_dirs);
     }
+    openWindowed();
     _ = c.sdl.SDL_SetHint("SDL_APP_NAME", "Opal");
     // A click that activates the window must also reach its target button.
     _ = c.sdl.SDL_SetHint("SDL_MOUSE_FOCUS_CLICKTHROUGH", "1");
@@ -201,6 +202,26 @@ fn platformStartOptions() dvui.App.StartOptions {
         _ = c.sdl.SDL_SetHint("SDL_VIDEO_WAYLAND_WMCLASS", "opal");
     }
     return app_start_options;
+}
+
+/// Fullscreen is a user action, never a launch state: dvui restores the state
+/// the window quit in, so strip a saved fullscreen before the window exists
+/// (size, position and maximized are kept). See window_geometry_pure.zig.
+fn openWindowed() void {
+    if (comptime builtin.os.tag == .ios or builtin.abi.isAndroid()) return;
+    const pref = c.sdl.SDL_GetPrefPath(app_start_options.org.ptr, app_start_options.app.ptr) orelse return;
+    defer c.sdl.SDL_free(pref);
+    var path_buf: [1024]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "{s}windows_geometry.zon", .{std.mem.span(@as([*:0]const u8, @ptrCast(pref)))}) catch return;
+    const io = @import("core/io_global.zig");
+    const alloc = @import("core/alloc.zig").allocator;
+    const saved = io.cwdReadFileAlloc(path, alloc, 64 * 1024) catch return;
+    defer alloc.free(saved);
+    // ".normal" is shorter than ".fullscreen", so the input size always fits.
+    const out = alloc.alloc(u8, saved.len) catch return;
+    defer alloc.free(out);
+    const fixed = @import("core/window_geometry_pure.zig").dropFullscreen(saved, out) orelse return;
+    io.cwdWriteFile(.{ .sub_path = path, .data = fixed }) catch {};
 }
 
 pub const dvui_app: dvui.App = .{

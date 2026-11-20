@@ -8,7 +8,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 const search = @import("../services/search.zig");
 const resolver = @import("../services/resolver.zig");
 const capture = @import("native_capture.zig");
-const Case = struct { name: []const u8, route: router.Route, tab: state.DrawerTab = .TMDB, settings: state.SettingsTab = .General, plugin: router.PluginTab = .sources, sidebar: ?bool = null, navigate_anime: bool = false, hover_sidebar: bool = false, fullscreen_comics: bool = false, toggle_sidebar: bool = false, ui_scale: f32 = 1, scope: ?search.scope_model.Scope = null, remove_scope: bool = false, clear_query: bool = false, clear_query_click: bool = false, submit_query: bool = false, navigate_movies: bool = false, nav_api: bool = false, ranking_fixture: bool = false, comic_reader: bool = false, novels_empty: bool = false, anime_episodes: bool = false, wallpaper_performance: bool = false };
+const Case = struct { name: []const u8, route: router.Route, tab: state.DrawerTab = .TMDB, settings: state.SettingsTab = .General, plugin: router.PluginTab = .sources, sidebar: ?bool = null, navigate_anime: bool = false, hover_sidebar: bool = false, fullscreen_comics: bool = false, toggle_sidebar: bool = false, ui_scale: f32 = 1, scope: ?search.scope_model.Scope = null, remove_scope: bool = false, clear_query: bool = false, clear_query_click: bool = false, submit_query: bool = false, navigate_movies: bool = false, nav_api: bool = false, ranking_fixture: bool = false, comic_reader: bool = false, novels_empty: bool = false, anime_episodes: bool = false, wallpaper_performance: bool = false, continue_fixture: bool = false };
 var current: Case = undefined;
 var first_frame = true;
 var preset: theme.ThemePreset = .midnight;
@@ -69,6 +69,7 @@ fn setup() !void {
     state.app.content_cache_enabled = false;
     state.app.taste_enabled = false;
 
+    if (current.continue_fixture) seedContinueFixture();
     if (current.comic_reader) {
         field(&state.app.comic.title, &state.app.comic.title_len, "Beck - Mongolian Chop Squad — A very long chapter title");
         state.app.comic.page_count = 87;
@@ -487,7 +488,33 @@ fn draw() !void {
         try std.testing.expect(@abs(editor[0].h - editor[1].h) <= 1);
     }
 }
+fn seedContinueFixture() void {
+    const pure = @import("../services/library_pure.zig");
+    const Row = struct { kind: []const u8, title: []const u8, next: []const u8 = "", resume_secs: f64, duration_secs: f64, pinned: bool = false };
+    const rows = [_]Row{
+        .{ .kind = "tv", .title = "A long cinema title — The Return of the Fixture", .next = "S2 E4", .resume_secs = 900, .duration_secs = 2700, .pinned = true },
+        .{ .kind = "movie", .title = "Short Film", .resume_secs = 3600, .duration_secs = 6000 },
+        .{ .kind = "podcast", .title = "Morning Briefing", .resume_secs = 300, .duration_secs = 1800 },
+        .{ .kind = "comics", .title = "Graphic Novel Volume One", .next = "Page 12 of 40", .resume_secs = 12, .duration_secs = 40 },
+    };
+    var items: [rows.len]pure.LibraryItem = undefined;
+    for (rows, &items, 0..) |row, *item, i| {
+        item.* = .{};
+        field(&item.kind, &item.kind_len, row.kind);
+        field(&item.title, &item.title_len, row.title);
+        field(&item.next_label, &item.next_label_len, row.next);
+        var id: [8]u8 = undefined;
+        field(&item.item_id, &item.item_id_len, std.fmt.bufPrint(&id, "fx{d}", .{i}) catch "fx");
+        item.resume_secs = row.resume_secs;
+        item.duration_secs = row.duration_secs;
+        item.percent = pure.percentOf(row.resume_secs, row.duration_secs);
+        item.home_pinned = row.pinned;
+    }
+    @import("../services/library_store.zig").seedContinueForTest(&items);
+}
+
 fn cleanup() void {
+    if (current.continue_fixture) @import("../services/library_store.zig").seedContinueForTest(&.{});
     state.app.fullscreen_player_idx = null;
     @import("../services/wallpapers.zig").deinit();
     @import("wallpaper_image.zig").deinit();
@@ -558,6 +585,7 @@ test "Native shell offline route pixel capture" {
         .{ .name = "scope-clear", .route = .search, .scope = .music, .clear_query = true },
         .{ .name = "wallpaper-large-grid", .route = .browse, .tab = .Wallpapers, .wallpaper_performance = true },
         .{ .name = "home", .route = .home },
+        .{ .name = "home-continue", .route = .home, .continue_fixture = true },
         .{ .name = "search", .route = .search },
         .{ .name = "watching", .route = .watching },
         .{ .name = "downloads", .route = .downloads },

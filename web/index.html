@@ -88,6 +88,17 @@
         </div>
         <div class="hint" id="cast-hint" role="status" aria-live="polite">Looking for devices…</div>
         <div class="cast-devices" id="cast-devices"></div>
+        <form id="cast-pair" class="cast-pair" hidden>
+          <div class="hint" id="cast-pair-status" role="status" aria-live="polite"></div>
+          <div class="cast-pair-row">
+            <span id="cast-pair-entry" class="cast-pair-entry" hidden>
+              <label for="cast-pair-pin">PIN on the TV</label>
+              <input id="cast-pair-pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="one-time-code" placeholder="0000">
+              <button type="submit" class="text-btn">Pair</button>
+            </span>
+            <button type="button" id="cast-pair-cancel" class="text-btn">Cancel</button>
+          </div>
+        </form>
       </div>
       <section id="player-tools" class="player-tools" aria-labelledby="player-tools-title" hidden>
         <div class="player-tools-head">

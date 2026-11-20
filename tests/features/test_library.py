@@ -28,13 +28,55 @@ def test_library():
         # Progress upsert uses ON CONFLICT (so it preserves is_favorite, not REPLACE).
         "upsert preserves via ON CONFLICT": "ON CONFLICT(kind,item_id) DO UPDATE" in store,
         # watch_history mirrors playback progress into the read-model.
-        "watch_history mirrors": "library_store" in wh and "upsertProgress(" in wh,
+        "watch_history mirrors": "library_store" in wh and ("upsertProgress(" in wh or "upsertWatchProgress(" in wh),
         "pure test registered": 'b.path("src/services/library_pure.zig")' in build,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "library read-model incomplete: " + ", ".join(missing)
     return "pass", "library_items read-model: table + pure + store (continue/favorites) + watch_history mirror"
+
+
+@test("Library artwork for played files/links", "Storage")
+def test_library_artwork():
+    """Rows mirrored from local files/magnets/links get a clean title, an
+    episode label and (off-thread, keyless Cinemeta) a poster. The parser is a
+    tested pure module and the shipped code routes through it."""
+    wh = _src("src/player/watch_history.zig")
+    store = _src("src/services/library_store.zig")
+    art = _src("src/services/library_art.zig")
+    rel = _src("src/services/release_name_pure.zig")
+    build = _src("build.zig")
+
+    checks = {
+        "pure parser registered": 'b.path("src/services/release_name_pure.zig")' in build,
+        "parser has tests": rel.count('test "') >= 8,
+        # watch_history parses before mirroring and never writes an empty poster over art.
+        "mirror parses name": "release.parseBest(" in wh and "release.episodeLabel(" in wh,
+        "mirror keeps artwork": "upsertWatchProgress(" in wh and "pub fn upsertWatchProgress" in store
+        and "VALUES('watch',?1,?2,''," in store,
+        "progress tick keeps enriched title": "CASE WHEN poster!='' AND title!='' THEN title" in store,
+        # Narrow writer that bumps the rail version.
+        "applyArtwork narrow update": "pub fn applyArtwork" in store
+        and "WHERE kind=?1 AND item_id=?2 AND poster='' AND deleted=0" in store,
+        "applyArtwork bumps rails": "markDirty();\n    return true;" in store,
+        # Worker: kicked per new item + startup backfill, bounded, cached, off-thread.
+        "kicked on new item": "library_art.zig\").noteItem(" in wh,
+        "startup backfill": "library_art.zig\").kick()" in wh,
+        "off-thread single worker": "workers.spawn(run" in art and "busy.cmpxchgStrong" in art,
+        "bounded batch": "ROWS_PER_RUN" in art and "LOOKUPS_PER_RUN" in art,
+        "negative cache": "library_art_cache" in art and "library_art_tried" in art,
+        "network backoff": "FAIL_BACKOFF_MS" in art,
+        # Privacy: only the parsed title is searched, behind the release gate.
+        "privacy gate": "pure.lookupAllowed(" in art,
+        "searches parsed title only": "http.urlEncode(title" in art and "row.idText()" not in art.split("fn lookup(")[1],
+        "catalog id preferred": "resolveCatalog(" in art and "catalog_tmdb_id" in art,
+        "routes through pure matcher": "pure.pickMatch(" in art and "pure.cacheKey(" in art,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "library artwork incomplete: " + ", ".join(missing)
+    return "pass", "watch rows: parsed title/label + background Cinemeta artwork (gated, cached, bounded)"
 
 
 @test("Library producers span the verticals", "Storage")
@@ -153,7 +195,13 @@ def watch_items_are_removable():
         "pinned cards sort first": "ORDER BY home_pinned DESC" in store,
         "pin control wired": "setHomePinned(" in home and "Pin to front" in home,
         "hide control wired": "setHomeHidden(" in home and "Remove from Continue" in home,
-        "private until hover": "renderPrivateTitle(" in home and "const revealed = !manage_continue or hovered" in home,
+        # Masking is opt-in: the default shows covers and titles.
+        "private until hover is opt-in": "renderPrivateTitle(" in home
+            and "const revealed = !(manage_continue and state.app.continue_private) or hovered" in home
+            and _src("src/core/state.zig").count("continue_private: bool = false") == 1
+            and '"continue_private"' in _src("src/core/config.zig")
+            and "&state.app.continue_private" in _src("src/ui/settings.zig"),
+        "rail sized to its cards": "const rail_h = poster_h + card_chrome" in home,
         "hidden cards restorable": "restoreHiddenContinue()" in home and "Restore removed Continue" in home,
         "no progress deletion": "DELETE FROM library_items" not in store,
     }

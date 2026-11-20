@@ -51,6 +51,17 @@ fn refreshRailsLocked() void {
     rail_version = current;
 }
 
+/// Native fixtures have no database; seed the Continue snapshot directly.
+pub fn seedContinueForTest(rows: []const pure.LibraryItem) void {
+    rail_mutex.lock();
+    defer rail_mutex.unlock();
+    const n = @min(rows.len, continue_rows.len);
+    @memcpy(continue_rows[0..n], rows[0..n]);
+    continue_len = n;
+    hidden_continue = 0;
+    rail_version = version.load(.acquire);
+}
+
 /// Record/refresh progress for an item. Preserves an existing `is_favorite`
 /// (progress updates must not clear a star). `deep_link` is what resumes it.
 pub fn upsertProgress(
@@ -84,6 +95,78 @@ pub fn upsertProgress(
     db.bindText(stmt, 9, deep_link);
     _ = db.step(stmt);
     markDirty();
+}
+
+/// Progress for a played file/link ("watch" kind). Unlike `upsertProgress` it
+/// never blanks artwork: the poster comes only from `applyArtwork` (the
+/// background lookup in library_art.zig), and once a row has one, its enriched
+/// title is kept too, so the 5 s progress tick cannot undo the match.
+pub fn upsertWatchProgress(
+    item_id: []const u8,
+    title: []const u8,
+    resume_secs: f64,
+    duration_secs: f64,
+    next_label: []const u8,
+    deep_link: []const u8,
+) void {
+    if (item_id.len == 0) return;
+    const percent = pure.percentOf(resume_secs, duration_secs);
+    const stmt = db.prepare(
+        "INSERT INTO library_items(kind,item_id,title,poster,resume_secs,duration_secs,percent,next_label,deep_link,updated_at) " ++
+            "VALUES('watch',?1,?2,'',?3,?4,?5,?6,?7,strftime('%s','now')) " ++
+            "ON CONFLICT(kind,item_id) DO UPDATE SET title=CASE WHEN poster!='' AND title!='' THEN title ELSE excluded.title END, " ++
+            "resume_secs=excluded.resume_secs, duration_secs=excluded.duration_secs, percent=excluded.percent, " ++
+            "next_label=excluded.next_label, deep_link=excluded.deep_link, updated_at=excluded.updated_at, deleted=0",
+    ) orelse return;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, item_id);
+    db.bindText(stmt, 2, title);
+    db.bindDouble(stmt, 3, resume_secs);
+    db.bindDouble(stmt, 4, duration_secs);
+    db.bindDouble(stmt, 5, percent);
+    db.bindText(stmt, 6, next_label);
+    db.bindText(stmt, 7, deep_link);
+    _ = db.step(stmt);
+    markDirty();
+}
+
+/// Fill in artwork found for a row that has none: poster, plus title and
+/// next_label when non-empty. Only touches rows whose poster is still empty
+/// (never overrides art a source supplied) and leaves `updated_at` alone so
+/// the Continue order does not shuffle. True when a row changed.
+pub fn applyArtwork(kind: []const u8, item_id: []const u8, title: []const u8, poster: []const u8, next_label: []const u8) bool {
+    if (kind.len == 0 or item_id.len == 0 or poster.len == 0) return false;
+    const stmt = db.prepare(
+        "UPDATE library_items SET poster=?3, title=CASE WHEN ?4!='' THEN ?4 ELSE title END, " ++
+            "next_label=CASE WHEN ?5!='' THEN ?5 ELSE next_label END " ++
+            "WHERE kind=?1 AND item_id=?2 AND poster='' AND deleted=0",
+    ) orelse return false;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, kind);
+    db.bindText(stmt, 2, item_id);
+    db.bindText(stmt, 3, poster);
+    db.bindText(stmt, 4, title);
+    db.bindText(stmt, 5, next_label);
+    if (db.step(stmt) != db.c.SQLITE_DONE) return false;
+    if (db.c.sqlite3_changes(db.get()) == 0) return false;
+    markDirty();
+    return true;
+}
+
+/// Clean display title + episode label for an artless row the lookup could not
+/// match (old rows still carry the raw file name). Artless rows only.
+pub fn applyDisplay(kind: []const u8, item_id: []const u8, title: []const u8, next_label: []const u8) void {
+    if (kind.len == 0 or item_id.len == 0 or title.len == 0) return;
+    const stmt = db.prepare(
+        "UPDATE library_items SET title=?3, next_label=?4 " ++
+            "WHERE kind=?1 AND item_id=?2 AND poster='' AND deleted=0 AND (title!=?3 OR next_label!=?4)",
+    ) orelse return;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, kind);
+    db.bindText(stmt, 2, item_id);
+    db.bindText(stmt, 3, title);
+    db.bindText(stmt, 4, next_label);
+    if (db.step(stmt) == db.c.SQLITE_DONE and db.c.sqlite3_changes(db.get()) > 0) markDirty();
 }
 
 /// Toggle/set a favorite, carrying a display snapshot so the Favorites rail can

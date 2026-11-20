@@ -91,8 +91,35 @@ def test_manga_heancms_engine():
         if call not in comics:
             problems.append(f"comics.zig does not route through {call}")
 
+    # 12) Iken chapter navigation: the list is PAGED past the first 100 chapters
+    #     (tested ikenNextSkip + totalChapterCount drive the loop, no ad-hoc
+    #     `count < TAKE` stop), and the requested chapter's free neighbours become
+    #     the shared reader's prev/next routes (same prev_url/next_url toolbar
+    #     controls MangaDex uses). Regression tests named for both bugs exist.
+    for fn in ("pub fn ikenNextSkip", "pub fn ikenTotalChapterCount", "pub const IKEN_CHAPTER_CAP",
+               "pub const IkenNavigation", "pub fn buildIkenChapterRoute", "pub fn chapterIdFromRoute"):
+        if fn not in pure:
+            problems.append(f"pure module missing {fn}")
+    for name in ("regression: Iken reader opened only the first free chapter",
+                 "regression: Iken chapter list read only the first 100 chapters"):
+        if f'test "{name}' not in pure:
+            problems.append(f"missing regression test '{name}'")
+    iken = comics[comics.find("fn loadIkenPages"):]
+    iken = iken[:iken.find("\nfn ", 1)]
+    if "heancms.ikenNextSkip(skip, count, heancms.ikenTotalChapterCount(" not in iken:
+        problems.append("loadIkenPages does not page the chapter list through ikenNextSkip")
+    if "count < heancms.IKEN_CHAPTER_TAKE" in iken:
+        problems.append("loadIkenPages still stops after the first short/100-chapter page")
+    if not all(t in iken for t in ("nav.previous", "nav.next", "state.app.comic.prev_url_len = route.len",
+                                    "state.app.comic.next_url_len = route.len")):
+        problems.append("Iken prev/next not wired into the reader's prev_url/next_url")
+    if "loadComic(comic.prev_url[0..comic.prev_url_len])" not in comics or \
+       "loadComic(comic.next_url[0..comic.next_url_len])" not in comics:
+        problems.append("reader toolbar prev/next controls missing")
+
     if problems:
         return "fail", "; ".join(problems)
     return ("pass", "HeanCms engine wired: pure module registered + routed, Source.heancms + "
             "searchWorker branch, source_config-gated, api-host derivation + paywall skip + "
-            "both page shapes, pages route into the shared comics reader")
+            "both page shapes, pages route into the shared comics reader, Iken chapter "
+            "list paged past 100 + free prev/next chapter routes")

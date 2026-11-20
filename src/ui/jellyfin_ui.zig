@@ -4,6 +4,7 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const theme = @import("theme.zig");
 const components = @import("components.zig");
+const media_card = @import("media_card.zig");
 const jf = @import("../services/jellyfin.zig");
 const state = @import("../core/state.zig");
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
@@ -257,8 +258,8 @@ fn renderLibraries() void {
         // Horizontal scroll row of poster cards
         var resume_scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
             .expand = .horizontal,
-            .min_size_content = .{ .w = 10, .h = 140 },
-            .max_size_content = .{ .w = std.math.floatMax(f32), .h = 140 },
+            .min_size_content = .{ .w = 10, .h = media_card.rowPitch(130, .poster, CARD_FOOTER) },
+            .max_size_content = .{ .w = std.math.floatMax(f32), .h = media_card.rowPitch(130, .poster, CARD_FOOTER) },
             .padding = .{ .x = 8, .y = 0, .w = 8, .h = 8 },
         });
         defer resume_scroll.deinit();
@@ -398,13 +399,14 @@ fn renderItems() void {
     // Responsive poster grid (fills the page width; was one wide row per item).
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
-    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / 150)));
-    const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
+    const grid = media_card.pure.columns(avail_w, 150, media_card.pure.MARGIN, 1, 12);
+    const cols: usize = grid.count;
+    const card_w: f32 = @max(100, grid.card_w);
 
     // ── Virtualization (same shape as tmdb.zig renderGallery) ──
-    // Uniform cards → fixed row pitch: poster + footer + 3px margins each way.
+    // Uniform cards → fixed row pitch: poster + footer + margins each way.
     const total = frame_view.item_count;
-    const row_h: f32 = card_w * 1.45 + CARD_FOOTER_H + 6;
+    const row_h: f32 = media_card.rowPitch(card_w, .poster, CARD_FOOTER);
     const total_rows = (total + cols - 1) / cols;
     const win = @import("../services/tmdb_pure.zig").visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
 
@@ -537,9 +539,9 @@ fn renderSkeletonRows() void {
 // Poster Card — compact vertical card for horizontal scrolling
 // ══════════════════════════════════════════════════════════
 
-/// Card footer height below the poster — referenced by the uniform card
-/// sizing AND the grid's virtualization row pitch. Keep single-sourced.
-const CARD_FOOTER_H: f32 = 38;
+/// Card footer (title + year/favorite/watched row) — referenced by the uniform
+/// card sizing AND the grid's virtualization row pitch. Keep single-sourced.
+const CARD_FOOTER: media_card.Footer = .{ .title_lines = 1, .action_row = true };
 
 fn activateItem(item: *const jf.PresentationItem) void {
     const id = item.id[0..item.id_len];
@@ -577,123 +579,38 @@ fn updatePoster(slot_idx: usize, item: *const jf.PresentationItem) *PosterSlot {
 }
 
 fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usize, card_w: f32, show_progress: bool) void {
-    const poster_h: f32 = card_w * 1.45;
     // min == max height → uniform row pitch for the virtualized grid.
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = idx,
-        .background = true,
-        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
-        .corners = dvui.CornerRect.all(theme.radius.md),
-        .min_size_content = .{ .w = card_w, .h = poster_h + CARD_FOOTER_H },
-        .max_size_content = .{ .w = card_w, .h = poster_h + CARD_FOOTER_H },
-        .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
+    var card = media_card.begin(@src(), .{ .id = idx, .width = card_w, .aspect = .poster, .footer = CARD_FOOTER });
+    defer card.end();
+
+    const slot = updatePoster(slot_idx, item);
+    const is_audio = std.mem.eql(u8, item.media_type[0..item.media_type_len], "Audio");
+    media_card.art(slot.tex, .{
+        .loading = item.has_image and !slot.failed,
+        .placeholder = if (item.is_folder) icons.tvg.lucide.folder else if (is_audio) icons.tvg.lucide.music else icons.tvg.lucide.film,
     });
-    defer card.deinit();
+    if (item.is_played) media_card.badge(.top_right, "Watched", .success);
+    if (show_progress and item.played_ticks > 0 and item.runtime_ticks > 0)
+        media_card.progress(card_w, @as(f64, @floatFromInt(item.played_ticks)) / @as(f64, @floatFromInt(item.runtime_ticks)));
+    const open_cover = card.endCover();
 
-    // Poster image area — flat token placeholder.
-    {
-        var img_box = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 50,
-            .background = true,
-            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
-            .corners = .{ .tl = .theme(theme.radius.md), .tr = .theme(theme.radius.md), .br = .theme(0), .bl = .theme(0) },
-            .min_size_content = .{ .w = card_w, .h = poster_h },
-            .max_size_content = .{ .w = card_w, .h = poster_h },
-        });
-
-        const slot = updatePoster(slot_idx, item);
-        if (slot.tex) |*tex| {
-            // Clickable poster to play
-            if (dvui.button(@src(), "", .{}, .{
-                .id_extra = idx + 60,
-                .expand = .both,
-                .color_fill = @import("color_compat.zig").wrap(theme.transparent),
-            })) {
-                activateItem(item);
-            }
-            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                .id_extra = idx + 70,
-                .expand = .both,
-            });
-        } else {
-            if (item.has_image and !slot.failed)
-                components.coverSkeleton(@src(), idx + 70, theme.radius.md)
-            else if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
-                .id_extra = idx + 60,
-                .gravity_x = 0.5,
-                .gravity_y = 0.5,
-                .color_fill = @import("color_compat.zig").wrap(theme.transparent),
-                .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
-                .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
-                .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
-            })) activateItem(item);
-        }
-
-        img_box.deinit();
-    }
-
-    // Progress bar
-    if (show_progress and item.played_ticks > 0 and item.runtime_ticks > 0) {
-        const pct = @as(f32, @floatFromInt(item.played_ticks)) / @as(f32, @floatFromInt(item.runtime_ticks));
-        const clamped = std.math.clamp(pct, 0.0, 1.0);
-        // Fill width derived from card_w (not a mid-build rect read) so it's
-        // correct on the first frame.
-        const fill_w = card_w * clamped;
-        var pb = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = idx + 80,
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 10, .h = 2 },
-            .max_size_content = .{ .w = card_w, .h = 2 },
-            .background = true,
-            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
-        });
-        var fill = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = idx + 85,
-            .min_size_content = .{ .w = fill_w, .h = 2 },
-            .max_size_content = .{ .w = fill_w, .h = 2 },
-            .background = true,
-            .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
-        });
-        fill.deinit();
-        pb.deinit();
-    }
-
-    // Compact title + server-owned user-state actions. Keeping these in the
-    // footer makes them keyboard/touch reachable instead of hover-only.
-    var footer = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .id_extra = idx + 90,
-        .expand = .horizontal,
-        .padding = .{ .x = 4, .y = 3, .w = 4, .h = 2 },
-    });
-    defer footer.deinit();
     var jf_title_buf: [256]u8 = undefined;
-    _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(item.name[0..item.name_len], &jf_title_buf)}, .{
-        .id_extra = idx + 91,
-        .expand = .horizontal,
-        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
-        .gravity_y = 0.5,
-    });
+    const open_title = media_card.title(@import("../core/text.zig").safeUtf8Buf(item.name[0..item.name_len], &jf_title_buf), 1);
+    if (open_cover or open_title) activateItem(item);
+
+    // Year, then server-owned user-state actions. Keeping these in the
+    // footer makes them keyboard/touch reachable instead of hover-only.
+    var row = media_card.actionRow();
+    defer row.deinit();
+    var year_buf: [8]u8 = undefined;
+    const year: []const u8 = if (item.is_folder) "Folder" else if (item.year > 0) (std.fmt.bufPrint(&year_buf, "{d}", .{item.year}) catch "") else "";
+    media_card.rowText(year, card_w - 52, .secondary);
+    media_card.spacer();
     if (!item.is_folder) {
-        if (dvui.buttonIcon(@src(), "favorite", icons.tvg.lucide.star, .{}, .{}, .{
-            .id_extra = idx + 92,
-            .color_fill = @import("color_compat.zig").wrap(theme.transparent),
-            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
-            .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
-            .color_text = @import("color_compat.zig").wrap(if (item.is_favorite) theme.colors.warning else theme.colors.text_secondary),
-            .min_size_content = .{ .w = 14, .h = 14 },
-            .padding = dvui.Rect.all(4),
-            .gravity_y = 0.5,
-        })) _ = jf.setUserData(item.id[0..item.id_len], .favorite, !item.is_favorite);
-        if (dvui.buttonIcon(@src(), "watched", if (item.is_played) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, .{}, .{}, .{
-            .id_extra = idx + 93,
-            .color_fill = @import("color_compat.zig").wrap(theme.transparent),
-            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
-            .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
-            .color_text = @import("color_compat.zig").wrap(if (item.is_played) theme.colors.success else theme.colors.text_secondary),
-            .min_size_content = .{ .w = 14, .h = 14 },
-            .padding = dvui.Rect.all(4),
-            .gravity_y = 0.5,
-        })) _ = jf.setUserData(item.id[0..item.id_len], .played, !item.is_played);
+        if (media_card.iconAction(@src(), icons.tvg.lucide.star, if (item.is_favorite) "Remove favorite" else "Favorite", idx + 92, item.is_favorite))
+            _ = jf.setUserData(item.id[0..item.id_len], .favorite, !item.is_favorite);
+        if (media_card.iconAction(@src(), if (item.is_played) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, if (item.is_played) "Mark unwatched" else "Mark watched", idx + 93, item.is_played))
+            _ = jf.setUserData(item.id[0..item.id_len], .played, !item.is_played);
     }
 }
 

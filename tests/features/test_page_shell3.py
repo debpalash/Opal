@@ -288,6 +288,48 @@ def test_episode_transport():
     return "pass", "prev/next episode in the transport, aired-clamped, TV-only"
 
 
+@test("Comics, OPDS and Audiobookshelf grids use the shared media card", "Page Shell")
+def test_reading_grids_media_card():
+    # Each reading/listening grid used to hand-roll its card with its own
+    # footer constant (40/54/50) and pitch math. They now render through
+    # ui/media_card.zig, and the virtualized pitch comes from rowPitch so the
+    # spacer math matches the card height exactly.
+    files = {
+        "comics": ("src/services/comics.zig", "fn renderCoverCard(", "CARD_FOOTER", ".poster", "CARD_FOOTER_H"),
+        "opds": ("src/services/opds.zig", "fn renderEntryCard(", "OPDS_CARD_FOOTER", ".poster", "OPDS_CARD_FOOTER_H"),
+        "audiobookshelf": ("src/services/audiobookshelf.zig", "fn renderBookCard(", "BOOK_CARD_FOOTER", ".square", "BOOK_FOOTER_H"),
+    }
+    problems = []
+    for name, (path, fn, footer, aspect, old_const) in files.items():
+        src = _src(path)
+        card = src.split(fn, 1)[1].split("\n}\n", 1)[0] if fn in src else ""
+        if 'const media_card = @import("../ui/media_card.zig");' not in src:
+            problems.append(name + ": no media_card import")
+        if "media_card.begin(@src()" not in card or "card.endCover()" not in card or "media_card.title(" not in card:
+            problems.append(name + ": card not built on media_card")
+        if f".aspect = {aspect}" not in card:
+            problems.append(name + f": card aspect is not {aspect}")
+        if "dvui.ButtonWidget" in card:
+            problems.append(name + ": hand-rolled cover button")
+        if f"media_card.rowPitch(" not in src or f"{aspect}, {footer})" not in src:
+            problems.append(name + ": grid pitch not from media_card.rowPitch")
+        if "media_card.skeletonGrid(" not in src:
+            problems.append(name + ": skeleton not shaped like the card")
+        if old_const in src:
+            problems.append(name + f": legacy {old_const} still present")
+    comics = _src("src/services/comics.zig")
+    content = comics.split("pub fn renderContent() void {", 1)[1].split("\nfn renderPluginSourceBadges", 1)[0]
+    # #171: paging past the first pages must stay wired to the virtualized grid.
+    if "visibleRows(total_rows, row_h" not in content or "loadMoreResults();" not in content:
+        problems.append("comics: grid virtualization/paging lost")
+    opds_card = _src("src/services/opds.zig").split("fn renderEntryCard(", 1)[1].split("/// Real local HTTP fixture", 1)[0]
+    if "media_card.iconAction(" not in opds_card or "media_card.actionRow()" not in opds_card:
+        problems.append("opds: open/read action row missing")
+    if problems:
+        return "fail", "; ".join(problems)
+    return "pass", "comics/OPDS/Audiobookshelf cards, skeletons and row pitch come from media_card"
+
+
 @test("Latest releases render as show cards", "Page Shell")
 def test_release_cards():
     # "Latest releases" on Watching used to be a list of raw torrent rows next to a
@@ -321,6 +363,46 @@ def test_release_cards():
     if missing:
         return "fail", "missing: " + ", ".join(missing)
     return "pass", "one shared poster card; releases grouped per show + artwork resolved"
+
+
+@test("Live TV, radio and search gallery cards use the shared media card", "Page Shell")
+def test_catalog_cards_media_card_c():
+    # These grids each carried their own card box + hard-coded footer height
+    # (46 for Live TV/radio, "art + 4 body lines + 64" for search shelves), so
+    # the virtualized row pitch drifted from the drawn card whenever fonts
+    # changed. Card, skeleton and spacer now all take media_card numbers.
+    iptv = _src("src/services/iptv.zig")
+    radio = _src("src/services/radio.zig")
+    search = _src("src/services/search.zig")
+    gallery = _src("src/ui/search_gallery_pure.zig")
+    exceptions = _src("docs/architecture-exceptions.json")
+    iptv_card = _between(iptv, "fn renderCard(", "fn renderResults(")
+    radio_card = _between(radio, "fn renderCard(", "fn renderResults(")
+    search_card = _between(search, "fn renderGalleryCard(", "fn renderGalleryHero(")
+    checks = {
+        "iptv square media card": "media_card.begin(@src(), .{ .id = i, .width = card_w, .aspect = .square, .footer = CARD_FOOTER })" in iptv_card,
+        "iptv logo through media_card.art": "media_card.art(slot.tex," in iptv,
+        "iptv cover + title play": "if (open_cover or open_title) playChannel(i)" in iptv_card,
+        "iptv favourite star kept": "media_card.iconAction(@src(), icons.tvg.lucide.star" in iptv_card and "iptv_store.toggleFavorite(ch)" in iptv_card,
+        "iptv health dot kept": "renderHealthDot(i, url)" in iptv_card and "maybeProbe(url)" in iptv,
+        "iptv pitch from media_card": "media_card.rowPitch(card_w, .square, CARD_FOOTER)" in iptv and "CARD_FOOTER_H" not in iptv,
+        "iptv skeleton matches card": "media_card.skeletonGrid(@src(), 58000, cols, card_w, .square, CARD_FOOTER, 3)" in iptv,
+        "radio square media card": "media_card.begin(@src(), .{ .id = i, .width = card_w, .aspect = .square, .footer = CARD_FOOTER })" in radio_card,
+        "radio logo through media_card.art": "media_card.art(visible_texture," in radio,
+        "radio health dot kept": "renderHealthDot(i, s)" in radio_card and "link_health.probe(RADIO_KIND" in radio,
+        "radio pitch from media_card": "media_card.rowPitch(card_w, .square, CARD_FOOTER)" in radio and "CARD_FOOTER_H" not in radio
+            and "media_card.footerHeight(CARD_FOOTER)" in radio,
+        "search card on media card": "media_card.begin(@src()" in search_card and ".focused = gallery_selection == group.identity" in search_card,
+        "search card keeps Details + context menu": '"Details"' in search_card and "renderSearchResultContext(key" in search_card,
+        "search footer from tested policy": "gallery_layout.cardFooter(" in search_card and "pub fn cardFooter(phone: bool)" in gallery,
+        "search rail pitch from media_card": "media_card.pure.rowPitch(art.h, media_card.footerHeight(gallery_layout.cardFooter(" in search
+            and "shelfHeight" not in search and "shelfHeight" not in gallery,
+        "boundary edges recorded": all(f'"src/services/{name}.zig -> ../ui/media_card.zig"' in exceptions for name in ("iptv", "radio", "search")),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "missing: " + ", ".join(missing)
+    return "pass", "Live TV, radio and search gallery cards share media_card geometry"
 
 
 @test("C toggles subtitles (not the comic viewer)", "Page Shell")

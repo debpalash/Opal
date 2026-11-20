@@ -50,13 +50,16 @@ def test_party_cast_routes():
             and '\\"role\\":\\"{s}\\"' in rm and '"{\\"connected\\":false}"' not in rm,
         "peer count exported": "pub fn peerCount()" in wp and "clients_mutex.lock()" in wp,
         "party host/join/leave/chat": all(f'"/party/{s}"' in rm for s in ("host", "join", "leave", "chat", "status")),
-        "cast devices are real": "cast.scanDevices()" in rm and "cast.devices[0..n]" in rm
-            and '"{\\"devices\\":[]}"' not in rm,
+        # Read from a mutex-guarded snapshot: the scan worker rewrites the list.
+        "cast devices are real": "cast.scanDevices()" in rm and "cast.snapshot(&snap)" in rm
+            and "snap.devices[0..snap.count]" in rm and '"{\\"devices\\":[]}"' not in rm,
         "cast start/stop/scan": all(f'"/cast/{s}"' in rm for s in ("start", "stop", "scan", "devices")),
+        "cast pair start/pin/cancel": all(f'"/cast/pair/{s}"' in rm for s in ("start", "pin", "cancel"))
+            and "cast.startPairing(idx)" in rm and "cast.submitPin(pin)" in rm and "cast.cancelPairing()" in rm,
         # cast.zig used to reach into state.app.players itself, unlocked.
         "cast url passed by value": "pub fn castTo(device_idx: usize, url: []const u8)" in cast
             and "pub fn castActive(" in cast,
-        "cast start holds players_mutex": "state.players_mutex.lock();\n        cast.castActive(idx);" in rm,
+        "cast start holds players_mutex": "state.players_mutex.lock();\n        const refusal = cast.castActive(idx);\n        state.players_mutex.unlock();" in rm,
         # Worker threads write these; UI + connection threads poll them.
         "cast flags atomic": "pub var is_scanning: std.atomic.Value(bool)" in cast
             and "pub var is_casting: std.atomic.Value(bool)" in cast,
