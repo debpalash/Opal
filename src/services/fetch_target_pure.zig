@@ -96,6 +96,15 @@ pub fn downloadPermitted(url: []const u8, allow_loopback: bool) bool {
     return bf.publicHost(host);
 }
 
+/// Fixture seam shared by downloads and scrapes: with `allow_loopback` set, a
+/// loopback address literal skips the DNS pin. Names and LAN stay checked.
+pub fn fixtureLoopbackLiteral(url: []const u8, allow_loopback: bool) bool {
+    if (!allow_loopback) return false;
+    bf.validateTarget(url) catch return false;
+    const address = parseIpLiteral(stripDot(bf.hostOf(url))) orelse return false;
+    return isLoopbackAddress(address);
+}
+
 pub fn locationHeader(headers: []const u8) ?[]const u8 {
     var lines = std.mem.splitScalar(u8, headers, '\n');
     _ = lines.next();
@@ -263,4 +272,13 @@ test "location header and connect-to pin" {
     try std.testing.expectEqualStrings("cdn.example:443:1.1.1.1:443", formatConnectTo("cdn.example", 443, v4, &buf).?);
     try std.testing.expectEqual(@as(u16, 8443), portOf("https://cdn.example:8443/a"));
     try std.testing.expectEqual(@as(u16, 80), portOf("http://cdn.example/a"));
+}
+
+test "loopback fixture seam exempts loopback literals only" {
+    try std.testing.expect(fixtureLoopbackLiteral("http://127.0.0.1:8080/comicfury/", true));
+    try std.testing.expect(fixtureLoopbackLiteral("http://[::1]:9/x", true));
+    try std.testing.expect(!fixtureLoopbackLiteral("http://127.0.0.1:8080/", false));
+    try std.testing.expect(!fixtureLoopbackLiteral("http://localhost:8080/", true));
+    try std.testing.expect(!fixtureLoopbackLiteral("http://192.168.1.5/", true));
+    try std.testing.expect(!fixtureLoopbackLiteral("http://169.254.169.254/", true));
 }

@@ -61,16 +61,17 @@ pub fn stringPermitted(url: []const u8) bool {
 pub fn vetDownload(url: []const u8, pin_buf: []u8) ?[]const u8 {
     const allow_loopback = loopbackFixturesAllowed();
     if (!pure.downloadPermitted(url, allow_loopback)) return null;
-    if (allow_loopback) if (pure.parseIpLiteral(pure.hostOfUrl(url))) |address| {
-        if (pure.isLoopbackAddress(address)) return pin_buf[0..0];
-    };
+    if (pure.fixtureLoopbackLiteral(url, allow_loopback)) return pin_buf[0..0];
     return pinOrBlock(url, pin_buf);
 }
 
 /// Scrape policy: `isPrivateTarget` (every IP literal and special-use name)
-/// plus the same fail-closed DNS check.
+/// plus the same fail-closed DNS check. The loopback fixture seam applies here
+/// too: Comics, Novels and Anime providers scrape through this path, and the
+/// hermetic browse suites serve them from 127.0.0.1.
 pub fn vetScrape(url: []const u8, pin_buf: []u8) ?[]const u8 {
     bf.validateTarget(url) catch return null;
+    if (pure.fixtureLoopbackLiteral(url, loopbackFixturesAllowed())) return pin_buf[0..0];
     if (bf.isPrivateTarget(url)) return null;
     return pinOrBlock(url, pin_buf);
 }

@@ -200,6 +200,7 @@ def test_private_fetch_targets():
         "probe rechecks every hop": "fn probeChecked(" in eng and "vetDownload(" in eng,
         "guarded segments do not follow redirects": ".not_allowed" in eng,
         "scrape checks each hop": "vetScrape(" in sc and ".follow_redirects = false" in sc,
+        "scrape fixture seam is loopback literals only": "pure.fixtureLoopbackLiteral(url, loopbackFixturesAllowed())" in ft and "pub fn fixtureLoopbackLiteral(" in pure,
         "pure module is what the build tests": "test_fetch_target_pure" in bz and "pub fn downloadStringAllowed(" in pure and "pub fn joinRedirect(" in pure,
         "piece map only": "status(lt::torrent_handle::query_pieces)" in cpp,
         "status call drops the player lock": "players_mutex.unlock()" in window and "players_mutex.lock()" in window,
