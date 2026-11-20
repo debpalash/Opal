@@ -1248,7 +1248,9 @@ pub fn verifyGutenbergProgressiveForTest() !void {
             }
             _ = count.fetchAdd(1, .acq_rel);
             const start = io.monotonicMilliTimestamp();
-            while (slow and !gate.load(.acquire) and io.monotonicMilliTimestamp() - start < 4000) io.sleep(std.time.ns_per_ms);
+            // Held until the test releases it; the bound only stops a broken
+            // run from hanging (PR #184 CI missed a 3 s window on a busy runner).
+            while (slow and !gate.load(.acquire) and io.monotonicMilliTimestamp() - start < 30_000) io.sleep(std.time.ns_per_ms);
             const body = if (slow)
                 "<feed><entry><title>Slow work</title><link rel='subsection' href='https://www.gutenberg.org/ebooks/11.opds'/></entry></feed>"
             else if (duplicate)
@@ -1289,13 +1291,14 @@ pub fn verifyGutenbergProgressiveForTest() !void {
         coordinator.join();
     }
     const start = io.monotonicMilliTimestamp();
-    while ((seen.load(.acquire) < 3 or entryCount() == 0) and io.monotonicMilliTimestamp() - start < 3000) io.sleep(std.time.ns_per_ms);
+    while ((seen.load(.acquire) < 3 or entryCount() == 0) and io.monotonicMilliTimestamp() - start < 20_000) io.sleep(std.time.ns_per_ms);
     try std.testing.expectEqual(@as(u32, 3), seen.load(.acquire));
     try std.testing.expectEqual(@as(usize, 1), entryCount());
     try std.testing.expect(!done.load(.acquire));
     try std.testing.expect(state.app.opds.is_loading.load(.acquire));
     release.store(true, .release);
-    while (!done.load(.acquire) and io.monotonicMilliTimestamp() - start < 4000) io.sleep(std.time.ns_per_ms);
+    const released = io.monotonicMilliTimestamp();
+    while (!done.load(.acquire) and io.monotonicMilliTimestamp() - released < 20_000) io.sleep(std.time.ns_per_ms);
     try std.testing.expect(done.load(.acquire));
     try std.testing.expectEqual(@as(usize, 2), entryCount());
     try std.testing.expect(discoverySnapshot().active);
