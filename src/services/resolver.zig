@@ -1822,7 +1822,13 @@ fn computeMatchAgainst(item: ResolvedItem, query_override: []const u8) MatchInfo
     // resolver_rank; only fires when the query didn't ask for that class.
     const junk = @import("resolver_rank.zig").junkTitlePenalty(lower_name[0..nlen], lower_query[0..ql]);
 
-    const raw = source_w + quality_bonus + junk;
+    // A known movie/show (top-ranked by its catalog, well rated, with art)
+    // beats a same-named niche row; still never a playable local file.
+    const prominence: u32 = if (item.source == .tmdb)
+        @import("resolver_rank.zig").catalogProminence(item.catalog_rank, item.rating, item.poster_url_len > 0)
+    else
+        0;
+    const raw = (source_w + quality_bonus + junk) -| prominence;
     const score = @import("resolver_rank.zig").relevanceScore(name, query, pct, raw -| seed_bonus, item.catalog_rank);
 
     return .{ .match_pct = pct, .score = score };

@@ -280,6 +280,18 @@ pub fn galleryCoverArt(src: std.builtin.SourceLocation, id: usize, slot: *CoverS
         _ = dvui.image(src, .{ .source = .{ .texture = tex }, .uv = .{ .x = crop.x, .y = crop.y, .w = crop.w, .h = crop.h } }, .{ .id_extra = id, .min_size_content = .{ .w = width, .h = height }, .max_size_content = .{ .w = width, .h = height }, .corners = dvui.CornerRect.all(radius) });
         return;
     };
+    // Skeleton and fallback icon fill their parent: give them the cover's
+    // exact box, or a summary row's icon floats to the middle of the row.
+    var frame = dvui.box(src, .{}, .{
+        .id_extra = id +% 0x5eed,
+        .min_size_content = .{ .w = width, .h = height },
+        .max_size_content = .{ .w = width, .h = height },
+        .background = true,
+        .color_fill = .{ .color = theme.colors.bg_elevated },
+        .corners = dvui.CornerRect.all(radius),
+        .gravity_y = 0.5,
+    });
+    defer frame.deinit();
     renderCoverSlot(src, id, slot, url.len > 0, fallback, radius);
 }
 

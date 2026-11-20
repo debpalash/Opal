@@ -294,8 +294,22 @@ pub fn searchCatalogInto(query: []const u8, out: []state.TmdbItem) usize {
         if (httpGet(url, key)) |body| {
             defer alloc.free(body);
             parse.parseTmdbResponse(body, &staged);
-            if (parse.extractJsonInt(body, "\"status_code\":") != 0)
+            if (parse.extractJsonInt(body, "\"status_code\":") != 0) {
                 fetchCinemetaInto(&staged, .search, query, .trending, .all, 0, 0, 1);
+            } else if (!hasTitle(staged.items, query)) {
+                // TMDB matches whole words ("madmen" never finds "Mad Men");
+                // Cinemeta's fuzzy, popularity-ordered search leads instead.
+                var fuzzy: std.ArrayListUnmanaged(state.TmdbItem) = .empty;
+                defer fuzzy.deinit(alloc);
+                fetchCinemetaInto(&fuzzy, .search, query, .trending, .all, 0, 0, 1);
+                if (fuzzy.items.len > 0) {
+                    const merged = alloc.alloc(state.TmdbItem, fuzzy.items.len + staged.items.len) catch return 0;
+                    defer alloc.free(merged);
+                    const n = @import("tmdb_pure.zig").mergeCatalogFallback(state.TmdbItem, fuzzy.items, staged.items, merged);
+                    staged.clearRetainingCapacity();
+                    staged.appendSlice(alloc, merged[0..n]) catch {};
+                }
+            }
         } else {
             fetchCinemetaInto(&staged, .search, query, .trending, .all, 0, 0, 1);
         }
@@ -312,6 +326,15 @@ pub fn searchCatalogInto(query: []const u8, out: []state.TmdbItem) usize {
         written += 1;
     }
     return written;
+}
+
+/// True when some catalog row is the typed title, ignoring spacing/case.
+fn hasTitle(items: []const state.TmdbItem, query: []const u8) bool {
+    for (items) |item| {
+        const name = item.title[0..@min(item.title_len, item.title.len)];
+        if (@import("resolver_rank.zig").sameTitleIgnoringSpacing(name, query)) return true;
+    }
+    return false;
 }
 
 fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
