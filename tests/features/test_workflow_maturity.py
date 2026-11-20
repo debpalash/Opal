@@ -38,7 +38,10 @@ def test_native_platform_matrix():
     workflow = _src(".github/workflows/ci.yml")
     build = _src("build.zig")
     gallery = _src("src/services/search_gallery_native_test.zig")
-    assert workflow.count("zig build test-native-ui") == 3
+    # macOS runs the suite binary directly so a hang logs the stalled test.
+    assert workflow.count("zig build test-native-ui") == 2
+    assert "zig build build-native-ui" in workflow and "./zig-out/bin/opal-native-ui-tests" in workflow
+    assert 'b.step("build-native-ui"' in build and '"opal-native-ui-tests"' in build
     assert workflow.count("zig build test-native-http") == 3
     assert workflow.count("zig build test-native-downloads") == 3
     assert workflow.count("python3 tests/test_media_servers_live.py") + workflow.count("python tests/test_media_servers_live.py") == 3
