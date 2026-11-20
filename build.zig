@@ -435,6 +435,11 @@ fn buildSupported(b: *std.Build) void {
     const run_native_suite = b.addRunArtifact(native_suite);
     if (is_windows) run_native_suite.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-ui", "Verify all native desktop fixtures with one compilation").dependOn(&run_native_suite.step);
+    // CI runs this binary directly (no --listen): the runner then prints
+    // "N/M test name..." per test, so a hung fixture names itself in the log
+    // instead of only tripping the step timeout.
+    const install_native_suite = b.addInstallArtifact(native_suite, .{ .dest_dir = .{ .override = .bin }, .dest_sub_path = "opal-native-ui-tests" });
+    b.step("build-native-ui", "Build the native fixture suite binary without running it").dependOn(&install_native_suite.step);
     const torrent_handoff_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native torrent handoff"} });
     const run_torrent_handoff_tests = b.addRunArtifact(torrent_handoff_tests);
     if (is_windows) run_torrent_handoff_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));

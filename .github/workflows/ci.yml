@@ -243,7 +243,10 @@ jobs:
           OPAL_GALLERY_CAPTURE_DIR: ${{ runner.temp }}/opal-native-captures
         run: |
           mkdir -p "$OPAL_NATIVE_CAPTURE_DIR"
-          zig build test-native-ui -Doptimize=safe --summary all
+          # Run the binary directly so each test name is logged as it starts;
+          # a hang then shows which fixture stalled.
+          zig build build-native-ui -Doptimize=safe --summary all
+          ./zig-out/bin/opal-native-ui-tests
           test -n "$(find "$OPAL_NATIVE_CAPTURE_DIR" -name '*.png' -print -quit)"
       - name: Save native fixture captures
         if: always()
