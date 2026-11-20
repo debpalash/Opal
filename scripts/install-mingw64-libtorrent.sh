@@ -43,8 +43,10 @@ build_from_source() {
     fetch "https://github.com/arvidn/libtorrent/releases/download/v${LT_VERSION}/libtorrent-rasterbar-${LT_VERSION}.tar.gz" "$tarball" "$LT_SHA256"
     tar -xzf "$tarball" -C "$WORK_DIR"
     local src="$WORK_DIR/libtorrent-rasterbar-$LT_VERSION"
-    patch -Np1 -d "$src/deps/libdatachannel" -i "$PATCH_DIR/0001-libdatachannel-include-algorithm.patch"
-    patch -Np1 -d "$src" -i "$PATCH_DIR/0002-include-iterator.patch"
+    # git apply, not patch: the inherited Windows PATH puts Strawberry Perl's
+    # patch 2.5.9 first, which asserts on these hunks.
+    git -C "$src/deps/libdatachannel" apply -p1 "$PATCH_DIR/0001-libdatachannel-include-algorithm.patch"
+    git -C "$src" apply -p1 "$PATCH_DIR/0002-include-iterator.patch"
     MSYS2_ARG_CONV_EXCL="-DCMAKE_INSTALL_PREFIX=" cmake -Wno-dev -G Ninja \
         -S "$src" -B "$WORK_DIR/build" \
         -DCMAKE_INSTALL_PREFIX="$MINGW_PREFIX" -DCMAKE_BUILD_TYPE=Release \
