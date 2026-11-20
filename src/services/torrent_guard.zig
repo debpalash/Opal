@@ -92,7 +92,7 @@ pub fn tick(ses: c.mpv.TorrentSession, queueToast: *const fn ([]const u8) void) 
         const files = c.mpv.torrent_get_file_count(ses, i);
         if (files <= 0) continue; // metadata not here yet
         remember(&inspected, &inspected_next, i);
-        if (inspect(ses, i, files)) queueToast("Blocked a torrent containing executable files (possible malware). Nothing was opened.");
+        if (inspect(ses, i, files)) queueToast("Blocked a torrent that looks like malware. Nothing was opened.");
     }
 
     const now = io_g.milliTimestamp();
@@ -112,16 +112,18 @@ pub fn tick(ses: c.mpv.TorrentSession, queueToast: *const fn ([]const u8) void) 
 fn inspect(ses: c.mpv.TorrentSession, id: i32, files: c_int) bool {
     var f: c_int = 0;
     var offender: [256]u8 = undefined;
-    var found = false;
+    var name_buf: [256]u8 = undefined;
+    var facts: pure.FileFacts = .{};
+    offender[0] = 0;
     while (f < files) : (f += 1) {
-        offender[0] = 0;
-        c.mpv.torrent_get_file_name(ses, id, f, &offender, offender.len);
-        if (pure.blocksTorrent(std.mem.sliceTo(&offender, 0))) {
-            found = true;
-            break;
-        }
+        name_buf[0] = 0;
+        c.mpv.torrent_get_file_name(ses, id, f, &name_buf, name_buf.len);
+        const name = std.mem.sliceTo(&name_buf, 0);
+        const was_exec = facts.executable;
+        pure.noteFile(&facts, name);
+        if (!was_exec and facts.executable) @memcpy(offender[0 .. name.len + 1], name_buf[0 .. name.len + 1]);
     }
-    if (!found) return false;
+    const why = pure.torrentVerdict(facts) orelse return false;
 
     f = 0;
     while (f < files) : (f += 1) c.mpv.torrent_set_file_priority(ses, id, f, 0);
@@ -138,7 +140,7 @@ fn inspect(ses: c.mpv.TorrentSession, id: i32, files: c_int) bool {
 
     var msg: [384]u8 = undefined;
     const name = @import("../core/text.zig").safeUtf8(std.mem.sliceTo(&offender, 0));
-    logs.pushLog("error", "torrent", std.fmt.bufPrint(&msg, "Blocked torrent: contains executable \"{s}\" (possible malware); stopped and blocklisted", .{name}) catch "Blocked torrent containing an executable", true);
+    logs.pushLog("error", "torrent", std.fmt.bufPrint(&msg, "Blocked torrent: {s} \"{s}\" (possible malware); stopped and blocklisted", .{ why, name }) catch "Blocked torrent (possible malware)", true);
     return true;
 }
 

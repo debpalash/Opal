@@ -1046,7 +1046,7 @@ def test_torrent_guard():
     checks = {
         "pure policy unit-tested": "src/core/download_safety_pure.zig" in _src("build.zig"),
         "runs for every torrent on the watchdog thread": '@import("torrent_guard.zig").tick(ses, &queueToast)' in stall,
-        "file-list verdict stops + blocklists": "pure.blocksTorrent(" in guard and "torrent_pause(ses, id)" in guard and "blocklist.add(" in guard and "saveLocked()" in guard,
+        "file-list verdict stops + blocklists": "pure.noteFile(&facts, name)" in guard and "pure.torrentVerdict(facts)" in guard and "password-protected archive bait" in pure and "torrent_pause(ses, id)" in guard and "blocklist.add(" in guard and "saveLocked()" in guard,
         "blocklist enforced on every magnet add": "torrent_guard.zig\").isBlockedMagnet(magnet_link)" in section_of(search, "fn addMagnetToEngine(", "\n}\n"),
         "macOS quarantine": '"com.apple.quarantine"' in guard and "0081;" in pure,
         "Windows Mark-of-the-Web": ":Zone.Identifier" in guard and "ZoneId=3" in pure,

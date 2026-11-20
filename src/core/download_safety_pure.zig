@@ -17,6 +17,38 @@ pub fn blocksTorrent(file_name: []const u8) bool {
     return media_ext.isExecutable(file_name) or media_ext.hasBidiControl(file_name);
 }
 
+/// What one pass over a torrent's file list learned.
+pub const FileFacts = struct {
+    executable: bool = false,
+    archive: bool = false,
+    password_note: bool = false,
+};
+
+pub fn noteFile(facts: *FileFacts, file_name: []const u8) void {
+    if (blocksTorrent(file_name)) facts.executable = true;
+    if (media_ext.isExecutableOrArchive(file_name) and !media_ext.isExecutable(file_name)) facts.archive = true;
+    if (containsIgnoreCase(file_name, "password") or containsIgnoreCase(file_name, "passwd")) facts.password_note = true;
+}
+
+fn containsIgnoreCase(hay: []const u8, needle: []const u8) bool {
+    if (needle.len > hay.len) return false;
+    var i: usize = 0;
+    while (i + needle.len <= hay.len) : (i += 1) {
+        if (std.ascii.eqlIgnoreCase(hay[i .. i + needle.len], needle)) return true;
+    }
+    return false;
+}
+
+/// Why the torrent is malware, or null. An executable anywhere blocks; so
+/// does the "password-protected archive" bait (an archive shipped with a
+/// password note — the archive hides its payload from scanners). Archives
+/// alone pass: scene releases still ship as RAR sets with a sample video.
+pub fn torrentVerdict(facts: FileFacts) ?[]const u8 {
+    if (facts.executable) return "contains an executable";
+    if (facts.archive and facts.password_note) return "password-protected archive bait";
+    return null;
+}
+
 /// Lowercase 40-hex info-hash, or null for anything else.
 pub fn normalizeHash(raw: []const u8, out: *[40]u8) ?[]const u8 {
     const trimmed = std.mem.trim(u8, raw, " \t\r\n");
@@ -131,4 +163,22 @@ test "quarantine and Mark-of-the-Web values" {
     try std.testing.expectEqualStrings("0081;6739a000;Opal;", quarantineValue(&buf, 0x6739a000).?);
     try std.testing.expectEqualStrings("0081;00000000;Opal;", quarantineValue(&buf, -5).?);
     try std.testing.expect(std.mem.indexOf(u8, zone_identifier, "ZoneId=3") != null);
+}
+
+test "torrentVerdict: executables and password-archive bait block, scene RAR sets pass" {
+    var bait: FileFacts = .{};
+    for ([_][]const u8{ "Show.S02E05.1080p.WEB.zipx", "PASSWORD - read me.txt", "sample.mkv" }) |n| noteFile(&bait, n);
+    try std.testing.expectEqualStrings("password-protected archive bait", torrentVerdict(bait).?);
+
+    var payload: FileFacts = .{};
+    for ([_][]const u8{ "Show.S01E03.mkv", "Show.S01E03.mkv.exe" }) |n| noteFile(&payload, n);
+    try std.testing.expectEqualStrings("contains an executable", torrentVerdict(payload).?);
+
+    var scene: FileFacts = .{};
+    for ([_][]const u8{ "movie.2026.1080p.bluray-grp.rar", "movie.2026.1080p.bluray-grp.r00", "Sample/sample.mkv", "movie.nfo" }) |n| noteFile(&scene, n);
+    try std.testing.expect(torrentVerdict(scene) == null);
+
+    var clean: FileFacts = .{};
+    for ([_][]const u8{ "Show.S01E01.mkv", "Show.S01E02.mkv", "Subs/en.srt" }) |n| noteFile(&clean, n);
+    try std.testing.expect(torrentVerdict(clean) == null);
 }
