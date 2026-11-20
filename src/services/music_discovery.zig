@@ -36,6 +36,8 @@ const icons = @import("icons");
 const pure = @import("music_discovery_pure.zig");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
+const components = @import("../ui/components.zig");
+const media_card = @import("../ui/media_card.zig");
 const logs = @import("../core/logs.zig");
 const http = @import("../core/http.zig");
 const paths = @import("../core/paths.zig");
@@ -470,14 +472,21 @@ fn fetchArtistAlbums(context: *AlbumContext, task: AlbumTask) void {
 // UI (a rail at the top of Browse › Music)
 // ══════════════════════════════════════════════════════════
 
-const CARD_W: f32 = 210;
-const CARD_H: f32 = 118;
+// Square album covers, same card as the Music grid (media_card): cover, title,
+// "artist · year", then the verbatim "because" receipt.
+const CARD_W: f32 = 150;
+const CARD_GAP: f32 = 6;
+const CARD_FOOTER: media_card.Footer = .{ .title_lines = 1, .meta_lines = 2 };
 
 // UI-thread-only snapshot, refreshed when the worker publishes a new generation
 // so the rail never renders while holding the publish mutex.
 var ui_albums: [pure.MAX_ALBUMS]pure.Album = std.mem.zeroes([pure.MAX_ALBUMS]pure.Album);
 var ui_count: usize = 0;
 var ui_gen: u32 = 0;
+// Cover Art Archive thumbnails, one lazy slot per rail position. Slots re-key
+// by URL hash, so a re-ordered generation never shows another album's art, and
+// a 404 (no art) latches `failed` until the URL changes — no retry spam.
+var ui_covers: [pure.MAX_ALBUMS]components.CoverSlot = @as([pure.MAX_ALBUMS]components.CoverSlot, @splat(.{}));
 
 fn syncSnapshot() void {
     const g = pub_gen.load(.acquire);
@@ -493,7 +502,7 @@ fn syncSnapshot() void {
 /// Keep discovery refresh available without a separate status/header block.
 pub fn renderRefresh() void {
     if (!enabled()) return;
-    if (@import("../ui/components.zig").iconButtonEx(@src(), icons.tvg.lucide.@"refresh-cw", "Refresh recommendations", false, !busy.load(.acquire))) refresh();
+    if (components.iconButtonEx(@src(), icons.tvg.lucide.@"refresh-cw", "Refresh recommendations", false, !busy.load(.acquire))) refresh();
 }
 
 /// Discovery rail. Renders NOTHING at all when the user has not opted in — the
@@ -511,12 +520,12 @@ pub fn renderRail() void {
         .padding = .{ .x = 8, .y = 4, .w = 0, .h = 2 },
     });
 
+    const strip_h = media_card.rowPitch(CARD_W, .square, CARD_FOOTER) - 2 * media_card.pure.MARGIN + 2 * CARD_GAP;
     var scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
         .expand = .horizontal,
         .background = false,
-        .color_fill = .{ .color = theme.colors.bg_app },
-        .min_size_content = .{ .w = 10, .h = CARD_H + 24 },
-        .max_size_content = .{ .w = std.math.floatMax(f32), .h = CARD_H + 24 },
+        .min_size_content = .{ .w = 10, .h = strip_h },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = strip_h },
         .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },
     });
     defer scroll.deinit();
@@ -527,6 +536,9 @@ pub fn renderRail() void {
     for (0..ui_count) |i| renderCard(i);
 }
 
+/// One recommended album through the shared media card: Cover Art Archive
+/// thumbnail (themed disc placeholder when CAA has none), title, artist · year,
+/// and the "because" receipt.
 fn renderCard(i: usize) void {
     const a = &ui_albums[i];
 
@@ -537,70 +549,26 @@ fn renderCard(i: usize) void {
     var rb: [96]u8 = undefined;
     const reason = safeUtf8Buf(a.reasonSlice(), &rb);
 
-    var hovered: bool = false;
+    var card = media_card.begin(@src(), .{ .id = i, .width = CARD_W, .aspect = .square, .footer = CARD_FOOTER, .margin = CARD_GAP });
+    defer card.end();
 
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = i,
-        .min_size_content = .{ .w = CARD_W, .h = CARD_H },
-        .max_size_content = .{ .w = CARD_W, .h = CARD_H },
-        .background = true,
-        .color_fill = .{ .color = theme.colors.bg_surface },
-        .color_fill_hover = .{ .color = theme.colors.bg_hover },
-        .corners = dvui.CornerRect.all(theme.radius.md),
-        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
-        .margin = dvui.Rect.all(theme.spacing.xs),
-    });
-    defer card.deinit();
+    var url_buf: [128]u8 = undefined;
+    const cover_url = pure.buildCoverArtUrl(&url_buf, a.mbid[0..@min(a.mbid_len, a.mbid.len)]) orelse "";
+    components.coverArt(@src(), i, &ui_covers[i], cover_url, icons.tvg.lucide.@"disc-3", theme.radius.lg);
+    const open_cover = card.endCover();
+    const open_title = media_card.title(title, 1);
 
     // Clicking searches the ACTIVE music source for "<artist> <album>" — the
     // recommendation lands the user back in the player they already use.
-    if (title.len > 0 and dvui.clicked(card.data(), .{ .hovered = &hovered })) {
-        var q_buf: [256]u8 = undefined;
-        const q = std.fmt.bufPrint(&q_buf, "{s} {s}", .{ artist, title }) catch title;
-        const n = @min(q.len, state.app.music.search_buf.len - 1);
-        @memset(&state.app.music.search_buf, 0);
-        @memcpy(state.app.music.search_buf[0..n], q[0..n]);
-        @import("music_subsonic.zig").searchMusic(q[0..n]);
-    }
-    card.drawBackground();
-
-    _ = dvui.label(@src(), "{s}", .{title}, .{
-        .id_extra = i,
-        .expand = .horizontal,
-        .color_text = .{ .color = theme.colors.text_primary },
-        .font = dvui.themeGet().font_heading,
-    });
-
-    {
-        var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .expand = .horizontal });
-        defer meta.deinit();
-        _ = dvui.label(@src(), "{s}", .{artist}, .{
-            .id_extra = i,
-            .expand = .horizontal,
-            .color_text = .{ .color = theme.colors.text_secondary },
-            .gravity_y = 0.5,
-        });
-        if (a.year_len > 0) {
-            _ = dvui.label(@src(), "{s}", .{a.yearSlice()}, .{
-                .id_extra = i,
-                .color_text = .{ .color = theme.colors.text_tertiary },
-                .gravity_y = 0.5,
-                .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
-            });
-        }
+    if ((open_cover or open_title) and title.len > 0) {
+        const sb = &state.app.music.search_buf;
+        @memset(sb, 0);
+        const q = pure.buildSearchQuery(sb[0 .. sb.len - 1], artist, title);
+        @import("music_subsonic.zig").searchMusic(q);
     }
 
-    {
-        var sp = dvui.box(@src(), .{}, .{ .id_extra = i, .expand = .vertical });
-        sp.deinit();
-    }
-
-    if (reason.len > 0) {
-        _ = dvui.label(@src(), "{s}", .{reason}, .{
-            .id_extra = i,
-            .expand = .horizontal,
-            .gravity_y = 1.0,
-            .color_text = .{ .color = theme.colors.text_tertiary },
-        });
-    }
+    var mb: [160]u8 = undefined;
+    const meta = if (a.year_len > 0) (std.fmt.bufPrint(&mb, "{s} · {s}", .{ artist, a.yearSlice() }) catch artist) else artist;
+    media_card.meta(meta, i, .secondary);
+    if (reason.len > 0) media_card.meta(reason, i + pure.MAX_ALBUMS, .tertiary);
 }

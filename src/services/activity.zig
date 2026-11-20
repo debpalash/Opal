@@ -314,6 +314,10 @@ pub const Suggestion = struct {
     reason: [256]u8 = std.mem.zeroes([256]u8),
     reason_len: usize = 0,
     score: f64 = 0,
+    /// Catalog identity + art for the For-You card (tmdb_items.id/poster_path).
+    id: i32 = 0,
+    poster: [256]u8 = std.mem.zeroes([256]u8),
+    poster_len: usize = 0,
 };
 
 const MAX_SEEN = 128; // watched-title hashes excluded from candidates
@@ -411,7 +415,7 @@ pub fn computeSuggestions(out: []Suggestion) usize {
 
     // Candidates: the locally cached TMDB catalog, minus items already on the
     // user's lists (the genre-fallback rail's convention).
-    const sql = "SELECT title, genre_text, rating FROM tmdb_items " ++
+    const sql = "SELECT title, genre_text, rating, id, poster_path FROM tmdb_items " ++
         "WHERE id NOT IN (SELECT item_id FROM tmdb_lists) " ++
         "ORDER BY created_at DESC LIMIT 500";
     const stmt = db.prepare(sql) orelse return 0;
@@ -448,7 +452,12 @@ pub fn computeSuggestions(out: []Suggestion) usize {
         var i = count - 1;
         while (i > pos) : (i -= 1) out[i] = out[i - 1];
 
-        var s = Suggestion{ .score = score };
+        var s = Suggestion{ .score = score, .id = db.columnInt(stmt, 3) };
+        const poster_path = db.columnText(stmt, 4) orelse "";
+        if (poster_path.len <= s.poster.len) {
+            @memcpy(s.poster[0..poster_path.len], poster_path);
+            s.poster_len = poster_path.len;
+        }
         const tlen = @min(title.len, s.title.len - 1);
         @memcpy(s.title[0..tlen], title[0..tlen]);
         s.title_len = tlen;

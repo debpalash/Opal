@@ -222,3 +222,43 @@ def test_music_discovery():
     if missing:
         return "fail", "Music discovery incomplete: " + ", ".join(missing)
     return "pass", "Discovery: seeds -> ListenBrainz similar artists -> MusicBrainz studio albums, inert until opt-in"
+
+
+@test("Recommendation rails show cover art via shared media cards", "Audio")
+def test_rail_cover_art():
+    """Music "For you" (Cover Art Archive by release-group MBID) and Home
+    "For You" (tmdb_items.poster_path) render through media_card with the
+    shared lazy CoverSlot loader, and the URL logic lives in tested pure code."""
+    mp = _src("src/services/music_discovery_pure.zig")
+    ms = _src("src/services/music_discovery.zig")
+    rp = _src("src/services/recommendations_pure.zig")
+    rs = _src("src/services/recommendations.zig")
+    act = _src("src/services/activity.zig")
+    dui = _src("src/ui/discovery_ui.zig")
+    home = _src("src/ui/home.zig")
+    build = _src("build.zig")
+    arch = _src("docs/architecture-exceptions.json")
+    rail = ms.split("pub fn renderRail()", 1)[1]
+    checks = {
+        "CAA url pure": "pub fn buildCoverArtUrl(" in mp and "coverartarchive.org/release-group/{s}/front-250" in mp,
+        "CAA url validates mbid": "if (!isValidMbid(release_group_mbid)) return null" in mp,
+        "CAA url tested": 'test "buildCoverArtUrl' in mp,
+        "search query pure + tested": "pub fn buildSearchQuery(" in mp and 'test "buildSearchQuery' in mp,
+        "music rail routes through pure": "pure.buildCoverArtUrl(" in rail and "pure.buildSearchQuery(" in rail,
+        "music rail on media_card": "media_card.begin(" in rail and ".aspect = .square" in rail,
+        "music rail shared loader": "components.coverArt(" in rail and "components.CoverSlot" in ms,
+        "music rail keeps receipt + click": "reason" in rail and "searchMusic(" in rail,
+        "music rail no raw card box": "dvui.clicked(card.data()" not in rail,
+        "arch exception recorded": '"src/services/music_discovery.zig -> ../ui/media_card.zig"' in arch,
+        "poster url pure + tested": "pub fn posterUrl(" in rp and 'test "posterUrl' in rp and "pub fn formatScore(" in rp,
+        "poster path carried": "poster_path FROM tmdb_items" in rs and "poster_path FROM tmdb_items" in act,
+        "home rail routes through pure": "rec_pure.posterUrl(" in dui and "rec_pure.formatScore(" in dui,
+        "home rail on media_card": "media_card.begin(" in dui and "components.coverArt(" in dui,
+        "home rail keeps receipt + click": "search.submitQuery(title)" in dui and "reason" in dui,
+        "home passes shelf width": "renderForYouRail(card_w)" in home,
+        "pure test registered": 'b.path("src/services/recommendations_pure.zig")' in build,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "Rail cover art incomplete: " + ", ".join(missing)
+    return "pass", "Music + Home For-You rails: media_card covers via CoverSlot, CAA/TMDB URLs from tested pure helpers"

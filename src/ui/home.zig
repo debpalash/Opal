@@ -173,7 +173,7 @@ pub fn render() void {
     _ = renderComingUpRail(card_w);
     _ = renderPicksRail(card_w);
     if (state.app.taste_enabled and @import("../services/recommendations.zig").rec_count > 0) {
-        @import("discovery_ui.zig").renderForYouRail();
+        @import("discovery_ui.zig").renderForYouRail(card_w);
     }
     if (watchlist.items.len > 0) {
         posterStrip("Watchlist", icons.tvg.lucide.bookmark, watchlist, .Watchlist, 2, card_w);
