@@ -760,6 +760,12 @@ def test_mingw64_libtorrent_pinned():
         return "fail", "install-mingw64-libtorrent.sh does not verify a pinned SHA-256"
     if "pacman -U" not in script or "MINGW64" not in script:
         return "fail", "installer must pacman -U the MINGW64 package"
+    # Source fallback for when the orphaned package is pruned: upstream
+    # tarball and both MSYS2 patches pinned, same CMake flags as the PKGBUILD.
+    if len(_re.findall(r"_SHA256=[0-9a-f]{64}", script)) < 4 or "build_from_source" not in script:
+        return "fail", "source fallback must pin the tarball and both patches by SHA-256"
+    if "! install_package" not in script or "-DBUILD_SHARED_LIBS=ON" not in script:
+        return "fail", "fallback must run when the package install fails and build the DLL"
     for wf in (".github/workflows/ci.yml", ".github/workflows/release.yml"):
         text = _read(wf)
         if "mingw-w64-x86_64-libtorrent-rasterbar\n" in text:
@@ -768,4 +774,4 @@ def test_mingw64_libtorrent_pinned():
             return "fail", wf + " never runs the pinned libtorrent installer"
         if text.index("./scripts/install-mingw64-libtorrent.sh") > text.index("./scripts/install-mingw64-mpv.sh"):
             return "fail", wf + " installs libtorrent after building mpv"
-    return "pass", "CI and release install the pinned MINGW64 libtorrent before any build"
+    return "pass", "CI and release install the pinned MINGW64 libtorrent (source-build fallback) before any build"
