@@ -1,0 +1,21 @@
+From 69bee9a719bccd151a67d2582f7be4abc0c29612 Mon Sep 17 00:00:00 2001
+From: Aleksandr Mikhnenko <mikhnenko@yandex-team.com>
+Date: Tue, 20 Jan 2026 12:41:54 +0300
+Subject: [PATCH] Fix build with libcxx 20.1.8
+
+---
+ src/configuration.cpp | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/configuration.cpp b/src/configuration.cpp
+index fe28aef71..897be5eab 100644
+--- a/src/configuration.cpp
++++ b/src/configuration.cpp
+@@ -10,6 +10,7 @@
+ 
+ #include "impl/utils.hpp"
+ 
++#include <algorithm>
+ #include <cassert>
+ #include <regex>
+ 
