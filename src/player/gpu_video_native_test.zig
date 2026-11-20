@@ -42,6 +42,9 @@ test "Native media offline GPU video renders mpv through SDL's OpenGL renderer" 
     @import("../core/workers.zig").init();
     defer @import("../core/workers.zig").markQuitting();
     @import("../ui/theme.zig").markUiThread();
+    const logs = @import("../core/logs.zig");
+    logs.logs_allocator = alloc;
+    defer logs.deinit();
     gpu_video.resetForTest();
     defer gpu_video.resetForTest();
 
