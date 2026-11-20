@@ -107,11 +107,12 @@ pub fn isAvailable() bool {
     // GL contexts and SDL textures belong to the UI thread.
     if (!@import("../ui/theme.zig").isUiThread()) return false;
     if (checked) return available;
+    // Outside a frame there is no renderer to inspect yet; probe later.
+    const window = dvui.current_window orelse return false;
     checked = true;
     const env = std.c.getenv("OPAL_VIDEO_RENDER");
     const value: ?[]const u8 = if (env) |e| std.mem.span(e) else null;
     if (!pure.requested(@import("builtin").os.tag, value)) return false;
-    const window = dvui.current_window orelse return false;
     const renderer: *c.sdl.SDL_Renderer = @ptrCast(@alignCast(window.backend.impl.renderer));
     var info: c.sdl.SDL_RendererInfo = undefined;
     if (c.sdl.SDL_GetRendererInfo(renderer, &info) != 0) return false;
