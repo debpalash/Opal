@@ -70,6 +70,12 @@ RUN set -eux; \
         arm64) cpu=baseline ;; \
         *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
     esac; \
+    # Fetch first, with retries: one reset connection to a dependency host
+    # (deps.files.ghostty.org) otherwise fails the whole image build.
+    for attempt in 1 2 3 4 5; do \
+        zig build -Dheadless=true -Doptimize=safe -Dcpu="$cpu" --fetch && break; \
+        [ "$attempt" = 5 ] && exit 1; sleep $((attempt * 15)); \
+    done; \
     zig build -Dheadless=true -Doptimize=safe -Dcpu="$cpu"
 
 # Artifacts to copy out of the builder into the runtime stage:
