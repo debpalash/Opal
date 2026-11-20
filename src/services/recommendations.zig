@@ -25,6 +25,15 @@ pub const Recommendation = struct {
     reason_len: usize = 0,
     id: i32 = 0,
     score: f64 = 0,
+    /// `tmdb_items.poster_path` (TMDB fragment or absolute URL); empty when
+    /// the tier has no catalog row (taste-vector scene seeds). Resolved to a
+    /// URL by recommendations_pure.posterUrl at draw time.
+    poster: [256]u8 = std.mem.zeroes([256]u8),
+    poster_len: usize = 0,
+
+    pub fn posterSlice(self: *const Recommendation) []const u8 {
+        return self.poster[0..@min(self.poster_len, self.poster.len)];
+    }
 };
 
 pub var recommendations: [20]Recommendation = undefined;
@@ -74,8 +83,9 @@ pub fn generateRecommendations() void {
                         addRec(
                             s.title[0..@min(s.title_len, s.title.len)],
                             s.reason[0..@min(s.reason_len, s.reason.len)],
-                            0,
+                            s.id,
                             s.score,
+                            s.poster[0..@min(s.poster_len, s.poster.len)],
                         );
                     }
                     return;
@@ -97,6 +107,7 @@ pub fn generateRecommendations() void {
                             s.reason[0..@min(s.reason_len, s.reason.len)],
                             0,
                             s.score,
+                            "",
                         );
                     }
                     return;
@@ -162,7 +173,7 @@ pub fn generateRecommendations() void {
             }
 
             // 3) Find TMDB items matching top genre that are NOT in user lists
-            const rec_sql = "SELECT id, title, genre_text, rating FROM tmdb_items " ++
+            const rec_sql = "SELECT id, title, genre_text, rating, poster_path FROM tmdb_items " ++
                 "WHERE genre_text LIKE ?1 AND id NOT IN (SELECT item_id FROM tmdb_lists) " ++
                 "ORDER BY rating DESC LIMIT 20";
             const rec_stmt = db.prepare(rec_sql) orelse return;
@@ -176,14 +187,15 @@ pub fn generateRecommendations() void {
                 const id = db.columnInt(rec_stmt, 0);
                 const title = db.columnText(rec_stmt, 1) orelse continue;
                 const rating = db.columnDouble(rec_stmt, 3);
+                const poster_path = db.columnText(rec_stmt, 4) orelse "";
 
                 var reason_buf: [64]u8 = undefined;
                 const reason = std.fmt.bufPrint(&reason_buf, "You like {s}", .{top_genre}) catch "Recommended";
-                addRec(title, reason, id, rating);
+                addRec(title, reason, id, rating, poster_path);
             }
         }
 
-        fn addRec(title: []const u8, reason: []const u8, id: i32, score: f64) void {
+        fn addRec(title: []const u8, reason: []const u8, id: i32, score: f64, poster_path: []const u8) void {
             if (rec_count >= 20) return;
             var rec = &recommendations[rec_count];
             const tlen = @min(title.len, 127);
@@ -194,6 +206,11 @@ pub fn generateRecommendations() void {
             rec.reason_len = rlen;
             rec.id = id;
             rec.score = score;
+            // Over-long paths are dropped, not truncated — a cut URL is a
+            // guaranteed 404.
+            const plen = if (poster_path.len <= rec.poster.len) poster_path.len else 0;
+            @memcpy(rec.poster[0..plen], poster_path[0..plen]);
+            rec.poster_len = plen;
             rec_count += 1;
         }
     }.worker, .{}) catch {

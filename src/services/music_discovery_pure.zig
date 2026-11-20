@@ -261,6 +261,35 @@ pub fn buildReleaseGroupUrl(out: []u8, artist_mbid: []const u8, limit: u16) ?[]c
     ) catch null;
 }
 
+/// Cover Art Archive front thumbnail for a release-group:
+/// `GET https://coverartarchive.org/release-group/<mbid>/front-250`.
+/// The endpoint 307-redirects to archive.org (the fetcher follows redirects);
+/// a 404 means "no art", which the cover slot latches as failed — never
+/// retried. Returns null for a malformed mbid so no request is ever built.
+pub fn buildCoverArtUrl(out: []u8, release_group_mbid: []const u8) ?[]const u8 {
+    if (!isValidMbid(release_group_mbid)) return null;
+    return std.fmt.bufPrint(out, "https://coverartarchive.org/release-group/{s}/front-250", .{release_group_mbid}) catch null;
+}
+
+/// Click target for a recommended album: "<artist> <title>" for the active
+/// music source's search, falling back to the bare title. Truncated to
+/// `out.len` (the caller's search buffer, minus the NUL).
+pub fn buildSearchQuery(out: []u8, artist: []const u8, title: []const u8) []const u8 {
+    var n: usize = 0;
+    if (artist.len > 0 and title.len > 0) {
+        n = append(out, n, artist);
+        n = append(out, n, " ");
+    }
+    n = append(out, n, if (title.len > 0) title else artist);
+    return out[0..n];
+}
+
+fn append(out: []u8, at: usize, s: []const u8) usize {
+    const k = @min(s.len, out.len - at);
+    @memcpy(out[at..][0..k], s[0..k]);
+    return at + k;
+}
+
 // ══════════════════════════════════════════════════════════
 // Cache keys + TTL
 // ══════════════════════════════════════════════════════════
@@ -704,6 +733,34 @@ test "URL builders percent-encode and match the verified endpoint shapes" {
         buildReleaseGroupUrl(&b, "5b11f4ce-a62d-471e-81fc-a69a8278c7da", 100).?,
     );
     try std.testing.expect(buildReleaseGroupUrl(&b, "", 100) == null);
+}
+
+test "buildCoverArtUrl targets the release-group front-250 thumbnail and rejects bad mbids" {
+    var b: [256]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "https://coverartarchive.org/release-group/1b022e01-4da6-387b-8658-8678046e4cef/front-250",
+        buildCoverArtUrl(&b, "1b022e01-4da6-387b-8658-8678046e4cef").?,
+    );
+    // Malformed ids never become a request (no wasted 404 per card).
+    try std.testing.expect(buildCoverArtUrl(&b, "") == null);
+    try std.testing.expect(buildCoverArtUrl(&b, "1b022e01-4da6-387b-8658-8678046e4ce") == null); // 35 chars
+    try std.testing.expect(buildCoverArtUrl(&b, "1b022e014da6387b86588678046e4cef") == null); // no dashes
+    try std.testing.expect(buildCoverArtUrl(&b, "1b022e01-4da6-387b-8658-8678046e4ceg") == null); // non-hex
+    try std.testing.expect(buildCoverArtUrl(&b, "1b022e01/4da6-387b-8658-8678046e4cef") == null); // path injection
+    // Too-small output buffer degrades to null instead of a truncated URL.
+    var tiny: [16]u8 = undefined;
+    try std.testing.expect(buildCoverArtUrl(&tiny, "1b022e01-4da6-387b-8658-8678046e4cef") == null);
+}
+
+test "buildSearchQuery joins artist and album, falls back to title, and truncates" {
+    var b: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("Nirvana Nevermind", buildSearchQuery(&b, "Nirvana", "Nevermind"));
+    try std.testing.expectEqualStrings("Nevermind", buildSearchQuery(&b, "", "Nevermind"));
+    try std.testing.expectEqualStrings("Nirvana", buildSearchQuery(&b, "Nirvana", ""));
+    var small: [10]u8 = undefined;
+    try std.testing.expectEqualStrings("Nirvana Ne", buildSearchQuery(&small, "Nirvana", "Nevermind"));
+    var empty: [0]u8 = .{};
+    try std.testing.expectEqualStrings("", buildSearchQuery(&empty, "Nirvana", "Nevermind"));
 }
 
 test "cache key is stable, normalised and namespaced; TTLs are ordered" {

@@ -69,6 +69,7 @@
     "src/services/mihon.zig -> dvui",
     "src/services/mihon.zig -> icons",
     "src/services/music_discovery.zig -> ../ui/components.zig",
+    "src/services/music_discovery.zig -> ../ui/media_card.zig",
     "src/services/music_discovery.zig -> ../ui/theme.zig",
     "src/services/music_discovery.zig -> dvui",
     "src/services/music_discovery.zig -> icons",

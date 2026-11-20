@@ -3030,6 +3030,16 @@ fn buildSupported(b: *std.Build) void {
     test_music_discovery_pure.root_module.addImport("build_options", build_options_module);
     test_step.dependOn(&b.addRunArtifact(test_music_discovery_pure).step);
 
+    // Home "For You" rail — tmdb_items poster_path → URL and the score chip.
+    const test_recommendations_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/recommendations_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_recommendations_pure).step);
+
     const test_iptv_playlist_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/iptv_playlist_pure.zig"),
