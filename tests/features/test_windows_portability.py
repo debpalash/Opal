@@ -762,8 +762,11 @@ def test_mingw64_libtorrent_pinned():
         return "fail", "installer must pacman -U the MINGW64 package"
     # Source fallback for when the orphaned package is pruned: upstream
     # tarball and both MSYS2 patches pinned, same CMake flags as the PKGBUILD.
-    if len(_re.findall(r"_SHA256=[0-9a-f]{64}", script)) < 4 or "build_from_source" not in script:
-        return "fail", "source fallback must pin the tarball and both patches by SHA-256"
+    if len(_re.findall(r"_SHA256=[0-9a-f]{64}", script)) < 2 or "build_from_source" not in script:
+        return "fail", "source fallback must pin the upstream tarball by SHA-256"
+    for patch in ("0001-libdatachannel-include-algorithm.patch", "0002-include-iterator.patch"):
+        if patch not in script or not _os.path.exists(_os.path.join(PROJECT_DIR, "scripts/patches/libtorrent", patch)):
+            return "fail", "vendored libtorrent patch missing: " + patch
     if "! install_package" not in script or "-DBUILD_SHARED_LIBS=ON" not in script:
         return "fail", "fallback must run when the package install fails and build the DLL"
     for wf in (".github/workflows/ci.yml", ".github/workflows/release.yml"):

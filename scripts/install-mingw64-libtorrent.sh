@@ -20,10 +20,9 @@ PKG=mingw-w64-x86_64-libtorrent-rasterbar-2.1.2-3-any.pkg.tar.zst
 PKG_SHA256=7596336f33394ed57bd842b7c28b43083d7df7c8676d2a2e1d8854c8bd20c37d
 LT_VERSION=2.1.2
 LT_SHA256=3362546d9cd71b9e49ee6cac7d3f1f914ce9cdb217c86b63d5b22cbed0334dbc
-PATCH1_URL='https://github.com/paullouisageneau/libdatachannel/commit/69bee9a719bccd151a67d2582f7be4abc0c29612.patch?full_index=1'
-PATCH1_SHA256=5fe1826d62ec87a1a7f31a9b843a0a66fc538db9f1c50c99c144ac023d25ee3a
-PATCH2_URL='https://github.com/arvidn/libtorrent/commit/cebad24950bfbbe7a097a9e25b0756b75a618e4c.patch?full_index=1'
-PATCH2_SHA256=ac9450841360efead8001ed4b83631e675959f0eef8730591c8d37f8a208433c
+# MSYS2's two upstream build fixes (one #include each), vendored: GitHub's
+# commit .patch URLs return 503 to CI often enough to break the fallback.
+PATCH_DIR="$(cd "$(dirname "$0")" && pwd)/patches/libtorrent"
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 
@@ -42,12 +41,10 @@ build_from_source() {
     pacman -S --noconfirm --needed mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja
     local tarball="$WORK_DIR/libtorrent.tar.gz"
     fetch "https://github.com/arvidn/libtorrent/releases/download/v${LT_VERSION}/libtorrent-rasterbar-${LT_VERSION}.tar.gz" "$tarball" "$LT_SHA256"
-    fetch "$PATCH1_URL" "$WORK_DIR/0001.patch" "$PATCH1_SHA256"
-    fetch "$PATCH2_URL" "$WORK_DIR/0002.patch" "$PATCH2_SHA256"
     tar -xzf "$tarball" -C "$WORK_DIR"
     local src="$WORK_DIR/libtorrent-rasterbar-$LT_VERSION"
-    patch -Np1 -d "$src/deps/libdatachannel" -i "$WORK_DIR/0001.patch"
-    patch -Np1 -d "$src" -i "$WORK_DIR/0002.patch"
+    patch -Np1 -d "$src/deps/libdatachannel" -i "$PATCH_DIR/0001-libdatachannel-include-algorithm.patch"
+    patch -Np1 -d "$src" -i "$PATCH_DIR/0002-include-iterator.patch"
     MSYS2_ARG_CONV_EXCL="-DCMAKE_INSTALL_PREFIX=" cmake -Wno-dev -G Ninja \
         -S "$src" -B "$WORK_DIR/build" \
         -DCMAKE_INSTALL_PREFIX="$MINGW_PREFIX" -DCMAKE_BUILD_TYPE=Release \
