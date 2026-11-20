@@ -32,6 +32,12 @@ COPY . .
 # Secrets do not enter cache keys. A nonsecret release-run identifier forces
 # recompilation when release credentials differ from a cached PR build.
 ARG OPAL_BUILD_CACHE_KEY=preview
+# Fetch dependencies first, with retries: one reset connection to a
+# dependency host (deps.files.ghostty.org) otherwise fails the whole build.
+RUN for attempt in 1 2 3 4 5; do \
+        zig build -Doptimize=safe -Dcpu=x86_64_v2 -fsys=sdl2 -Dnative-prefix=/opt/opal-runtime --fetch && exit 0; \
+        sleep $((attempt * 15)); \
+    done; exit 1
 # BuildKit keeps API keys out of image metadata and build arguments.
 RUN --mount=type=secret,id=opal_tmdb --mount=type=secret,id=opal_omdb \
     OPAL_TMDB_TOKEN="$(cat /run/secrets/opal_tmdb 2>/dev/null || true)" \

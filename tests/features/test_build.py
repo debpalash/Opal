@@ -1699,3 +1699,19 @@ def test_dev_app_finder_packaging():
     if result.returncode:
         return "fail", (result.stderr or result.stdout)[-1200:]
     return "pass", "copied executable relinked and signed; Finder resources resolve from bundle"
+
+
+@test("Docker builds retry dependency fetches before compiling", "Build")
+def test_docker_fetch_retry():
+    # deps.files.ghostty.org reset connections and failed three image builds
+    # on 2026-11-20; a separate retried `--fetch` absorbs that.
+    for rel in ("Dockerfile", "packaging/linux-compat/Dockerfile"):
+        text = _src(rel)
+        fetch = text.find("--fetch")
+        assert fetch != -1, rel + " has no separate dependency fetch"
+        assert "for attempt in 1 2 3 4 5" in text[:fetch], rel + " fetch is not retried"
+        build = text.find("zig build", fetch + 1)
+        while build != -1 and "--fetch" in text[build:text.find("\n", build)]:
+            build = text.find("zig build", build + 1)
+        assert build > fetch, rel + " must fetch before the real build"
+    return "pass", "Both Docker builds fetch dependencies with 5 retries before compiling"
