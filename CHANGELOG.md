@@ -12,8 +12,13 @@ match the tag exactly.
 
 ## Unreleased
 
-## v0.9.7 — 2026-11-19
+## v0.9.7 — 2026-11-20
 
+- **One card everywhere.** Movies & TV, Home, Anime, Asian Drama, Live TV, Radio, Comics, Novels, Visual Novels, podcasts, music, Jellyfin, Plex and YouTube share the same card, so titles, scores and actions line up and footers no longer clip. Novels move to a poster grid. Home's Continue rail is tighter and shows time left; blurring it until hover is now an opt-in setting.
+- **Artwork for files you play.** Local files with release-style names get a clean title, an "S2 E4" label and a poster. Only the parsed title and year are looked up, never file paths. Accented titles match plain file names, so "Shōgun" finds `Shogun.2024`.
+- **Cast with AirPlay.** Apple TVs and AirPlay receivers appear beside Chromecasts in the web UI, with Pair and PIN entry for devices that need it (requires pyatv 0.14 or newer; pyatv does not run on Python 3.14 yet, and Opal says so). Chromecast scanning and Stop now work reliably.
+- **Recommendations with covers.** The music "For you" rail shows album art and Home's "For You" rail shows posters.
+- **Fixes.** Opal no longer reopens in fullscreen. The Podcasts country picker opens cleanly, and quitting with episodes open no longer leaks memory. Iken chapter lists load past the first 100 chapters.
 - **Downloads recover cleanly.** Interrupted downloads restart from byte zero when the server does not support ranges. Transfer logs identify the failing request stage. The download API accepts magnets without a player open, and search queue requests report when an item cannot be staged.
 - **More ways to search and read.** The source catalog has 191 entries across video, reading, music, and live audio. Iken readers can move between free chapters with Previous and Next.
 - **Linux and Jellyfin fixes.** AppImage file associations use the persistent AppImage path. Wayland launches preserve the subprocess environment, and SQLite no longer memory-maps Opal’s database. The Arch package recipes use the installed libtorrent ABI. Jellyfin uses standard authorization headers.

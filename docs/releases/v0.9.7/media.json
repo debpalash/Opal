@@ -2,6 +2,16 @@
   "tag": "v0.9.7",
   "items": [
     {
+      "path": "assets/releases/v0.9.7/live-tv-cards.png",
+      "alt": "Opal Live TV shows eight channel cards in a grid, each with a link-health dot, a one-line name, category, country, quality and format, and a favourite star.",
+      "caption": "Every catalog now uses one card. Live TV shows link health and favourites in the same layout as Movies, Anime, Radio and Novels (offline fixture data)."
+    },
+    {
+      "path": "assets/releases/v0.9.7/anime-cards.png",
+      "alt": "Opal Anime shows poster cards with a star score badge, a two-line title and the episode count, laid out in an even grid.",
+      "caption": "Anime cards put the score on the cover and keep titles and episode counts aligned across the grid (offline fixture data)."
+    },
+    {
       "path": "assets/releases/v0.9.7/downloads.png",
       "alt": "Opal Activity shows a completed 18 KB HTTPS download and a test magnet in the torrent list.",
       "caption": "Opal downloaded Git’s public COPYING file and accepted a fixture magnet without an active player."
