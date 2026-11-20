@@ -388,8 +388,6 @@ jobs:
         with:
           version: 0.17.0
       - name: Install pinned MINGW64 libtorrent
-        env:
-          OPAL_LIBTORRENT_FROM_SOURCE: "1"
         run: ./scripts/install-mingw64-libtorrent.sh
       - name: Native HTTP deadlines and cancellation
         timeout-minutes: 10
