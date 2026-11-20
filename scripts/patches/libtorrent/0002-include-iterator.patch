@@ -1,0 +1,26 @@
+From cebad24950bfbbe7a097a9e25b0756b75a618e4c Mon Sep 17 00:00:00 2001
+From: Zhaoqi Xu <lzy00419@outlook.com>
+Date: Tue, 27 Oct 2026 01:52:18 -0400
+Subject: [PATCH] add missing <iterator> include in escape_string.cpp
+
+base32decode() uses std::back_inserter, but <iterator> was only
+reaching escape_string.cpp transitively. libc++ 23 no longer provides
+it that way, so the file fails to build there.
+
+Fixes #9047
+---
+ src/escape_string.cpp | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/escape_string.cpp b/src/escape_string.cpp
+index b4d1c907235..786439e72b2 100644
+--- a/src/escape_string.cpp
++++ b/src/escape_string.cpp
+@@ -16,6 +16,7 @@ see LICENSE file.
+ #include <algorithm>
+ #include <mutex>
+ #include <cstring>
++#include <iterator>
+ #include <vector>
+ 
+ #ifdef TORRENT_WINDOWS
