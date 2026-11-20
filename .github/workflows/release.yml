@@ -376,13 +376,16 @@ jobs:
             mingw-w64-x86_64-libass
             mingw-w64-x86_64-meson
             mingw-w64-x86_64-sqlite3
-            mingw-w64-x86_64-libtorrent-rasterbar
+            mingw-w64-x86_64-boost
+            mingw-w64-x86_64-openssl
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-python
 
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
+      - name: Install pinned MINGW64 libtorrent
+        run: ./scripts/install-mingw64-libtorrent.sh
       - name: Build MINGW64 libmpv
         run: ./scripts/install-mingw64-mpv.sh
 

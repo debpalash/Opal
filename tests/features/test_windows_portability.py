@@ -749,3 +749,23 @@ def test_windows_spawn_serialized():
     if offenders:
         return "fail", "std.process.spawn outside io_global (bypasses the Windows spawn lock): " + ", ".join(offenders)
     return "pass", "all child spawns go through io_global's Windows spawn lock"
+
+
+@test("MINGW64 libtorrent is installed from a pinned, hash-checked package", "Windows")
+def test_mingw64_libtorrent_pinned():
+    # MSYS2 dropped libtorrent-rasterbar from the MINGW64 index (2026-11-20);
+    # naming it in setup-msys2 `install:` fails smoke-windows and the release.
+    script = _read("scripts/install-mingw64-libtorrent.sh")
+    if not _re.search(r"PKG_SHA256=[0-9a-f]{64}", script) or "sha256sum --check" not in script:
+        return "fail", "install-mingw64-libtorrent.sh does not verify a pinned SHA-256"
+    if "pacman -U" not in script or "MINGW64" not in script:
+        return "fail", "installer must pacman -U the MINGW64 package"
+    for wf in (".github/workflows/ci.yml", ".github/workflows/release.yml"):
+        text = _read(wf)
+        if "mingw-w64-x86_64-libtorrent-rasterbar\n" in text:
+            return "fail", wf + " still installs libtorrent from the MINGW64 index"
+        if "./scripts/install-mingw64-libtorrent.sh" not in text:
+            return "fail", wf + " never runs the pinned libtorrent installer"
+        if text.index("./scripts/install-mingw64-libtorrent.sh") > text.index("./scripts/install-mingw64-mpv.sh"):
+            return "fail", wf + " installs libtorrent after building mpv"
+    return "pass", "CI and release install the pinned MINGW64 libtorrent before any build"
