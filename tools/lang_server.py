@@ -54,6 +54,9 @@ def get_tts():
 
 asr_backend = None  # 'cohere' or 'whisper'
 
+COHERE_ASR_MODEL = "CohereLabs/cohere-transcribe-03-2026"
+COHERE_ASR_REVISION = "d552dadc2922ba6f6c1f994f8db904d52dcaf942"
+
 def get_asr():
     global asr_model, asr_processor, asr_backend
     if asr_model is not None:
@@ -65,12 +68,14 @@ def get_asr():
         from transformers import AutoProcessor, CohereAsrForConditionalGeneration
         import torch
         asr_processor = AutoProcessor.from_pretrained(
-            "CohereLabs/cohere-transcribe-03-2026",
-            trust_remote_code=True
+            COHERE_ASR_MODEL,
+            revision=COHERE_ASR_REVISION,
+            trust_remote_code=True,
         )
         device = "cuda" if torch.cuda.is_available() else "cpu"
         asr_model = CohereAsrForConditionalGeneration.from_pretrained(
-            "CohereLabs/cohere-transcribe-03-2026",
+            COHERE_ASR_MODEL,
+            revision=COHERE_ASR_REVISION,
             trust_remote_code=True,
             device_map="auto" if torch.cuda.is_available() else None,
         )

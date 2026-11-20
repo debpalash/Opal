@@ -300,7 +300,8 @@ def test_web_ui_access_page():
         ),
         "loads with setup page": "loadAccess();" in ui and "async function loadAccess(" in ui,
         "adapts to caller class": "accViaToken" in ui and "via_token" in ui,
-        "warns when LAN-exposed": "acc-bind-warn" in ui and "Anyone on your network" in ui,
+        "warns when LAN-exposed": "acc-bind-warn" in ui and "Anyone on your network" in ui and "plain HTTP" in ui and "session cookie" in ui,
+        "lan plain http log": "pub fn lanPlainHttpWarning(" in pure and "lanPlainHttpWarning(" in rm,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:

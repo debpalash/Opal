@@ -174,3 +174,37 @@ def test_scrapers_routed_through_scrapefetch():
     return "pass", ("comics(Madara/MangaThemesia/generic)→fetchMaybeUnblocked, "
                     "anime embeds→scrapeFetch, novels(scraper engines)→scrapeHtml; "
                     "MangaDex/HeanCms JSON + Wikisource + POST paths left on curl")
+
+
+@test("Host fetches refuse private redirects", "Network")
+def test_private_fetch_targets():
+    acc = _src("src/services/access_pure.zig")
+    dl = _src("src/services/downloads.zig")
+    eng = _src("src/services/download_engine.zig")
+    sc = _src("src/services/scrape_fetch.zig")
+    pure = _src("src/services/fetch_target_pure.zig")
+    ft = _src("src/services/fetch_target.zig")
+    player = _src("src/player/player.zig")
+    cpp = _src("src/torrent_wrapper.cpp")
+    bz = _src("build.zig")
+    call = player.find("torrent_ensure_streaming_buffer")
+    window = player[max(0, call - 600):call + 500]
+    checks = {
+        "download route is administer_host": '"/download/url",' in acc[acc.find("const host_routes"):acc.find("for (host_routes)")],
+        "guarded download entry": "startGuarded(" in dl and "stringPermitted(" in dl,
+        "loopback fixtures are address literals only": (
+            "OPAL_ALLOW_LOOPBACK_DOWNLOAD" in ft
+            and "pub fn isLoopbackAddress(" in pure
+            and "downloadPermitted(url, false)" in pure
+        ),
+        "probe rechecks every hop": "fn probeChecked(" in eng and "vetDownload(" in eng,
+        "guarded segments do not follow redirects": ".not_allowed" in eng,
+        "scrape checks each hop": "vetScrape(" in sc and ".follow_redirects = false" in sc,
+        "pure module is what the build tests": "test_fetch_target_pure" in bz and "pub fn downloadStringAllowed(" in pure and "pub fn joinRedirect(" in pure,
+        "piece map only": "status(lt::torrent_handle::query_pieces)" in cpp,
+        "status call drops the player lock": "players_mutex.unlock()" in window and "players_mutex.lock()" in window,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "private fetch policy incomplete: " + ", ".join(missing)
+    return "pass", "download/scrape hops stay public; torrent read-ahead asks only for the piece map"

@@ -50,6 +50,8 @@ pub const Spec = struct {
     output_path: ?[]const u8 = null,
     /// Restrict the request and every redirect hop to https.
     https_only: bool = false,
+    /// curl `--connect-to HOST:PORT:ADDR:PORT`. Pins a vetted address.
+    connect_to: ?[]const u8 = null,
     /// Abort (curl exit 63) when the advertised body exceeds this many bytes.
     max_filesize: ?u64 = null,
     /// Disable curl's output buffering (`-N`) so streamed (SSE) bytes reach
@@ -83,12 +85,11 @@ pub fn build(arena: std.mem.Allocator, spec: Spec, proxy_args: []const []const u
     try out.append(arena, "--connect-timeout");
     try out.append(arena, try std.fmt.allocPrint(arena, "{d}", .{spec.connect_timeout_secs}));
 
-    if (spec.https_only) {
-        try out.append(arena, "--proto");
-        try out.append(arena, "=https");
-        try out.append(arena, "--proto-redir");
-        try out.append(arena, "=https");
-    }
+    const proto = if (spec.https_only) "=https" else "=http,https";
+    try out.append(arena, "--proto");
+    try out.append(arena, proto);
+    try out.append(arena, "--proto-redir");
+    try out.append(arena, proto);
     if (spec.max_filesize) |m| {
         try out.append(arena, "--max-filesize");
         try out.append(arena, try std.fmt.allocPrint(arena, "{d}", .{m}));
@@ -165,6 +166,12 @@ pub fn build(arena: std.mem.Allocator, spec: Spec, proxy_args: []const []const u
 
     // DPI proxy (SNI-fragmenting SOCKS5) — chained onto the impersonated request.
     for (proxy_args) |a| try out.append(arena, a);
+
+    if (spec.connect_to) |pin| {
+        if (pin.len == 0 or std.mem.startsWith(u8, pin, "-")) return error.InvalidUrl;
+        try out.append(arena, "--connect-to");
+        try out.append(arena, pin);
+    }
 
     // An empty url means the URL travels in the stdin config (it carries a
     // key in its query string) — see ConfigSpec.url.
@@ -570,6 +577,29 @@ test "method, body file, output, https-only and max-filesize flags" {
     try std.testing.expectEqualStrings("=https", argv[(idx(argv, "--proto-redir") orelse return error.NoRedir) + 1]);
     try std.testing.expectEqualStrings("1024", argv[(idx(argv, "--max-filesize") orelse return error.NoMax) + 1]);
     try std.testing.expectEqualStrings("https://x.test/up", argv[argv.len - 1]);
+}
+
+test "connect-to pin is an option and the url stays last" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const argv = try buildAlloc(arena.allocator(), .{
+        .bin = "curl",
+        .url = "https://cdn.example/a",
+        .connect_to = "cdn.example:443:1.1.1.1:443",
+    }, &.{});
+    try std.testing.expectEqualStrings("cdn.example:443:1.1.1.1:443", argv[(idx(argv, "--connect-to") orelse return error.NoPin) + 1]);
+    try std.testing.expectEqualStrings("https://cdn.example/a", argv[argv.len - 1]);
+}
+
+test "default curl argv restricts protocols and redirects to http,https" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const argv = try buildAlloc(arena.allocator(), .{
+        .bin = "curl",
+        .url = "http://example.com/feed",
+    }, &.{});
+    try std.testing.expectEqualStrings("=http,https", argv[(idx(argv, "--proto") orelse return error.NoProto) + 1]);
+    try std.testing.expectEqualStrings("=http,https", argv[(idx(argv, "--proto-redir") orelse return error.NoRedir) + 1]);
 }
 
 test "inline post body wins over body file" {

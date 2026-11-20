@@ -130,6 +130,10 @@ const MpvPlaybackSink = struct {
             option_values[option_count] = stringNode(kv[1].ptr);
             option_keys[option_count] = @constCast(kv[0].ptr);
             option_count += 1;
+        } else if (options.restrict_refs) for (playback_load.remote_safe_file_options) |kv| {
+            option_values[option_count] = stringNode(kv[1].ptr);
+            option_keys[option_count] = @constCast(kv[0].ptr);
+            option_count += 1;
         };
         var option_list: c.mpv.mpv_node_list = .{
             .num = @intCast(option_count),
@@ -4012,17 +4016,29 @@ pub fn updateTorrentBackgroundTasks() void {
                 // Update libtorrent's deadline window so it prioritizes pieces ahead of playback.
                 // The HTTP proxy handles back-pressure (blocking reads until pieces arrive),
                 // so we no longer need to pause/unpause mpv — it buffers naturally via HTTP.
-                _ = c.mpv.torrent_ensure_streaming_buffer(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, percent_pos);
+                // status() blocks on the libtorrent thread. Drop players_mutex for that
+                // call only; the remote thread can free players while it is dropped.
+                const player_ptr = p;
+                const torrent_id = p.current_torrent_id;
+                const file_idx = p.selected_file_idx;
+                state.players_mutex.unlock();
+                _ = c.mpv.torrent_ensure_streaming_buffer(state.torrentSession(), torrent_id, file_idx, percent_pos);
+                state.players_mutex.lock();
+                const p_live = for (state.app.players.items) |q| {
+                    if (q == player_ptr and q.current_torrent_id == torrent_id) break q;
+                } else null;
+                if (p_live == null) continue;
 
                 // Five-second wall-time cadence keeps synchronous property
                 // queries and SQLite writes out of the render cadence.
                 if (percent_pos > 0.5 and
-                    (p.last_position_save_ms == 0 or now_ms - p.last_position_save_ms >= 5000))
+                    (p_live.?.last_position_save_ms == 0 or now_ms - p_live.?.last_position_save_ms >= 5000))
                 {
-                    p.last_position_save_ms = now_ms;
+                    const live = p_live.?;
+                    live.last_position_save_ms = now_ms;
                     const watch = @import("watch_history.zig");
                     var t_name3: [256]u8 = undefined;
-                    c.mpv.torrent_get_name(state.torrentSession(), p.current_torrent_id, &t_name3, 256);
+                    c.mpv.torrent_get_name(state.torrentSession(), live.current_torrent_id, &t_name3, 256);
                     const n3_len = std.mem.indexOfScalar(u8, &t_name3, 0) orelse 0;
                     if (n3_len > 0) {
                         // source_url is the magnet this torrent was added from
@@ -4035,7 +4051,7 @@ pub fn updateTorrentBackgroundTasks() void {
                         // Torrent completion for the EOF-park guard below: one
                         // C call per 5s save tick, never per frame.
                         var complete: f32 = 1;
-                        _ = c.mpv.torrent_poll(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, null, 0, &complete, null, null);
+                        _ = c.mpv.torrent_poll(state.torrentSession(), live.current_torrent_id, live.selected_file_idx, null, 0, &complete, null, null);
                         // Never record mpv parked at the end of a still-
                         // incomplete torrent: percent-pos reads 100 at EOF
                         // with single-digit percent on disk, and that row
@@ -4043,10 +4059,10 @@ pub fn updateTorrentBackgroundTasks() void {
                         // resume correctly). Genuine finishes go through
                         // saveCurrentPositionFinal, not here.
                         if (!playback_load.skipEofParkedSave(complete < 0.99, percent_pos, pos_s, dur_s)) {
-                            watch.savePositionFull(t_name3[0..n3_len], percent_pos, pos_s, dur_s, p.source_url[0..p.source_url_len], p.catalog_tmdb_id);
+                            watch.savePositionFull(t_name3[0..n3_len], percent_pos, pos_s, dur_s, live.source_url[0..live.source_url_len], live.catalog_tmdb_id);
                             // Newest trustworthy position: an EOF-reload stall
                             // resumes here instead of restarting from 0.
-                            if (std.math.isFinite(pos_s) and pos_s > 0) p.last_good_pos_secs = pos_s;
+                            if (std.math.isFinite(pos_s) and pos_s > 0) live.last_good_pos_secs = pos_s;
                         }
                     }
                 }

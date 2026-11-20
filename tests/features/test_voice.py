@@ -38,6 +38,28 @@ def test_voice_private_runtime_paths():
     return "pass", "random 0700 runtime; explicit 0600 sidecar sockets/output"
 
 
+@test("Voice setup & lang_server pin remote artifact integrity", "Voice")
+def test_voice_artifact_integrity():
+    import re
+    lang = _src("tools/lang_server.py")
+    setup = _src("src/services/voice_setup.zig")
+    rev = re.search(r'COHERE_ASR_REVISION\s*=\s*"([0-9a-f]{40})"', lang)
+    checks = {
+        "lang_server pins 40-hex revision": rev is not None,
+        "lang_server passes revision to every trust_remote_code call": (
+            lang.count("trust_remote_code=True") > 0
+            and lang.count("revision=COHERE_ASR_REVISION") == lang.count("trust_remote_code=True")
+        ),
+        "voice_setup enforces https_only": ".https_only = true" in setup,
+        "voice_setup verifies SHA-256": "verifyDownloadedFile(" in setup,
+        "voice_setup validates tar listing": "inspectTarSafe(" in setup,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", f"missing: {missing}"
+    return "pass", "SHA-256 + safe tar + pinned HuggingFace revision verified"
+
+
 @test("Silero VAD Available", "Voice")
 def test_silero_vad():
     try:

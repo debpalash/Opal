@@ -34,6 +34,11 @@ MAGNET = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=OpalUn
 
 class TorrentUnloadLiveTest(unittest.TestCase):
     def setUp(self) -> None:
+        # The HTTP cases serve the file from 127.0.0.1. Production still
+        # refuses loopback; this process env exempts that literal only.
+        self._loopback_prev = os.environ.get("OPAL_ALLOW_LOOPBACK_DOWNLOAD")
+        os.environ["OPAL_ALLOW_LOOPBACK_DOWNLOAD"] = "1"
+        self.addCleanup(self._restore_loopback_download)
         if BINARY is None:
             self.skipTest("pass --binary or set OPAL_HEADLESS_BIN")
         if not BINARY.is_file():
@@ -52,6 +57,12 @@ class TorrentUnloadLiveTest(unittest.TestCase):
                              [("web_port", str(setup_live.PORT)), ("web_bind", "loopback"),
                               ("save_path", str(self.opal.root / "downloads"))])
 
+
+    def _restore_loopback_download(self) -> None:
+        if self._loopback_prev is None:
+            os.environ.pop("OPAL_ALLOW_LOOPBACK_DOWNLOAD", None)
+        else:
+            os.environ["OPAL_ALLOW_LOOPBACK_DOWNLOAD"] = self._loopback_prev
 
     def wait_for(self, predicate, timeout=15):
         deadline = time.monotonic() + timeout

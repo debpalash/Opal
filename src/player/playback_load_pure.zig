@@ -194,6 +194,9 @@ pub const FileOptions = struct {
     /// Torrent content is untrusted: mpv must not follow references,
     /// playlists or ytdl hooks found inside it (see untrustedFileOptions).
     untrusted: bool = false,
+    /// Remote network media must not follow unsafe playlists or external
+    /// container references (ordered chapters, mov references, archives).
+    restrict_refs: bool = false,
 };
 
 /// Per-file mpv options for untrusted (torrent) content. A fake release can
@@ -206,8 +209,31 @@ pub const untrusted_file_options = [_][2][:0]const u8{
     .{ "access-references", "no" },
 };
 
+/// Per-file mpv options for remote HTTP(S) media (leaves ytdl available for
+/// direct user-initiated streaming sites, while blocking unsafe playlists and
+/// container reference escapes).
+pub const remote_safe_file_options = [_][2][:0]const u8{
+    .{ "load-unsafe-playlists", "no" },
+    .{ "access-references", "no" },
+};
+
 pub fn untrustedContent(origin: Origin) bool {
     return origin == .torrent;
+}
+
+pub fn isNetworkUrl(url: []const u8) bool {
+    return std.ascii.startsWithIgnoreCase(url, "http://") or
+        std.ascii.startsWithIgnoreCase(url, "https://");
+}
+
+/// Allowlist for `/api/load`: only http(s) and magnet URIs are accepted from
+/// remote API callers (blocks file://, local paths, edl://, lavfi://, etc.).
+pub fn isAllowedRemoteLoadUrl(url: []const u8) bool {
+    if (url.len == 0) return false;
+    for (url) |ch| {
+        if (ch < 0x20 or ch == 0x7f) return false;
+    }
+    return isNetworkUrl(url) or std.ascii.startsWithIgnoreCase(url, "magnet:");
 }
 
 /// Begin ordinary local and network playback as soon as the demuxer has a
@@ -284,6 +310,7 @@ pub fn dispatch(sink: anytype, request: Request) bool {
         .audio_file = request.audio_file,
         .media_title = request.media_title,
         .untrusted = untrustedContent(request.origin),
+        .restrict_refs = untrustedContent(request.origin) or isNetworkUrl(request.url),
     });
     return true;
 }
@@ -554,4 +581,27 @@ test "torrent loads are untrusted and lock mpv to the chosen file" {
         for (keys) |k| found = found or std.mem.eql(u8, k, want);
         try std.testing.expect(found);
     }
+}
+
+test "remote network loads restrict unsafe playlists and external references" {
+    try std.testing.expect(isNetworkUrl("https://cdn.example/live.m3u8"));
+    try std.testing.expect(isNetworkUrl("HTTP://cdn.example/video.mp4"));
+    try std.testing.expect(!isNetworkUrl("/Users/u/movie.mkv"));
+    try std.testing.expect(!isNetworkUrl("file:///etc/passwd"));
+    for (remote_safe_file_options) |kv| {
+        try std.testing.expectEqualStrings("no", kv[1]);
+    }
+}
+
+test "isAllowedRemoteLoadUrl allows only http(s) and magnet without control chars" {
+    try std.testing.expect(isAllowedRemoteLoadUrl("https://example.com/video.mp4"));
+    try std.testing.expect(isAllowedRemoteLoadUrl("http://example.com/stream.m3u8"));
+    try std.testing.expect(isAllowedRemoteLoadUrl("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"));
+    try std.testing.expect(!isAllowedRemoteLoadUrl(""));
+    try std.testing.expect(!isAllowedRemoteLoadUrl("/etc/passwd"));
+    try std.testing.expect(!isAllowedRemoteLoadUrl("file:///etc/passwd"));
+    try std.testing.expect(!isAllowedRemoteLoadUrl("edl://%10%/etc/passwd"));
+    try std.testing.expect(!isAllowedRemoteLoadUrl("lavfi://testsrc"));
+    try std.testing.expect(!isAllowedRemoteLoadUrl("ytdl://https://evil.example/x"));
+    try std.testing.expect(!isAllowedRemoteLoadUrl("https://example.com/a\nb"));
 }

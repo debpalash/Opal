@@ -70,7 +70,7 @@ $('acc-user-form').onsubmit = async event => {
 function renderBindWarn(bind, ip, port){
   const w = $('acc-bind-warn');
   if (bind === 'loopback') { w.className = 'hint'; w.textContent = 'Only this machine can reach the server.'; }
-  else { w.className = 'hint acc-warn'; w.textContent = 'Anyone on your network who can sign in can reach Opal' + (ip ? ' at http://' + ip + ':' + port : '') + '.'; }
+  else { w.className = 'hint acc-warn'; w.textContent = 'Anyone on your network who can sign in can reach Opal' + (ip ? ' at http://' + ip + ':' + port : '') + '. The session cookie travels over plain HTTP.'; }
 }
 
 $('acc-pw-save').onclick = async () => {

@@ -62,6 +62,20 @@ fn vlcOpt(line: []const u8, key: []const u8) []const u8 {
     return std.mem.trim(u8, rest[key.len + 1 ..], " \t");
 }
 
+/// Only allow http:// and https:// stream URLs from untrusted M3U playlists.
+/// Rejects file://, local filesystem paths, and mpv pseudo-protocols
+/// (edl://, lavfi://, mf://, av://, ytdl://, etc.).
+pub fn isAllowedStreamUrl(url: []const u8) bool {
+    if (url.len < 8) return false;
+    const is_http = std.ascii.startsWithIgnoreCase(url, "http://");
+    const is_https = std.ascii.startsWithIgnoreCase(url, "https://");
+    if (!is_http and !is_https) return false;
+    for (url) |ch| {
+        if (ch < 0x20 or ch == 0x7f) return false;
+    }
+    return true;
+}
+
 /// Parse an M3U playlist into `out`, keeping entries that pass the same
 /// name/url/NSFW/query/category gates as the directory path (via acceptChannel).
 /// `nsfw_allowed` lifts the adult gate; `query`/`category` are case-insensitive
@@ -127,7 +141,7 @@ pub fn parseM3u(text: []const u8, out: []p.IptvChannel, nsfw_allowed: bool, quer
         c.name_len = @min(pending_name_len, c.name.len);
         @memcpy(c.name[0..c.name_len], pending_name[0..c.name_len]);
         const stream_url = fitUrl(line, c.url.len);
-        if (stream_url.len == 0) continue;
+        if (stream_url.len == 0 or !isAllowedStreamUrl(stream_url)) continue;
         c.url_len = stream_url.len;
         @memcpy(c.url[0..c.url_len], stream_url);
         c.user_agent_len = @min(pending_ua_len, c.user_agent.len);
@@ -197,6 +211,21 @@ test "parseM3u regression: garbage never panics" {
     try std.testing.expectEqual(@as(usize, 0), parseM3u("", &out, false, "", ""));
     try std.testing.expectEqual(@as(usize, 0), parseM3u("#EXTINF:-1,Name\n", &out, false, "", "")); // no url
     _ = parseM3u("#EXTINF\nhttp://a\n#EXTINF:-1,", &out, false, "", "");
+}
+
+test "parseM3u rejects non-http(s) schemes and local paths" {
+    const m3u =
+        "#EXTM3U\n" ++
+        "#EXTINF:-1,Local\n/etc/passwd\n" ++
+        "#EXTINF:-1,File\nfile:///etc/passwd\n" ++
+        "#EXTINF:-1,Edl\nedl://%10%/etc/passwd\n" ++
+        "#EXTINF:-1,Lavfi\nlavfi://testsrc\n" ++
+        "#EXTINF:-1,Ytdl\nytdl://https://evil.example/x\n" ++
+        "#EXTINF:-1,Safe\nhttps://cdn.example/live.m3u8\n";
+    var out: [8]p.IptvChannel = undefined;
+    const n = parseM3u(m3u, &out, false, "", "");
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqualStrings("Safe", out[0].name[0..out[0].name_len]);
 }
 
 fn playlistCountry(explicit: []const u8, group: []const u8) []const u8 {

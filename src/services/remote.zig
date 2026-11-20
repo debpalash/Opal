@@ -602,6 +602,10 @@ fn handleLocalRequest(stream: std.Io.net.Stream) void {
         sendJson(stream, "{\"ok\":true,\"action\":\"open\"}");
         return;
     }
+    if (!access_pure.allows(principal, .administer_host)) {
+        sendForbidden(stream);
+        return;
+    }
     if (consumeExpensiveBudget(presented, principal, "/api/scrape", query)) |wait| {
         sendRateLimit(stream, wait);
         return;
@@ -724,6 +728,8 @@ fn serverLoop() void {
     // this before launching the browser (see isListening()).
     listening.store(true, .release);
     defer listening.store(false, .release);
+    if (access_pure.lanPlainHttpWarning(effectiveBindMode(), httpsProxyMode())) |warn|
+        logs.pushLog("warn", "remote", warn, false);
 
     std.debug.print("[remote] web UI + JSON API on http://{s}:{d}\n", .{ ip, port });
 
@@ -1167,6 +1173,10 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
     // this connection thread, which satisfies scrapeFetch's worker-thread-only
     // contract — never the UI thread.
     if (std.mem.eql(u8, path, "/api/scrape")) {
+        if (!access_pure.allows(principal, .administer_host)) {
+            sendForbidden(stream);
+            return;
+        }
         handleScrape(stream, query);
         return;
     }
@@ -1851,6 +1861,14 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
                 sendJsonUnlockPlayers(stream, "{\"ok\":false,\"error\":\"empty url\"}", &players_locked);
                 return;
             }
+            if (!@import("../player/playback_load_pure.zig").isAllowedRemoteLoadUrl(decoded)) {
+                if (players_locked) {
+                    players_locked = false;
+                    state.players_mutex.unlock();
+                }
+                sendJsonStatus(stream, "400 Bad Request", "{\"ok\":false,\"error\":\"only http(s) and magnet URLs are allowed\"}");
+                return;
+            }
             // A magnet is not a file. This handed every magnet straight to mpv,
             // which treated the whole URI as a path and failed with "File name
             // too long" — so tapping ANY torrent search result in the web UI did
@@ -1934,8 +1952,13 @@ fn handleScrapeBody(stream: std.Io.net.Stream, query: []const u8, post: ?[]const
         return;
     };
     const url = urlDecode(raw, &dec_buf) orelse raw;
-    if (url.len == 0 or !(std.mem.startsWith(u8, url, "http://") or std.mem.startsWith(u8, url, "https://"))) {
+    const bf = @import("browser_fetch_pure.zig");
+    bf.validateTarget(url) catch {
         sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"url must be http(s)\"}");
+        return;
+    };
+    if (bf.isPrivateTarget(url)) {
+        sendJsonStatus(stream, "403 Forbidden", "{\"error\":\"private network targets are not allowed\"}");
         return;
     }
 
