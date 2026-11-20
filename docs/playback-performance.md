@@ -42,6 +42,23 @@ Measured on an M2 (2026-11-20, VideoToolbox copy decode):
 | 4K60 HEVC 10-bit → 1080p | 52.9 fps, 39 drops in 6 s | 60.1 fps, 0 drops |
 | 4K60 HEVC 10-bit → 4K | not available (1080p cap) | 59.6 fps, 3 drops in 8 s |
 
+Real HDR sources (Jellyfin's public test clips, 4K HEVC 10-bit, PQ/BT.2020),
+played at film rate (24 fps) on a loaded M2 Air:
+
+| Source → output | Software path | GPU path |
+|---|---|---|
+| HDR10, 100 Mbit/s → 1080p | 0 drops; 18 ms CPU/frame, spikes to 113 ms | 0 drops |
+| HDR10, 100 Mbit/s → 4K | not available | 0 drops |
+| Dolby Vision P8.1 → 1080p | 0 drops; 24 ms CPU/frame, spikes to 98 ms | 0 drops |
+| Dolby Vision P8.1 → 4K | not available | 0 drops |
+
+The software path's spikes exceed the 41.7 ms frame budget, so it stutters as
+soon as the CPU is busy; the GPU path leaves the CPU idle. At 60 fps, 4K HDR
+output is at the M2 Air's GPU limit (45–55 fps under load); 1080p output holds
+60 fps. VideoToolbox zero-copy needs a GL 3.2 core context, which SDL's
+OpenGL renderer cannot share, so decoding uses `videotoolbox-copy`; on a GL
+core context mpv also enables heavier HDR processing and measured no faster.
+
 Windows keeps the software path by default because switching would move the
 whole UI from Direct3D to OpenGL; `OPAL_VIDEO_RENDER=gpu` opts in and
 `OPAL_VIDEO_RENDER=sw` forces software anywhere. Any failure (non-OpenGL
