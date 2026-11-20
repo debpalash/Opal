@@ -2680,6 +2680,16 @@ fn addMagnetToEngine(magnet_link: []const u8) void {
         _ = deferTorrentOpen(.magnet, magnet_link);
         return;
     }
+    // Every magnet from every source lands here: refuse one whose own
+    // display name is an executable/archive before libtorrent fetches a byte.
+    const risk = @import("torrent_risk_pure.zig").assessMagnet(magnet_link);
+    if (risk.risk == .block) {
+        var tb: [160]u8 = undefined;
+        const msg = std.fmt.bufPrint(&tb, "Blocked scam torrent: {s}", .{risk.reason}) catch "Blocked scam torrent";
+        state.showToastTyped(msg, .err);
+        @import("../core/logs.zig").pushLog("warn", "search", msg, false);
+        return;
+    }
     const playermod = @import("../player/player.zig");
 
     // A cold-start magnet can live in the pending FIFO without a player;
