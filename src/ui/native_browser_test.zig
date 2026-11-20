@@ -93,6 +93,23 @@ fn pageScript(script: [*:0]const u8, out: []u8) ![]const u8 {
     }
     return error.Timeout;
 }
+/// Read the entry once the posted key has reached WebKit's content process.
+/// Keys travel over a separate IPC channel from the eval, so a single read can
+/// land before the keystroke (flaky "aa" vs "a" on CI). Wait for `expected`,
+/// then keep reading to prove no duplicate arrives — the regression this guards.
+fn settledEntry(expected: []const u8, out: []u8) ![]const u8 {
+    var value: []const u8 = "";
+    for (0..50) |_| {
+        value = try pageScript("document.querySelector('#entry').value", out);
+        if (std.mem.eql(u8, value, expected)) break;
+    }
+    for (0..5) |_| {
+        native.api.opal_browser_test_pump();
+        value = try pageScript("document.querySelector('#entry').value", out);
+        if (!std.mem.eql(u8, value, expected)) break;
+    }
+    return value;
+}
 fn frame(window: *dvui.Window, index: usize, show: bool) !void {
     try prepareProfile();
     try window.begin(@as(i128, @intCast(index + 1)) * 16_666_667);
@@ -128,11 +145,11 @@ test "Native embedded browser keyboard types each character once and returns foc
     try frame(&window, 9, true);
     c.SDL_FlushEvents(c.SDL_KEYDOWN, c.SDL_TEXTINPUT);
     opal_browser_test_key("a", 0, 0, 0);
-    try std.testing.expectEqualStrings("a", try pageScript("document.querySelector('#entry').value", &out));
+    try std.testing.expectEqualStrings("a", try settledEntry("a", &out));
     try std.testing.expect(c.SDL_IsTextInputActive() == 0);
     try std.testing.expect(c.SDL_HasEvent(c.SDL_KEYDOWN) == 0);
     opal_browser_test_key("a", 0, 0, 1);
-    try std.testing.expectEqualStrings("aa", try pageScript("document.querySelector('#entry').value", &out));
+    try std.testing.expectEqualStrings("aa", try settledEntry("aa", &out));
     opal_browser_test_key("l", 37, 1, 0);
     native.api.opal_browser_test_pump();
     try frame(&window, 10, true);
