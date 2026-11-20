@@ -1242,6 +1242,56 @@ fn renderCard(i: usize, card_w: f32) void {
     }
 }
 
+/// Offline pixel fixture for the catalog ("All") view. Seeds the sliding window
+/// as a fully-loaded catalog of N rows (win_base 0, result_count ==
+/// total_matches == N) so ensureWindow never re-queries the catalog DB; logos
+/// are pre-pinned in channel_posters (no poster fetch), favourites come from an
+/// in-memory set (no DB load) and stream health is seeded (no probe). The
+/// popular load and live search are latched so nothing overwrites the rows.
+/// Empty `textures` resets.
+pub fn setNativeFixtureForTest(textures: []const dvui.Texture) void {
+    if (!@import("builtin").is_test) @compileError("Native fixture is test-only");
+    const s = &state.app.iptv;
+    const fixtureField = @import("../core/text.zig").setFixedBuf;
+    for (channel_posters[0..s.result_count]) |*slot| {
+        poster.deinitPoster(&slot.pixels, &slot.tex);
+        slot.* = .{};
+    }
+    link_health.clear(IPTV_KIND);
+    fav_set.clearRetainingCapacity();
+    const n = @min(textures.len, s.results.len);
+    s.result_count = n;
+    win_base = 0;
+    total_matches = n;
+    working_only = false;
+    s.quick_filter = 0;
+    s.fetch_error = false;
+    s.showing_popular = n > 0;
+    s.is_loading.store(false, .release);
+    popular_fetched.store(n > 0, .release);
+    fav_dirty = n == 0;
+    const q = std.mem.sliceTo(&s.search_buf, 0);
+    last_search_len = @min(q.len, last_search_buf.len);
+    @memcpy(last_search_buf[0..last_search_len], q[0..last_search_len]);
+    const names = [_][]const u8{ "A long channel name — International News and Current Affairs HD", "世界のニュース — World News Channel Around the Clock" };
+    const statuses = [_]link_health.Status{ .live, .slow, .dead, .unknown };
+    for (textures[0..n], 0..) |art, i| {
+        var ch = pure.IptvChannel{};
+        var buf: [96]u8 = undefined;
+        fixtureField(&ch.name, &ch.name_len, names[i % names.len]);
+        fixtureField(&ch.url, &ch.url_len, std.fmt.bufPrint(&buf, "https://example.invalid/live-{d}.m3u8", .{i}) catch "");
+        fixtureField(&ch.logo, &ch.logo_len, std.fmt.bufPrint(&buf, "https://example.invalid/live-logo-{d}.png", .{i}) catch "");
+        fixtureField(&ch.quality, &ch.quality_len, if (i % 2 == 0) "1080p" else "720p");
+        fixtureField(&ch.category, &ch.category_len, "News");
+        fixtureField(&ch.country, &ch.country_len, "JP");
+        s.results[i] = ch;
+        channel_posters[i] = .{ .tex = art, .w = art.width, .h = art.height, .attempted = true, .url_hash = std.hash.Fnv1a_64.hash(ch.logo[0..ch.logo_len]) };
+        const url = ch.url[0..ch.url_len];
+        link_health.seedForTest(IPTV_KIND, url, statuses[i % statuses.len]);
+        if (i % 3 == 1) fav_set.put(map_alloc, iptv_store.urlHash(url), {}) catch {};
+    }
+}
+
 fn renderResults() void {
     // Fav/Recent are bounded DB snapshots (result_count IS the whole list); the
     // catalog "All" view is unbounded (total_matches spans the whole directory,

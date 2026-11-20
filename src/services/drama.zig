@@ -716,6 +716,41 @@ pub fn setLoadingFixtureForTest(enabled: bool) void {
     state.app.drama.loaded_once = true;
 }
 
+/// Offline pixel fixture: one on-air-feed row per texture through the real
+/// grid, posters pre-uploaded (no fetch), the SWR stamp pinned fresh and paging
+/// off so no catalog load or applyPending overwrites the rows. Empty `textures`
+/// resets to the never-loaded state.
+pub fn setNativeFixtureForTest(textures: []const dvui.Texture) void {
+    if (!@import("builtin").is_test) @compileError("Native fixture is test-only");
+    const d = &state.app.drama;
+    pending_mutex.lock();
+    defer pending_mutex.unlock();
+    for (d.results[0..d.result_count]) |*r| poster.deinitPoster(&r.poster_pixels, &r.poster_tex);
+    pending_ready = false;
+    const n = @min(textures.len, d.results.len);
+    d.result_count = n;
+    d.selected_idx = null;
+    d.loaded_once = n > 0;
+    d.last_fetch_s = if (n > 0) 9_999_999_999 else 0;
+    d.is_loading.store(false, .release);
+    catalog_failed.store(false, .release);
+    loading_more.store(false, .release);
+    more_available.store(n == 0, .release);
+    rows_are_search.store(false, .release);
+    rows_source.store(@intFromEnum(Source.tvmaze), .release);
+    const names = [_][]const u8{ "A long drama title — The Extraordinary Romance Beyond the Palace Walls", "사랑의 불시착 — Crash Landing on You" };
+    const put = @import("../core/text.zig").setFixedBuf;
+    for (textures[0..n], 0..) |art, i| {
+        var r = state.DramaResult{ .vote = 8.4, .origin = @intCast(i % 4), .poster_attempted = true, .poster_tex = art, .poster_w = art.width, .poster_h = art.height };
+        var buf: [16]u8 = undefined;
+        put(&r.id, &r.id_len, std.fmt.bufPrint(&buf, "{d}", .{i + 1}) catch "1");
+        put(&r.name, &r.name_len, names[i % names.len]);
+        put(&r.poster_path, &r.poster_path_len, "/offline-fixture.jpg");
+        put(&r.year, &r.year_len, "2025");
+        d.results[i] = r;
+    }
+}
+
 /// Search box for the keyless TVmaze title search (Enter or the Search button).
 /// Returns true when it started a search or went back to the landing grid.
 var ui_search_buf: [96]u8 = std.mem.zeroes([96]u8);

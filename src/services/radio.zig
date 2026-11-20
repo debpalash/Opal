@@ -44,6 +44,45 @@ pub fn setLoadingFixtureForTest(enabled: bool) void {
     state.app.radio.is_loading.store(enabled, .release);
 }
 
+/// Offline pixel fixture: one station per texture through the real grid, logos
+/// pre-pinned in their station_posters slots (no poster fetch), stream health
+/// seeded live/slow/dead/unknown (no probe), and the popular load + paging
+/// latched off so nothing overwrites the rows. Empty `textures` resets.
+pub fn setNativeFixtureForTest(textures: []const dvui.Texture) void {
+    if (!@import("builtin").is_test) @compileError("Native fixture is test-only");
+    const r = &state.app.radio;
+    for (station_posters[0..r.result_count]) |*slot| {
+        poster.deinitPoster(&slot.pixels, &slot.tex);
+        slot.* = .{};
+    }
+    link_health.clear(RADIO_KIND);
+    loading_fixture_for_test = false;
+    r.result_count = @min(textures.len, r.results.len);
+    r.fetch_error = false;
+    r.showing_popular = r.result_count > 0;
+    r.is_loading.store(false, .release);
+    loading_more.store(false, .release);
+    sources_changed.store(false, .release);
+    popular_fetched.store(r.result_count > 0, .release);
+    more_available = r.result_count == 0;
+    const names = [_][]const u8{ "A long station name — Classic Jazz and Late Night Lounge Sessions", "世界の音楽 — World Music Radio Around the Clock" };
+    const statuses = [_]link_health.Status{ .live, .slow, .dead, .unknown };
+    for (textures[0..r.result_count], 0..) |art, i| {
+        var s = pure.Station{ .bitrate = 128 + 64 * @as(u32, @intCast(i % 3)) };
+        var buf: [96]u8 = undefined;
+        copyField(&s.name, &s.name_len, names[i % names.len]);
+        copyField(&s.stationuuid, &s.stationuuid_len, std.fmt.bufPrint(&buf, "fixture-{d}", .{i}) catch "fixture");
+        copyField(&s.url_resolved, &s.url_resolved_len, std.fmt.bufPrint(&buf, "https://example.invalid/radio-{d}.mp3", .{i}) catch "");
+        copyField(&s.url, &s.url_len, s.url_resolved[0..s.url_resolved_len]);
+        copyField(&s.favicon, &s.favicon_len, std.fmt.bufPrint(&buf, "https://example.invalid/radio-logo-{d}.png", .{i}) catch "");
+        copyField(&s.codec, &s.codec_len, if (i % 2 == 0) "MP3" else "AAC");
+        copyField(&s.country, &s.country_len, "Japan");
+        r.results[i] = s;
+        station_posters[i] = .{ .tex = art, .w = art.width, .h = art.height, .attempted = true, .url_hash = std.hash.Fnv1a_64.hash(s.favicon[0..s.favicon_len]) };
+        link_health.seedForTest(RADIO_KIND, s.url_resolved[0..s.url_resolved_len], statuses[i % statuses.len]);
+    }
+}
+
 const alloc = @import("../core/alloc.zig").allocator;
 
 const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0";

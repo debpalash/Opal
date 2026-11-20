@@ -157,6 +157,21 @@ pub fn probe(kind: []const u8, url: []const u8) void {
     }
 }
 
+/// Offline fixture: pin `url`'s status under `kind` without a probe or the DB.
+/// The URL is marked attempted so render never spawns a probe for it, and the
+/// map is marked clean so a DB reload can't wipe the seeded entry. `.unknown`
+/// seeds no entry (no dot). Undo with `clear(kind)`.
+pub fn seedForTest(kind: []const u8, url: []const u8, status: Status) void {
+    if (!@import("builtin").is_test) @compileError("Native fixture is test-only");
+    mtx.lock();
+    defer mtx.unlock();
+    const k = slotLocked(kind) orelse return;
+    k.dirty = false;
+    const h = urlHash(url);
+    k.probe_attempted.put(map_alloc, h, {}) catch {};
+    if (status != .unknown) k.health_map.put(map_alloc, h, .{ .status = status, .checked_at = @import("../core/io_global.zig").timestamp() }) catch {};
+}
+
 /// Drop `kind`'s in-memory maps and force a reload — the IPTV "Test" button
 /// pairs this with `clearKind` for a full fresh sweep.
 pub fn clear(kind: []const u8) void {
