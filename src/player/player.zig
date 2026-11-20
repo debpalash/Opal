@@ -92,14 +92,14 @@ const MpvPlaybackSink = struct {
         // through mpv_command_node. This avoids comma/string escaping and,
         // crucially, stores HTTP identity on the playlist entry instead of
         // changing the options of media that is already playing.
-        var option_values: [8]c.mpv.mpv_node = undefined;
+        var option_values: [8 + playback_load.untrusted_file_options.len]c.mpv.mpv_node = undefined;
         option_values[0..4].* = .{
             stringNode(user_agent_z.ptr),
             stringNode(header_fields_z.ptr),
             stringNode(options.cache_pause_initial.ptr),
             stringNode(options.network_timeout.ptr),
         };
-        var option_keys: [8][*c]u8 = undefined;
+        var option_keys: [8 + playback_load.untrusted_file_options.len][*c]u8 = undefined;
         option_keys[0..4].* = .{
             @constCast("user-agent"),
             @constCast("http-header-fields"),
@@ -125,6 +125,11 @@ const MpvPlaybackSink = struct {
             option_keys[option_count] = @constCast("ytdl-format");
             option_count += 1;
         }
+        if (options.untrusted) for (playback_load.untrusted_file_options) |kv| {
+            option_values[option_count] = stringNode(kv[1].ptr);
+            option_keys[option_count] = @constCast(kv[0].ptr);
+            option_count += 1;
+        };
         var option_list: c.mpv.mpv_node_list = .{
             .num = @intCast(option_count),
             .values = @ptrCast(&option_values),
@@ -3579,6 +3584,7 @@ pub fn updateTorrentBackgroundTasks() void {
                         var episode_idx: i32 = -1;
                         var playable_count: usize = 0;
                         var risky_count: i32 = 0;
+                        var exec_count: i32 = 0;
                         const requested_idx = p.requested_file_idx;
                         p.requested_file_idx = -1; // one torrent only
                         var requested_playable = false;
@@ -3589,6 +3595,7 @@ pub fn updateTorrentBackgroundTasks() void {
                             c.mpv.torrent_get_file_name(state.torrentSession(), p.current_torrent_id, i, &fname, 512);
                             const name = std.mem.sliceTo(&fname, 0);
                             if (media_ext.isExecutableOrArchive(name)) risky_count += 1;
+                            if (media_ext.isExecutable(name) or media_ext.hasBidiControl(name)) exec_count += 1;
                             if (!media_ext.isPlayable(name)) continue; // skip non-media
                             playable_count += 1;
                             if (i == requested_idx) requested_playable = true;
@@ -3602,6 +3609,19 @@ pub fn updateTorrentBackgroundTasks() void {
                                 max_sz = sz;
                                 max_idx = i;
                             }
+                        }
+
+                        // An executable anywhere in the torrent rejects all of
+                        // it (Sonarr/Radarr do the same at grab time): fake
+                        // episodes ship a decoy video beside the payload.
+                        if (exec_count > 0) {
+                            var lb: [128]u8 = undefined;
+                            const msg = std.fmt.bufPrint(&lb, "Blocked: this torrent contains {d} executable file(s), possible malware. Nothing was opened.", .{exec_count}) catch "Blocked: this torrent contains executable files";
+                            logs.pushLog("error", "opal", msg, true);
+                            state.showToastTyped(msg, .err);
+                            p.selected_file_idx = -2;
+                            p.is_loading = false;
+                            continue;
                         }
 
                         // A season pack's episode is the file the source named
@@ -3646,6 +3666,23 @@ pub fn updateTorrentBackgroundTasks() void {
                     // to start; leave the pane idle instead of polling a bogus
                     // index.
                     if (p.selected_file_idx < 0) break;
+
+                    // ── MALWARE GATE ── whatever chose this file (auto-pick,
+                    // file pickers, Downloads play, session restore), mpv only
+                    // ever opens playable media. A fake "S01E03 … .exe" was
+                    // streamed because only the auto-pick checked (2026-11-20).
+                    {
+                        var g_name: [512]u8 = undefined;
+                        c.mpv.torrent_get_file_name(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, &g_name, g_name.len);
+                        if (@import("../core/media_ext.zig").torrentFileRefusal(std.mem.sliceTo(&g_name, 0))) |why| {
+                            c.mpv.torrent_set_file_priority(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, 0);
+                            logs.pushLog("error", "opal", why, true);
+                            state.showToastTyped(why, .err);
+                            p.selected_file_idx = -2; // terminal: won't re-enter (-1 gate)
+                            p.is_loading = false;
+                            break;
+                        }
+                    }
 
                     // ── READINESS GATE ──
                     //

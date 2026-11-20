@@ -191,7 +191,24 @@ pub const FileOptions = struct {
     network_timeout: [:0]const u8,
     audio_file: []const u8,
     media_title: []const u8,
+    /// Torrent content is untrusted: mpv must not follow references,
+    /// playlists or ytdl hooks found inside it (see untrustedFileOptions).
+    untrusted: bool = false,
 };
+
+/// Per-file mpv options for untrusted (torrent) content. A fake release can
+/// ship a playlist/EDL/reference file or a URL mpv would hand to yt-dlp;
+/// these keep mpv to demuxing the one file Opal chose. `access-references`
+/// covers playlists, ordered chapters, mov references and archive opening.
+pub const untrusted_file_options = [_][2][:0]const u8{
+    .{ "ytdl", "no" },
+    .{ "load-unsafe-playlists", "no" },
+    .{ "access-references", "no" },
+};
+
+pub fn untrustedContent(origin: Origin) bool {
+    return origin == .torrent;
+}
 
 /// Begin ordinary local and network playback as soon as the demuxer has a
 /// frame. The initial cache gate remains only for Opal's torrent proxy: that
@@ -266,6 +283,7 @@ pub fn dispatch(sink: anytype, request: Request) bool {
         .network_timeout = networkTimeout(request.loopback_stream),
         .audio_file = request.audio_file,
         .media_title = request.media_title,
+        .untrusted = untrustedContent(request.origin),
     });
     return true;
 }
@@ -521,4 +539,19 @@ test "music audio selection stays per entry and does not leak into the next vide
     try std.testing.expect(sink.events[sink.len - 1].audio_only);
     try std.testing.expect(dispatch(&sink, .{ .url = "https://example.test/video" }));
     try std.testing.expect(!sink.events[sink.len - 1].audio_only);
+}
+
+test "torrent loads are untrusted and lock mpv to the chosen file" {
+    try std.testing.expect(untrustedContent(.torrent));
+    try std.testing.expect(!untrustedContent(.direct));
+    var keys: [untrusted_file_options.len][]const u8 = undefined;
+    for (untrusted_file_options, 0..) |kv, i| {
+        keys[i] = kv[0];
+        try std.testing.expectEqualStrings("no", kv[1]);
+    }
+    for ([_][]const u8{ "ytdl", "load-unsafe-playlists", "access-references" }) |want| {
+        var found = false;
+        for (keys) |k| found = found or std.mem.eql(u8, k, want);
+        try std.testing.expect(found);
+    }
 }

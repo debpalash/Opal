@@ -21,11 +21,12 @@ pub const Assessment = struct {
 const exec_exts = [_][]const u8{
     "exe", "scr", "msi", "bat", "cmd", "pif", "vbs", "vbe",
     "js",  "jse", "wsf", "hta", "lnk", "jar", "ps1", "apk",
+    "cpl", "scf", "msp", "command",
 };
 
 /// Archives can't be streamed and are the classic "password-protected movie"
 /// bait when they headline a listing name.
-const archive_exts = [_][]const u8{ "rar", "zip", "7z", "ace", "arj", "cab" };
+const archive_exts = [_][]const u8{ "rar", "zip", "zipx", "7z", "ace", "arj", "lzh", "cab" };
 
 /// Markers that the name claims to be a video release (quality/codec/source).
 const video_markers = [_][]const u8{
@@ -48,7 +49,7 @@ fn trailingExt(lower: []const u8) []const u8 {
     const trimmed = std.mem.trimEnd(u8, lower, " \t\"')]}");
     const dot = std.mem.lastIndexOfScalar(u8, trimmed, '.') orelse return "";
     const ext = trimmed[dot + 1 ..];
-    if (ext.len == 0 or ext.len > 4) return "";
+    if (ext.len == 0 or ext.len > 7) return "";
     for (ext) |ch| if (!std.ascii.isAlphanumeric(ch)) return "";
     return ext;
 }
@@ -63,8 +64,67 @@ fn claimsVideo(lower: []const u8) bool {
     return false;
 }
 
+/// Worst assessment over every line of a multi-line listing. Stremio addon
+/// rows put the release on line 1 and the episode FILE on a later line
+/// (Torrentio: "Show S01E03 1080p WEB\nShow.S01E03.MeGusta.exe\n<seeds>"), so
+/// a single trailing-extension check on the whole text never saw the `.exe`.
+pub fn assessText(text: []const u8, size_bytes: f64) Assessment {
+    var worst: Assessment = .{};
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        const a = assess(std.mem.trim(u8, line, " \t\r"), size_bytes);
+        if (@intFromEnum(a.risk) > @intFromEnum(worst.risk)) worst = a;
+        if (worst.risk == .block) break;
+    }
+    return worst;
+}
+
+/// Assess a magnet by its `dn=` display name (percent-decoded, `+` as space).
+/// A magnet without `dn=` names nothing and passes; the player's file gate
+/// (media_ext.torrentFileRefusal) still checks the real file once metadata
+/// arrives.
+pub fn assessMagnet(url: []const u8) Assessment {
+    if (url.len < 8 or !std.ascii.eqlIgnoreCase(url[0..8], "magnet:?")) return .{};
+    var params = std.mem.tokenizeScalar(u8, url[8..], '&');
+    while (params.next()) |param| {
+        if (param.len < 3 or !std.ascii.eqlIgnoreCase(param[0..3], "dn=")) continue;
+        var buf: [512]u8 = undefined;
+        var n: usize = 0;
+        var i: usize = 3;
+        while (i < param.len and n < buf.len) : (n += 1) {
+            if (param[i] == '%' and i + 2 < param.len) {
+                if (std.fmt.parseInt(u8, param[i + 1 .. i + 3], 16)) |b| {
+                    buf[n] = b;
+                    i += 3;
+                    continue;
+                } else |_| {}
+            }
+            buf[n] = if (param[i] == '+') ' ' else param[i];
+            i += 1;
+        }
+        return assess(buf[0..n], 0);
+    }
+    return .{};
+}
+
+/// U+202A-202E and U+2066-2069 (see media_ext.hasBidiControl; duplicated
+/// because this test module cannot import across src/core).
+fn hasBidiControl(name: []const u8) bool {
+    var i: usize = 0;
+    while (i + 2 < name.len) : (i += 1) {
+        if (name[i] != 0xE2) continue;
+        if (name[i + 1] == 0x80 and name[i + 2] >= 0xAA and name[i + 2] <= 0xAE) return true;
+        if (name[i + 1] == 0x81 and name[i + 2] >= 0xA6 and name[i + 2] <= 0xA9) return true;
+    }
+    return false;
+}
+
 /// `size_bytes` <= 0 means unknown (universal results don't carry it).
 pub fn assess(name: []const u8, size_bytes: f64) Assessment {
+    // U+202E RIGHT-TO-LEFT OVERRIDE renders "Movie\u{202E}vkm.exe" as
+    // "Movie exe.mkv": a filename spoof with no place in a release name.
+    if (hasBidiControl(name))
+        return .{ .risk = .block, .reason = "bidi control characters hide the real file extension" };
     var lb: [512]u8 = undefined;
     const lower = lowered(name, &lb);
     const ext = trailingExt(lower);
@@ -171,4 +231,32 @@ test "empty and degenerate names pass" {
     try std.testing.expectEqual(Risk.ok, assess("", 0).risk);
     try std.testing.expectEqual(Risk.ok, assess(".", 0).risk);
     try std.testing.expectEqual(Risk.ok, assess("no extension here", 0).risk);
+}
+
+test "fake episode with the .exe only on the file line blocks (12 12 12 S01E03 MeGusta.exe)" {
+    // The listing reported on 2026-11-20: Torrentio-style row whose release
+    // line looks clean and whose file line is the executable.
+    const row = "12 12 12 S01E03 Einfach Obergeil 1080p WEB H264-MeGusta\n12 12 12 S01E03 Einfach Obergeil 1080p WEB H264-MeGusta.exe\n\u{1F464} 1 \u{1F4BE} 1.2 GB";
+    try std.testing.expectEqual(Risk.ok, assess(row, 0).risk);
+    try std.testing.expectEqual(Risk.block, assessText(row, 0).risk);
+    try std.testing.expectEqual(Risk.block, assess("12 12 12 S01E03 Einfach Obergeil 1080p WEB H264-MeGusta.exe", 0).risk);
+    try std.testing.expectEqual(Risk.ok, assessText("Show S01E03 1080p WEB\nShow.S01E03.1080p.WEB.mkv\n\u{1F464} 368", 0).risk);
+}
+
+test "magnet dn= is decoded and assessed" {
+    try std.testing.expectEqual(Risk.block, assessMagnet("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Show+S01E03+1080p+WEB+H264-MeGusta.exe&tr=udp%3A%2F%2Fx").risk);
+    try std.testing.expectEqual(Risk.block, assessMagnet("magnet:?dn=Movie%202026%201080p.SCR&xt=urn:btih:00").risk);
+    try std.testing.expectEqual(Risk.ok, assessMagnet("magnet:?xt=urn:btih:00&dn=Show.S01E03.1080p.WEB.mkv").risk);
+    try std.testing.expectEqual(Risk.ok, assessMagnet("magnet:?xt=urn:btih:00").risk);
+    try std.testing.expectEqual(Risk.ok, assessMagnet("https://example.org/a.exe").risk);
+}
+
+test "right-to-left override spoof blocks" {
+    try std.testing.expectEqual(Risk.block, assess("Movie 2026 1080p \u{202E}vkm.exe", 0).risk);
+}
+
+test "Nov 2024 Lumma fake-episode carriers block (zipx archive, scr payload)" {
+    try std.testing.expectEqual(Risk.block, assess("Show S02E05 1080p WEB H264-GROUP.zipx", 0).risk);
+    try std.testing.expectEqual(Risk.block, assess("Show S02E05 1080p WEB.scr", 0).risk);
+    try std.testing.expectEqual(Risk.block, assess("Show S02E05 1080p \u{2066}vkm.exe", 0).risk);
 }

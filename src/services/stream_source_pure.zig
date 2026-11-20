@@ -173,6 +173,17 @@ fn header(s: *Source, name: []const u8, value: []const u8) bool {
     s.header_fields_len += result.len;
     return true;
 }
+fn rowIsMalware(value: std.json.Value, description: []const u8) bool {
+    const risk = @import("torrent_risk_pure.zig");
+    if (risk.assessText(string(value, "title"), 0).risk == .block) return true;
+    if (risk.assessText(description, 0).risk == .block) return true;
+    if (risk.assessText(string(value, "name"), 0).risk == .block) return true;
+    if (value.object.get("behaviorHints")) |hints| {
+        if (risk.assessText(string(hints, "filename"), 0).risk == .block) return true;
+    }
+    return false;
+}
+
 pub fn fromValue(value: std.json.Value) ?Source {
     if (value != .object) return null;
     var s: Source = .{};
@@ -201,6 +212,9 @@ pub fn fromValue(value: std.json.Value) ?Source {
     // `name` is the addon + quality badge ("Peerflix 4K") and can never match
     // the searched title, so it is the last resort.
     const description = string(value, "description");
+    // Fake releases hide the executable on a later line or in the filename
+    // hint, so every text the addon sends is checked, line by line.
+    if (rowIsMalware(value, description)) return null;
     const row_text = if (string(value, "title").len > 0) string(value, "title") else description;
     var title = firstLine(string(value, "title"));
     if (title.len == 0) title = markedLine(description, "\xF0\x9F\x93\x84");
@@ -376,4 +390,19 @@ test "pinnedTorrentFile: episode filename, then a playable requested file, else 
     try std.testing.expectEqual(@as(i32, -1), pinnedTorrentFile(-1, 4, false)); // .exe / out of range
     try std.testing.expectEqual(@as(i32, 2), pinnedTorrentFile(2, 4, true));
     try std.testing.expectEqual(@as(i32, -1), pinnedTorrentFile(-1, -1, false));
+}
+
+test "addon rows naming an executable are dropped, wherever the name appears" {
+    const json =
+        \\{"streams":[
+        \\ {"infoHash":"0123456789012345678901234567890123456789","title":"12 12 12 S01E03 Einfach Obergeil 1080p WEB H264-MeGusta\n12 12 12 S01E03 Einfach Obergeil 1080p WEB H264-MeGusta.exe\n\ud83d\udc64 1"},
+        \\ {"infoHash":"1123456789012345678901234567890123456789","description":"\ud83d\udcc4 Show.S01E03.1080p.WEB.scr"},
+        \\ {"infoHash":"2123456789012345678901234567890123456789","title":"Show S01E03 1080p","behaviorHints":{"filename":"Show.S01E03.mp4.exe"}},
+        \\ {"infoHash":"3123456789012345678901234567890123456789","title":"Show S01E03 1080p WEB\nShow.S01E03.1080p.WEB.mkv"}
+        \\]}
+    ;
+    var out: [8]Source = undefined;
+    const n = parseStreams(std.testing.allocator, json, &out).?;
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expect(std.mem.indexOf(u8, out[0].url[0..out[0].url_len], "3123456789") != null);
 }

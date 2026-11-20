@@ -1008,6 +1008,40 @@ def test_scam_torrent_flagging():
     return "pass", "pure heuristics routed; shared Search badge and native/remote play/queue guards"
 
 
+@test("Fake-release torrents never reach mpv from any source", "Security")
+def test_torrent_malware_gate():
+    # 2026-11-20: a fake "S01E03 ... MeGusta" episode streamed its .exe because
+    # only the auto-pick checked file types; add-on rows, magnets, manual file
+    # pickers and session restore went straight to mpv.
+    player = _src("src/player/player.zig")
+    media = _src("src/core/media_ext.zig")
+    risk = _src("src/services/torrent_risk_pure.zig")
+    rows = _src("src/services/stream_source_pure.zig")
+    search = _src("src/services/search.zig")
+    load = _src("src/player/playback_load_pure.zig")
+    gate = section_of(player, "// \u2500\u2500 MALWARE GATE", "// \u2500\u2500 READINESS GATE")
+    checks = {
+        "file gate before readiness gate": "media_ext.zig\").torrentFileRefusal(" in gate and "selected_file_idx = -2" in gate,
+        "whole torrent rejected on executables": "media_ext.isExecutable(name)" in player and "this torrent contains {d} executable file(s)" in player,
+        "bidi spoofs": "pub fn hasBidiControl" in media and "fn hasBidiControl" in risk,
+        "multi-line listings": "pub fn assessText" in risk,
+        "magnet dn checked for every source": "assessMagnet(magnet_link)" in section_of(search, "fn addMagnetToEngine(", "\n}\n"),
+        "addon rows filtered": "if (rowIsMalware(value, description)) return null;" in rows and '"filename"' in section_of(rows, "fn rowIsMalware(", "\n}\n"),
+        "untrusted mpv options": all(k in load for k in ('"ytdl"', '"load-unsafe-playlists"', '"access-references"')) and ".untrusted = untrustedContent(request.origin)" in load,
+        "mpv sink applies them": "if (options.untrusted) for (playback_load.untrusted_file_options)" in player,
+        "regression named for the report": "MeGusta.exe" in risk and "MeGusta.exe" in media and "MeGusta.exe" in rows,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "file gate at the mpv hop, whole-torrent executable rejection, magnet/addon-row/bidi checks, untrusted mpv options"
+
+
+def section_of(source, begin, end):
+    start = source.index(begin)
+    return source[start:source.index(end, start + len(begin))]
+
+
 @test("VirusTotal hash lookup", "Security")
 def test_virustotal_lookup():
     vtp = _src("src/services/virustotal_pure.zig")
