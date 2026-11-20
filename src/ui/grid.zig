@@ -567,13 +567,7 @@ pub fn renderGrid() !void {
         // Deletion clears the logical media immediately; dispose the old GPU
         // frame on the UI thread before deciding which player view to render.
         if (p.provider == .mpv and p.current_torrent_id < 0 and p.current_url_len == 0 and !p.is_loading) {
-            if (p.texture) |tex| {
-                dvui.textureDestroyLater(tex);
-                p.texture = null;
-                p.frame_mutex.lock();
-                p.frame_ready = false;
-                p.frame_mutex.unlock();
-            }
+            if (p.texture != null) p.dropShownFrame();
         }
 
         if (draw_col % grid_columns == 0) {
@@ -637,11 +631,14 @@ pub fn renderGrid() !void {
                     // while the window is being resized.
                     const playback = p.playbackSnapshot();
                     const viewport_px = cell_wrapper.data().contentRectScale().r;
+                    // The GPU path scales on the GPU, so it renders up to 4K
+                    // instead of the software path's reusable 1080p buffer.
+                    const gpu_path = p.gpu != null;
                     const render_size = framing.renderSizeForViewport(
                         playback.video_width,
                         playback.video_height,
-                        player.video_w,
-                        player.video_h,
+                        if (gpu_path) player.gpu_video_max_w else player.video_w,
+                        if (gpu_path) player.gpu_video_max_h else player.video_h,
                         state.app.video_aspect_buf[0..state.app.video_aspect_len],
                         .{ .width = viewport_px.w, .height = viewport_px.h },
                         frame_mode,
@@ -654,7 +651,11 @@ pub fn renderGrid() !void {
                         player.perf.ui_frames += 1;
                         player.perfReport(p);
                     }
-                    if (uploadFrame(p)) {
+                    const new_frame = if (gpu_path)
+                        p.presentGpuFrame(render_size.width, render_size.height)
+                    else
+                        uploadFrame(p);
+                    if (new_frame) {
                         // First frame rendered — clear loading state
                         p.is_loading = false;
                         // Try to resume from saved position on first frame

@@ -8,6 +8,7 @@ const playback_load = @import("playback_load_pure.zig");
 const playback_fallback = @import("playback_fallback_pure.zig");
 const playback_snapshot = @import("playback_snapshot_pure.zig");
 const frame_buffer_pool = @import("frame_buffer_pool.zig");
+const gpu_video = @import("gpu_video.zig");
 pub const HttpHeader = http_headers.HttpHeader;
 pub const LoadMode = playback_load.Mode;
 pub const PlaybackOrigin = playback_load.Origin;
@@ -206,6 +207,9 @@ pub fn loadDetached(ctx: *c.mpv.mpv_handle, request: LoadRequest) bool {
 
 pub const video_w = 1920;
 pub const video_h = 1080;
+/// Largest render target on the GPU path (gpu_video.zig): full 4K output.
+pub const gpu_video_max_w = 3840;
+pub const gpu_video_max_h = 2160;
 
 const PositionSnapshot = struct {
     identity: [MAX_LOAD_URL]u8 = undefined,
@@ -385,6 +389,9 @@ pub const MediaPlayer = struct {
     // renders into `back_pixels` and swaps it with `pixels` under
     // `frame_mutex`; the UI thread only uploads the front buffer.
     back_pixels: []dvui.Color.PMA,
+    /// GPU video path (gpu_video.zig): non-null when this player renders
+    /// through libmpv's OpenGL API into SDL textures instead of `pixels`.
+    gpu: ?*gpu_video.Target,
     render_thread: ?std.Thread,
     render_stop: std.atomic.Value(bool),
     /// Set by mpv's update callback (any thread) to wake the worker.
@@ -842,6 +849,7 @@ pub const MediaPlayer = struct {
         self.allow_source_fallback = true;
         self.lifetime_id = next_player_lifetime_id.fetchAdd(1, .monotonic);
         self.texture = null;
+        self.gpu = null;
         self.current_torrent_id = -1;
         self.torrent_is_ready = false;
         self.has_metadata = false;
@@ -1246,6 +1254,7 @@ pub const MediaPlayer = struct {
             .{ .type = c.mpv.MPV_RENDER_PARAM_INVALID, .data = null },
         };
         self.mpv_gl = null;
+        if (start_renderer and !state.app.is_headless and self.startGpuRenderer(allocator)) return self;
         if (start_renderer and !state.app.is_headless) {
             // Windowed: create the software render context and wire the
             // frame-ready callback. Headless leaves mpv_gl == null (vo=null,
@@ -1285,6 +1294,7 @@ pub const MediaPlayer = struct {
     /// off-thread. Texture upload still remains owned by the UI thread.
     fn startPreparedRenderer(self: *MediaPlayer, allocator: std.mem.Allocator) !void {
         if (state.app.is_headless or self.mpv_gl != null) return;
+        if (self.startGpuRenderer(allocator)) return;
         if (self.pixels.len == 0) {
             self.pixels = try frame_buffer_pool.acquire(allocator, video_w * video_h);
             self.back_pixels = frame_buffer_pool.acquire(allocator, video_w * video_h) catch |err| {
@@ -1311,6 +1321,175 @@ pub const MediaPlayer = struct {
             return;
         };
         c.mpv.mpv_render_context_set_update_callback(self.mpv_gl, &mpvRenderUpdateCallback, @ptrCast(self));
+    }
+
+    /// Start the GPU render worker (UI thread). True when the player now
+    /// renders through libmpv's OpenGL API; false leaves everything as it was
+    /// so the caller sets up the software path. The worker creates the mpv
+    /// render context on its own GL context, so this waits for its verdict
+    /// (a few ms) before any file can load into vo=libmpv.
+    fn startGpuRenderer(self: *MediaPlayer, allocator: std.mem.Allocator) bool {
+        if (comptime !gpu_video.supported_build) return false;
+        if (!gpu_video.isAvailable()) return false;
+        const target = allocator.create(gpu_video.Target) catch return false;
+        target.* = .{};
+        target.ctx = gpu_video.createWorkerContext();
+        if (target.ctx == null) {
+            allocator.destroy(target);
+            logs.pushLog("warn", "player", "GPU video: no shared GL context; using the software path", false);
+            return false;
+        }
+        self.gpu = target;
+        self.render_stop.store(false, .release);
+        const thread = @import("../core/workers.zig").spawnLegacy(gpuRenderWorker, .{self}) catch {
+            gpu_video.destroyWorkerContext(target.ctx);
+            allocator.destroy(target);
+            self.gpu = null;
+            return false;
+        };
+        target.ready.waitUncancelable(@import("../core/io_global.zig").io());
+        if (!target.started_ok) {
+            thread.join();
+            gpu_video.destroyWorkerContext(target.ctx);
+            allocator.destroy(target);
+            self.gpu = null;
+            self.mpv_gl = null;
+            logs.pushLog("warn", "player", "GPU video: mpv refused the GL context; using the software path", false);
+            return false;
+        }
+        self.render_thread = thread;
+        // The software frame buffers are never written on this path.
+        frame_buffer_pool.release(allocator, self.pixels);
+        frame_buffer_pool.release(allocator, self.back_pixels);
+        self.pixels = &.{};
+        self.back_pixels = &.{};
+        return true;
+    }
+
+    /// GPU render worker: same pacing as `renderWorker` (mpv blocks this
+    /// thread until each frame's display time), but mpv draws with OpenGL into
+    /// an SDL-owned texture through this thread's shared GL context, then the
+    /// slot is published for the UI thread (gpu_video.Target.take).
+    fn gpuRenderWorker(self: *MediaPlayer) void {
+        const target = self.gpu.?;
+        const io = @import("../core/io_global.zig").io();
+        if (!gpu_video.bindWorkerContext(target.ctx)) {
+            target.started_ok = false;
+            target.ready.set(io);
+            return;
+        }
+        defer gpu_video.unbindWorkerContext();
+        const gl = gpu_video.Gl.load() orelse {
+            target.started_ok = false;
+            target.ready.set(io);
+            return;
+        };
+        var init_params: c.mpv.mpv_opengl_init_params = .{ .get_proc_address = gpu_video.getProcAddress, .get_proc_address_ctx = null };
+        var params = [_]c.mpv.mpv_render_param{
+            .{ .type = c.mpv.MPV_RENDER_PARAM_API_TYPE, .data = @constCast(c.mpv.MPV_RENDER_API_TYPE_OPENGL) },
+            .{ .type = c.mpv.MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, .data = @ptrCast(&init_params) },
+            .{ .type = c.mpv.MPV_RENDER_PARAM_INVALID, .data = null },
+        };
+        var render_ctx: ?*c.mpv.mpv_render_context = null;
+        if (c.mpv.mpv_render_context_create(&render_ctx, self.mpv_ctx, &params) < 0 or render_ctx == null) {
+            target.started_ok = false;
+            target.ready.set(io);
+            return;
+        }
+        // Only this thread calls mpv_render_* from here on; free on exit,
+        // still on this GL context.
+        defer {
+            c.mpv.mpv_render_context_free(render_ctx);
+            self.mpv_gl = null;
+        }
+        self.mpv_gl = render_ctx;
+        c.mpv.mpv_render_context_set_update_callback(render_ctx, &mpvRenderUpdateCallback, @ptrCast(self));
+        target.started_ok = true;
+        target.ready.set(io);
+
+        var fbos: [3]c_uint = .{ 0, 0, 0 };
+        defer gpu_video.deleteFramebuffers(&gl, &fbos);
+        var fbo_gen: u32 = 0;
+        while (true) {
+            self.render_wake.waitUncancelable(io);
+            self.render_wake.reset();
+            if (self.render_stop.load(.acquire)) return;
+
+            const flags = c.mpv.mpv_render_context_update(render_ctx);
+            if ((flags & c.mpv.MPV_RENDER_UPDATE_FRAME) == 0) continue;
+
+            self.frame_mutex.lock();
+            _ = target.adoptPending();
+            const set = target.current;
+            const back = target.slots.back;
+            self.frame_mutex.unlock();
+            if (!set.valid()) continue; // UI has not sized the pane yet
+            if (fbo_gen != set.gen) {
+                gpu_video.deleteFramebuffers(&gl, &fbos);
+                if (!gpu_video.createFramebuffers(&gl, &set, &fbos)) {
+                    logs.pushLog("error", "player", "GPU video: framebuffer incomplete", true);
+                    continue;
+                }
+                fbo_gen = set.gen;
+            }
+
+            var fbo: c.mpv.mpv_opengl_fbo = .{ .fbo = @intCast(fbos[back]), .w = @intCast(set.w), .h = @intCast(set.h), .internal_format = 0 };
+            // Texture memory row 0 is the image top, as SDL expects.
+            var flip_y: c_int = 0;
+            var render_params = [_]c.mpv.mpv_render_param{
+                .{ .type = c.mpv.MPV_RENDER_PARAM_OPENGL_FBO, .data = @ptrCast(&fbo) },
+                .{ .type = c.mpv.MPV_RENDER_PARAM_FLIP_Y, .data = @ptrCast(&flip_y) },
+                .{ .type = c.mpv.MPV_RENDER_PARAM_INVALID, .data = null },
+            };
+            const t0: i64 = if (perf.enabled) perfNow() else 0;
+            const rc = c.mpv.mpv_render_context_render(render_ctx, &render_params);
+            // The UI samples this texture from another context: it must be
+            // complete before the slot is published.
+            gl.finish();
+            if (perf.enabled) {
+                const dt = perfNow() - t0;
+                _ = perf.frames.fetchAdd(1, .monotonic);
+                _ = perf.render_ns.fetchAdd(dt, .monotonic);
+                _ = perf.render_max_ns.fetchMax(dt, .monotonic);
+            }
+            if (rc < 0) continue;
+            c.mpv.mpv_render_context_report_swap(render_ctx);
+
+            self.frame_mutex.lock();
+            // A resize adopted meanwhile reset the slots; this frame belongs
+            // to the old set and is dropped.
+            if (target.current.gen == set.gen) target.slots.publish();
+            self.frame_mutex.unlock();
+            self.last_frame_publish_ms.store(@import("../core/io_global.zig").monotonicMilliTimestamp(), .release);
+            wakeDvuiFromMpv();
+            if (open_trigger_ns != 0) openFirstFrame();
+        }
+    }
+
+    /// UI thread: size the GPU render targets and adopt the newest frame.
+    /// True when `texture` now shows a new frame.
+    pub fn presentGpuFrame(self: *MediaPlayer, width: u32, height: u32) bool {
+        const target = self.gpu orelse return false;
+        self.frame_mutex.lock();
+        defer self.frame_mutex.unlock();
+        target.requestSize(width, height);
+        if (target.pending != null) self.render_wake.set(@import("../core/io_global.zig").io());
+        const tex = target.take() orelse return false;
+        self.texture = tex;
+        return true;
+    }
+
+    /// UI thread: forget the shown frame (deleted media). GPU textures stay
+    /// owned by the target; software textures are freed by the caller.
+    pub fn dropShownFrame(self: *MediaPlayer) void {
+        if (self.gpu == null) {
+            if (self.texture) |tex| dvui.textureDestroyLater(tex);
+        }
+        self.texture = null;
+        self.frame_mutex.lock();
+        self.frame_ready = false;
+        if (self.gpu) |target| target.slots.fresh = false;
+        self.frame_mutex.unlock();
     }
 
     /// Software render worker. Loop: wait for mpv's "new frame" signal, ask
@@ -2310,6 +2489,13 @@ pub const MediaPlayer = struct {
             self.render_wake.set(@import("../core/io_global.zig").io());
             t.join();
             self.render_thread = null;
+        }
+        if (self.gpu) |target| {
+            // The worker freed the mpv render context on its GL context.
+            self.texture = null;
+            target.destroyAll();
+            @import("../core/alloc.zig").allocator.destroy(target);
+            self.gpu = null;
         }
     }
 

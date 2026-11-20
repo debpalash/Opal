@@ -46,6 +46,9 @@ test "Native toast module" {
 test "Native media offline SDL fixture" {
     if (!@import("build_options").headless) _ = @import("ui/media_native_test.zig");
 }
+test "Native media offline GPU video module" {
+    if (!@import("build_options").headless) _ = @import("player/gpu_video_native_test.zig");
+}
 test "Native shell offline route pixel capture" {
     if (!@import("build_options").headless) _ = @import("ui/shell_native_test.zig");
 }
@@ -197,6 +200,9 @@ fn platformStartOptions() dvui.App.StartOptions {
     _ = c.sdl.SDL_SetHint("SDL_APP_NAME", "Opal");
     // A click that activates the window must also reach its target button.
     _ = c.sdl.SDL_SetHint("SDL_MOUSE_FOCUS_CLICKTHROUGH", "1");
+    // GPU video (player/gpu_video.zig) needs SDL's OpenGL renderer; set before
+    // dvui creates the window. Falls back to the software path otherwise.
+    @import("player/gpu_video.zig").requestRendererHint();
     if (comptime builtin.os.tag == .linux) {
         _ = c.sdl.SDL_SetHint("SDL_APP_ID", "opal");
         _ = c.sdl.SDL_SetHint("SDL_VIDEO_WAYLAND_WMCLASS", "opal");
