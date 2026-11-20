@@ -2691,6 +2691,12 @@ fn addMagnetToEngine(magnet_link: []const u8) void {
     }
     // Every magnet from every source lands here: refuse one whose own
     // display name is an executable/archive before libtorrent fetches a byte.
+    if (@import("torrent_guard.zig").isBlockedMagnet(magnet_link)) {
+        const msg = "Blocked: this torrent was caught earlier containing executable files (possible malware)";
+        state.showToastTyped(msg, .err);
+        @import("../core/logs.zig").pushLog("warn", "search", msg, false);
+        return;
+    }
     const risk = @import("torrent_risk_pure.zig").assessMagnet(magnet_link);
     if (risk.risk == .block) {
         var tb: [160]u8 = undefined;

@@ -1037,6 +1037,28 @@ def test_torrent_malware_gate():
     return "pass", "file gate at the mpv hop, whole-torrent executable rejection, magnet/addon-row/bidi checks, untrusted mpv options"
 
 
+@test("Torrent guard blocklists executable torrents and marks finished downloads", "Security")
+def test_torrent_guard():
+    guard = _src("src/services/torrent_guard.zig")
+    pure = _src("src/core/download_safety_pure.zig")
+    stall = _src("src/services/torrent_stall.zig")
+    search = _src("src/services/search.zig")
+    checks = {
+        "pure policy unit-tested": "src/core/download_safety_pure.zig" in _src("build.zig"),
+        "runs for every torrent on the watchdog thread": '@import("torrent_guard.zig").tick(ses, &queueToast)' in stall,
+        "file-list verdict stops + blocklists": "pure.noteFile(&facts, name)" in guard and "pure.torrentVerdict(facts)" in guard and "password-protected archive bait" in pure and "torrent_pause(ses, id)" in guard and "blocklist.add(" in guard and "saveLocked()" in guard,
+        "blocklist enforced on every magnet add": "torrent_guard.zig\").isBlockedMagnet(magnet_link)" in section_of(search, "fn addMagnetToEngine(", "\n}\n"),
+        "macOS quarantine": '"com.apple.quarantine"' in guard and "0081;" in pure,
+        "Windows Mark-of-the-Web": ":Zone.Identifier" in guard and "ZoneId=3" in pure,
+        "never overwrites an existing mark": "getxattr(zp, \"com.apple.quarantine\"" in guard,
+        "bounded blocklist": "capacity = 1024" in pure,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "watchdog inspects every file list, persists blocked info-hashes, refuses them on add, marks finished files"
+
+
 def section_of(source, begin, end):
     start = source.index(begin)
     return source[start:source.index(end, start + len(begin))]
