@@ -439,7 +439,10 @@ pub fn fetchAsyncPublished(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_o
 // workers can finish together; keep their GPU transfers spread across frames.
 var upload_frame_ns: i128 = -1;
 var frame_uploads: usize = 0;
-const MAX_FRAME_UPLOADS = 12;
+// Downscaled posters are small, but a burst of finished workers still lands in
+// one frame; four uploads per frame keeps scroll frames even
+// (image_decode_native_test holds this bound).
+const MAX_FRAME_UPLOADS = 4;
 
 /// Upload pending pixel data to GPU texture. Call from render thread.
 /// Returns true if texture is ready.

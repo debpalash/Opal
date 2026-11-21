@@ -45,6 +45,12 @@ fn markHostNeedsCurl(host_hash: u64) void {
     native_fallback_cache.record(host_hash);
 }
 
+fn envProxyActive() bool {
+    var values: [pure.proxy_env_names.len]?[]const u8 = undefined;
+    for (pure.proxy_env_names, &values) |name, *v| v.* = io.getenv(name);
+    return pure.proxyEnvActive(&values);
+}
+
 fn setBin(b: []const u8, tok: []const u8) void {
     const n = @min(b.len, det_bin_buf.len);
     @memcpy(det_bin_buf[0..n], b[0..n]);
@@ -196,7 +202,7 @@ pub fn request(url: []const u8, body_out: []u8, headers_out: []u8, opts: Opts) F
     // spawning a curl subprocess (eliminates fork/exec + fresh TLS handshake).
     // Falls back transparently to curl on transport/WAF rejection and caches
     // the host so subsequent requests don't double-attempt.
-    if (pure.canUseNativeFastPath(token.len, proxy.len > 0, opts.form.len > 0, opts.post_body_file != null, opts.connect_to != null, opts.method)) {
+    if (pure.canUseNativeFastPath(token.len, proxy.len > 0 or envProxyActive(), opts.form.len > 0, opts.post_body_file != null, opts.connect_to != null, opts.method)) {
         const host_h: u64 = if (pure.extractHost(url)) |h| pure.hostHash(h) else 0;
         if (!hostNeedsCurl(host_h)) {
             var native_opts = opts;

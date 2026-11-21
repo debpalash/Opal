@@ -49,6 +49,18 @@ pub fn hostHash(host: []const u8) u64 {
 
 /// True when a desktop request can use the in-process pooled std.http client
 /// instead of spawning a curl subprocess.
+/// Proxy variables curl honours. The in-process client does not read them, so
+/// any non-empty one keeps the request on curl (a user's proxy, or a test's
+/// rejecting proxy, must never be bypassed).
+pub const proxy_env_names = [_][:0]const u8{ "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy" };
+
+pub fn proxyEnvActive(values: []const ?[]const u8) bool {
+    for (values) |v| if (v) |text| {
+        if (std.mem.trim(u8, text, " \t\r\n").len > 0) return true;
+    };
+    return false;
+}
+
 pub fn canUseNativeFastPath(
     impersonate_token_len: usize,
     has_proxy: bool,
@@ -860,4 +872,12 @@ test "inline post body is sent with --data-raw so '@' never reads a file" {
         if (std.mem.eql(u8, a, "--data-raw")) raw_at = i;
     }
     try std.testing.expectEqualStrings("@/etc/passwd", argv[(raw_at orelse return error.NoBody) + 1]);
+}
+
+test "environment proxy keeps requests on curl" {
+    try std.testing.expect(!proxyEnvActive(&.{ null, null }));
+    try std.testing.expect(!proxyEnvActive(&.{ "", " " }));
+    try std.testing.expect(proxyEnvActive(&.{ null, "http://127.0.0.1:9" }));
+    try std.testing.expect(!canUseNativeFastPath(0, proxyEnvActive(&.{"http://proxy:3128"}), false, false, false, null));
+    try std.testing.expect(canUseNativeFastPath(0, proxyEnvActive(&.{null}), false, false, false, null));
 }
