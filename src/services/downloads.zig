@@ -29,6 +29,7 @@ pub fn tick() void {
     if (!initialized) {
         initialized = true;
         engine.log_fn = engineLog;
+        engine.on_file_complete = @import("torrent_guard.zig").markDownloaded;
         restoreSidecarsAsync();
     }
 
@@ -54,15 +55,26 @@ pub fn tick() void {
 /// name is derived from the URL path. Returns false when the URL is not
 /// http(s), the table is full, or the same file is already downloading.
 pub fn startUrl(url: []const u8) bool {
-    if (!std.mem.startsWith(u8, url, "http://") and !std.mem.startsWith(u8, url, "https://"))
+    // String gate on this thread. DNS and every redirect hop are checked in the
+    // download worker (`probeChecked`) so a slow lookup does not stall the UI.
+    if (!@import("fetch_target.zig").stringPermitted(url)) {
+        logs.pushLog("error", "download", "Blocked private or loopback download target", true);
+        state.showToast("Blocked private network download");
         return false;
+    }
     const save_path = state.app.save_path_buf[0..state.app.save_path_len];
     if (save_path.len == 0) return false;
     var name_buf: [200]u8 = undefined;
     const name = dp.filenameFromUrl(url, &name_buf);
+    if (@import("../core/download_safety_pure.zig").isDangerousDownload(name)) {
+        var msg_buf: [320]u8 = undefined;
+        logs.pushLog("error", "download", std.fmt.bufPrint(&msg_buf, "Blocked dangerous HTTP download \"{s}\" (executable/script)", .{name}) catch "Blocked dangerous HTTP download", true);
+        state.showToast("Blocked dangerous download (executable or script)");
+        return false;
+    }
     var dest_buf: [engine.PATH_LEN]u8 = undefined;
     const dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}", .{ save_path, name }) catch return false;
-    if (!engine.start(url, dest)) return false;
+    if (!engine.startGuarded(url, dest)) return false;
     _ = visibility.setHidden(dest, false);
     return true;
 }

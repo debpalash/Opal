@@ -94,6 +94,8 @@ pub const Opts = struct {
     cancel_epoch: ?bounded.CancelEpoch = null,
     /// Follow HTTP redirects (curl -L). Probes of unvetted addresses turn it off.
     follow_redirects: bool = true,
+    /// curl `--connect-to` value. Pins one vetted address for this request.
+    connect_to: ?[]const u8 = null,
     connect_timeout_secs: u32 = 10,
     /// Explicit method (`-X`), e.g. "POST" with no body, or "DELETE".
     method: ?[]const u8 = null,
@@ -287,6 +289,7 @@ fn specFor(url: []const u8, token: []const u8, opts: Opts, config_stdin: bool) p
         .form = opts.form,
         .https_only = opts.https_only,
         .max_filesize = opts.max_filesize,
+        .connect_to = opts.connect_to,
     };
 }
 

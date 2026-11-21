@@ -97,7 +97,7 @@ class ParallelBrowse(unittest.TestCase):
         with live.database(profile/'opal.db') as db:
             db.execute("CREATE TABLE config(key TEXT PRIMARY KEY,value TEXT NOT NULL DEFAULT '')")
             db.executemany('INSERT INTO config VALUES(?,?)', [('web_port', str(live.PORT)), ('web_bind', 'loopback'), ('content_cache_enabled', '0'), ('search_sources', '0'), ('scrape_use_browser', '0')])
-        env = {'HTTPS_PROXY': self.base, 'https_proxy': self.base, 'NO_PROXY': 'localhost,127.0.0.1,::1', 'no_proxy': 'localhost,127.0.0.1,::1', 'ALL_PROXY': '', 'all_proxy': ''}
+        env = {'HTTPS_PROXY': self.base, 'https_proxy': self.base, 'NO_PROXY': 'localhost,127.0.0.1,::1', 'no_proxy': 'localhost,127.0.0.1,::1', 'ALL_PROXY': '', 'all_proxy': '', 'OPAL_ALLOW_LOOPBACK_DOWNLOAD': '1'}
         with patch.dict(os.environ, env): token = self.opal.start()
         reply = live.register('browse-fixture', host=self.opal.loopback_authority, setup_token=token)
         self.assertEqual(reply.status, 200)

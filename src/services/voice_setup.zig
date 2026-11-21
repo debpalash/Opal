@@ -14,6 +14,7 @@ const io_global = @import("../core/io_global.zig");
 const logs = @import("../core/logs.zig");
 const state = @import("../core/state.zig");
 const alloc = @import("../core/alloc.zig").allocator;
+const pure = @import("voice_setup_pure.zig");
 
 const SHERPA_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.3/sherpa-onnx-v1.13.3-osx-arm64-shared.tar.bz2";
 const SHERPA_EXTRACT_DIR = "sherpa-onnx-v1.13.3-osx-arm64-shared";
@@ -131,10 +132,90 @@ fn runStep(argv: []const []const u8) bool {
     };
 }
 
-/// Status-checked, atomic (temp + rename) download via the reliable-fetch
-/// seam — a failed transfer never leaves a truncated archive/model behind.
-fn downloadStep(url: []const u8, dest: []const u8) bool {
-    return @import("reliable_fetch.zig").download(url, dest, .{ .timeout_secs = 1800, .impersonate = false }).ok();
+fn tarBin() []const u8 {
+    if (io_global.cwdAccess("/usr/bin/tar", .{})) |_| return "/usr/bin/tar" else |_| {}
+    return "tar";
+}
+
+fn verifyDownloadedFile(path: []const u8, expected_size: u64, expected_sha256: []const u8) bool {
+    const file = io_global.openFileAbsolute(path, .{}) catch return false;
+    defer file.close(io_global.io());
+    if ((file.length(io_global.io()) catch return false) != expected_size) return false;
+
+    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    var buf: [64 * 1024]u8 = undefined;
+    while (true) {
+        const n = io_global.read(file, &buf) catch return false;
+        if (n == 0) break;
+        hash.update(buf[0..n]);
+    }
+    var digest: [32]u8 = undefined;
+    hash.final(&digest);
+    const actual = std.fmt.bytesToHex(digest, .lower);
+    return std.mem.eql(u8, &actual, expected_sha256);
+}
+
+fn inspectTarSafe(tar_bin: []const u8, tar_path: []const u8, expected_root: []const u8) bool {
+    var child = io_global.Child.init(&.{ tar_bin, "-tvjf", tar_path }, alloc);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return false;
+
+    const max_bytes: usize = 2 * 1024 * 1024;
+    var out = alloc.alloc(u8, max_bytes) catch {
+        _ = child.kill() catch {};
+        return false;
+    };
+    defer alloc.free(out);
+
+    var total: usize = 0;
+    var overflow = false;
+    if (child.stdout) |stdout_file| {
+        while (true) {
+            if (total >= out.len) {
+                overflow = true;
+                _ = child.kill() catch {};
+                break;
+            }
+            const n = io_global.read(stdout_file, out[total..]) catch {
+                overflow = true;
+                break;
+            };
+            if (n == 0) break;
+            total += n;
+        }
+    }
+    const term = child.wait() catch return false;
+    if (overflow) return false;
+    const ok = switch (term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+    if (!ok) return false;
+    return pure.tarListingSafe(out[0..total], expected_root);
+}
+
+fn removeChildTree(parent_path: []const u8, child_name: []const u8) void {
+    var dir = io_global.openDirAbsolute(parent_path, .{}) catch return;
+    defer dir.close(io_global.io());
+    dir.deleteTree(io_global.io(), child_name) catch {};
+}
+
+/// Status-checked, HTTPS-only, atomic (temp + rename) download via the
+/// reliable-fetch seam, verified against pinned byte size and SHA-256.
+fn downloadVerifiedStep(url: []const u8, dest: []const u8, expected_size: u64, expected_sha256: []const u8) bool {
+    if (!@import("reliable_fetch.zig").download(url, dest, .{
+        .timeout_secs = 1800,
+        .impersonate = false,
+        .https_only = true,
+    }).ok()) return false;
+    if (!verifyDownloadedFile(dest, expected_size, expected_sha256)) {
+        io_global.deleteFileAbsolute(dest) catch {};
+        logs.pushLog("error", "voice_setup", "Downloaded artifact failed SHA-256 verification", true);
+        return false;
+    }
+    return true;
 }
 
 pub fn installAsync() void {
@@ -176,18 +257,30 @@ fn installWorker() void {
         setMsg("Downloading voice engine (26 MB)…");
         var tar_buf: [512]u8 = undefined;
         const tar_path = std.fmt.bufPrint(&tar_buf, "{s}/sherpa-onnx.tar.bz2", .{opal_dir}) catch return fail("path too long");
-        if (!downloadStep(SHERPA_URL, tar_path))
-            return fail("Voice engine download failed — check network and retry");
+        if (!downloadVerifiedStep(SHERPA_URL, tar_path, pure.SHERPA_SIZE, pure.SHERPA_SHA256))
+            return fail("Voice engine download/verification failed — check network and retry");
         setMsg("Unpacking voice engine…");
-        if (!runStep(&.{ "tar", "-xjf", tar_path, "-C", opal_dir }))
+        const tar_bin = tarBin();
+        if (!inspectTarSafe(tar_bin, tar_path, SHERPA_EXTRACT_DIR)) {
+            io_global.deleteFileAbsolute(tar_path) catch {};
+            return fail("Voice engine archive rejected (unsafe entry)");
+        }
+        var stage_buf: [512]u8 = undefined;
+        const stage_dir = std.fmt.bufPrint(&stage_buf, "{s}/sherpa-onnx.stage", .{opal_dir}) catch return fail("path too long");
+        removeChildTree(opal_dir, "sherpa-onnx.stage");
+        io_global.makeDirAbsolute(stage_dir) catch return fail("Could not create voice staging dir");
+        defer removeChildTree(opal_dir, "sherpa-onnx.stage");
+        if (!runStep(&.{ tar_bin, "-xjf", tar_path, "-C", stage_dir })) {
+            io_global.deleteFileAbsolute(tar_path) catch {};
             return fail("Voice engine unpack failed");
+        }
         io_global.deleteFileAbsolute(tar_path) catch {};
         var src_buf: [512]u8 = undefined;
-        const src = std.fmt.bufPrint(&src_buf, "{s}/" ++ SHERPA_EXTRACT_DIR, .{opal_dir}) catch return fail("path too long");
+        const src = std.fmt.bufPrint(&src_buf, "{s}/" ++ SHERPA_EXTRACT_DIR, .{stage_dir}) catch return fail("path too long");
         var dst_buf: [512]u8 = undefined;
         const dst = std.fmt.bufPrint(&dst_buf, "{s}/sherpa-onnx", .{opal_dir}) catch return fail("path too long");
-        if (!runStep(&.{ "mv", src, dst }))
-            return fail("Voice engine install failed (mv)");
+        removeChildTree(opal_dir, "sherpa-onnx");
+        io_global.renameAbsolute(src, dst) catch return fail("Voice engine install failed (rename)");
     }
 
     // NOTE: Nemotron 3.5 streaming (NEMOTRON_URL) is deliberately NOT in the
@@ -201,8 +294,8 @@ fn installWorker() void {
         setMsg("Downloading VAD model (2 MB)…");
         var out_buf: [512]u8 = undefined;
         const out = std.fmt.bufPrint(&out_buf, "{s}/silero_vad.onnx", .{models_dir}) catch return fail("path too long");
-        if (!downloadStep(SILERO_URL, out))
-            return fail("VAD model download failed — check network and retry");
+        if (!downloadVerifiedStep(SILERO_URL, out, pure.SILERO_SIZE, pure.SILERO_SHA256))
+            return fail("VAD model download/verification failed — check network and retry");
     }
 
     // 3) Parakeet TDT 0.6B v3 (~490 MB) — conversation + dictation, 25 langs

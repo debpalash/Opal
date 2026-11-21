@@ -60,6 +60,7 @@ fn plainFetch(
     status: *u16,
     succeeded: *bool,
     cancel_epoch: ?@import("../core/bounded_process.zig").CancelEpoch,
+    connect_to: ?[]const u8,
 ) ?[]const u8 {
     hdr_len.* = 0;
     status.* = 0;
@@ -71,6 +72,9 @@ fn plainFetch(
         .post_body = post_body,
         .timeout_secs = 20,
         .cancel_epoch = cancel_epoch,
+        // Hops are checked here. curl must not follow a redirect on its own.
+        .follow_redirects = false,
+        .connect_to = connect_to,
     });
     hdr_len.* = result.headers.len;
     status.* = result.status;
@@ -109,21 +113,58 @@ fn cancelled(epoch: ?@import("../core/bounded_process.zig").CancelEpoch) bool {
         .epoch64 => |e| e.value.load(.acquire) != e.expected,
     };
 }
-fn scrapeFetchBody(url: []const u8, post_body: ?[]const u8, out_buf: []u8, cancel_epoch: ?@import("../core/bounded_process.zig").CancelEpoch) ?[]const u8 {
+fn scrapeFetchBody(requested_url: []const u8, requested_post: ?[]const u8, out_buf: []u8, cancel_epoch: ?@import("../core/bounded_process.zig").CancelEpoch) ?[]const u8 {
     announceReady();
-    if (url.len == 0 or out_buf.len == 0 or cancelled(cancel_epoch)) return null;
+    if (requested_url.len == 0 or out_buf.len == 0 or cancelled(cancel_epoch)) return null;
+    if (requested_url.len > 2048) return null;
+
+    const targets = @import("fetch_target.zig");
+    const policy = @import("fetch_target_pure.zig");
+    const http_pure = @import("../core/http_std_pure.zig");
+
+    var url_buf: [2048]u8 = undefined;
+    @memcpy(url_buf[0..requested_url.len], requested_url);
+    var current_len: usize = requested_url.len;
+    var post = requested_post;
 
     var hdr_buf: [16 * 1024]u8 = undefined;
     var hdr_len: usize = 0;
     var status: u16 = 0;
     var plain_succeeded = false;
-    const body = plainFetch(url, post_body, out_buf, &hdr_buf, &hdr_len, &status, &plain_succeeded, cancel_epoch);
-    if (cancelled(cancel_epoch)) return null;
+    var body: ?[]const u8 = null;
+    var hop: u8 = 0;
+    while (true) {
+        if (cancelled(cancel_epoch)) return null;
+        const current = url_buf[0..current_len];
+        var pin_buf: [512]u8 = undefined;
+        const pin = targets.vetScrape(current, &pin_buf) orelse {
+            logs.pushLog("warn", "scrape", "Blocked private network target", false);
+            return null;
+        };
+        body = plainFetch(current, post, out_buf, &hdr_buf, &hdr_len, &status, &plain_succeeded, cancel_epoch, if (pin.len > 0) pin else null);
+        if (cancelled(cancel_epoch)) return null;
+        if (!http_pure.isRedirect(status)) break;
+        if (hop == http_pure.max_redirects) return null;
+        const loc = policy.locationHeader(hdr_buf[0..hdr_len]) orelse return null;
+        var next_buf: [2048]u8 = undefined;
+        const next = policy.joinRedirect(current, loc, &next_buf) orelse return null;
+        if (next.len > url_buf.len) return null;
+        @memcpy(url_buf[0..next.len], next);
+        current_len = next.len;
+        if (http_pure.redirectDropsBody(status, post != null, false)) post = null;
+        hop += 1;
+    }
 
+    // Names match the browser-bridge call the feature tests lock in: the URL is
+    // the hop that was fetched (already vetted), and the body is dropped after
+    // a 301/302/303.
+    const url = url_buf[0..current_len];
+    const post_body = post;
     const body_head = if (body) |b| b[0..@min(b.len, 16 * 1024)] else "";
     const headers = hdr_buf[0..hdr_len];
 
-    // Not blocked → the fast path result stands.
+    // Not blocked → the fast path result stands. A redirect body is not content;
+    // the loop above only arrives here for a non-redirect status.
     if (!pure.needsBrowser(status, headers, body_head)) {
         // The typed fetch may intentionally expose an error body for challenge
         // classification, but a 4xx/5xx document is never scraper content.
@@ -136,6 +177,7 @@ fn scrapeFetchBody(url: []const u8, post_body: ?[]const u8, out_buf: []u8, cance
     // allowed" at once; a private-network target is refused the same way unless the
     // user named it). A page that is
     // still a challenge, or an error status, falls through to the bridge.
+    // The URL is the hop that was actually fetched, already vetted above.
     if (cancelled(cancel_epoch)) return null;
     if (browser_fetch.fetchText(url, post_body, out_buf, cancel_epoch)) |t| {
         if (cancelled(cancel_epoch)) return null;

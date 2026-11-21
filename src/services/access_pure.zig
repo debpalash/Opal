@@ -83,10 +83,25 @@ pub fn bindModeFromString(s: []const u8) BindMode {
     return .loopback;
 }
 
+/// LAN without an HTTPS proxy sends the session cookie over plain HTTP.
+/// Marking the cookie Secure would make browsers drop it, so the listener warns.
+pub fn lanPlainHttpWarning(mode: BindMode, https_proxy: bool) ?[]const u8 {
+    if (mode != .lan or https_proxy) return null;
+    return "Web UI is listening on the local network over plain HTTP. The session cookie can be read on the network.";
+}
+
 /// Ports Opal will bind. Below 1024 needs root on POSIX and would fail at
 /// listen() with no useful feedback, so it's rejected up front.
 pub fn validPort(p: u32) bool {
     return p >= 1024 and p <= 65535;
+}
+
+test "lan without https warns and an https proxy does not" {
+    try std.testing.expect(lanPlainHttpWarning(.loopback, false) == null);
+    try std.testing.expect(lanPlainHttpWarning(.lan, true) == null);
+    const msg = lanPlainHttpWarning(.lan, false).?;
+    try std.testing.expect(std.mem.indexOf(u8, msg, "plain HTTP") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "session cookie") != null);
 }
 
 /// Parse + validate a port from a query/body string. Null if not a number or
@@ -287,6 +302,10 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
         "/profiles/switch",      "/profiles/create",    "/profiles/delete",
         // Continuum handoff: send/bring make this host call a peer URL.
         "/handoff/send",         "/handoff/bring",
+        // Anti-block scraper proxy: makes this host fetch arbitrary URLs.
+        "/scrape",
+        // HTTP download and magnet add: this host fetches a URL or starts a torrent.
+        "/download/url",
     };
     for (host_routes) |route| if (std.mem.eql(u8, path, route)) return .administer_host;
     return null;
@@ -375,6 +394,10 @@ test "route privilege matrix protects host administration and executable trust" 
         for ([_][]const u8{ "GET", "POST" }) |m| try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/library/sync", m, ""));
         try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/library/sync/pull", "POST", ""));
         try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/library/sync/push", "POST", ""));
+        try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/scrape", "GET", ""));
+        try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/scrape", "POST", ""));
+        try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/download/url", "POST", ""));
+        try std.testing.expect(!allowsRoute(.browser, "/download/url", "POST", ""));
         try std.testing.expect(allowsRoute(principal, "/plugins", "GET", ""));
         try std.testing.expect(allowsRoute(principal, "/status", "GET", ""));
         try std.testing.expect(allowsRoute(principal, "/jellyfin/play", "POST", ""));

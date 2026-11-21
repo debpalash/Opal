@@ -146,6 +146,7 @@ fn inspect(ses: c.mpv.TorrentSession, id: i32, files: c_int) bool {
 
 /// Mark every finished file; true once all files are finished and marked.
 fn markFinished(ses: c.mpv.TorrentSession, id: i32, files: c_int) bool {
+    const save_path = state.app.save_path_buf[0..state.app.save_path_len];
     var all_done = true;
     var f: c_int = 0;
     while (f < files) : (f += 1) {
@@ -153,11 +154,14 @@ fn markFinished(ses: c.mpv.TorrentSession, id: i32, files: c_int) bool {
             all_done = false;
             continue;
         }
-        var path_buf: [2048]u8 = undefined;
-        path_buf[0] = 0;
-        c.mpv.torrent_get_file_path(ses, id, f, &path_buf, path_buf.len);
-        const path = std.mem.sliceTo(&path_buf, 0);
-        if (path.len > 0) markDownloaded(path);
+        var rel_buf: [2048]u8 = undefined;
+        rel_buf[0] = 0;
+        c.mpv.torrent_get_file_path(ses, id, f, &rel_buf, rel_buf.len);
+        const rel = std.mem.sliceTo(&rel_buf, 0);
+        var full_buf: [2048]u8 = undefined;
+        if (pure.joinSavePath(save_path, rel, &full_buf)) |full_path| {
+            markDownloaded(full_path);
+        }
     }
     return all_done;
 }
@@ -177,7 +181,10 @@ pub fn markDownloaded(path: []const u8) void {
         if (getxattr(zp, "com.apple.quarantine", null, 0, 0, 0) >= 0) return;
         var v: [64]u8 = undefined;
         const value = pure.quarantineValue(&v, io_g.timestamp()) orelse return;
-        _ = setxattr(zp, "com.apple.quarantine", value.ptr, value.len, 0, 0);
+        if (setxattr(zp, "com.apple.quarantine", value.ptr, value.len, 0, 0) < 0) {
+            var msg: [256]u8 = undefined;
+            logs.pushLog("warn", "download", std.fmt.bufPrint(&msg, "Failed to set macOS quarantine xattr on {s}", .{std.fs.path.basename(path)}) catch "Failed to set macOS quarantine xattr", true);
+        }
     } else if (comptime builtin.os.tag == .windows) {
         var ads: [2100]u8 = undefined;
         const stream = std.fmt.bufPrint(&ads, "{s}:Zone.Identifier", .{path}) catch return;
@@ -185,7 +192,10 @@ pub fn markDownloaded(path: []const u8) void {
             file.close(io_g.io());
             return;
         } else |_| {}
-        io_g.cwdWriteFile(.{ .sub_path = stream, .data = pure.zone_identifier }) catch {};
+        io_g.cwdWriteFile(.{ .sub_path = stream, .data = pure.zone_identifier }) catch |err| {
+            var msg: [256]u8 = undefined;
+            logs.pushLog("warn", "download", std.fmt.bufPrint(&msg, "Failed to write Zone.Identifier on {s}: {}", .{ std.fs.path.basename(path), err }) catch "Failed to write Zone.Identifier", true);
+        };
     }
     // Linux has no enforced equivalent (user.xdg.origin.url is informational).
 }

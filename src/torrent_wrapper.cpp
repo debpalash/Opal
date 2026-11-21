@@ -1224,8 +1224,10 @@ extern "C" int torrent_ensure_streaming_buffer(TorrentSession session, int torre
             node->last_deadline_piece = current_piece;
         }
 
-        // Check if we have the next 3 pieces — enough read-ahead so mpv doesn't stutter
-        lt::torrent_status st = node->handle.status();
+        // Check if we have the next 3 pieces — enough read-ahead so mpv doesn't stutter.
+        // query_pieces is the piece bitfield only. The default status() asks for
+        // every field and blocks until the libtorrent thread answers.
+        lt::torrent_status st = node->handle.status(lt::torrent_handle::query_pieces);
         bool needs_buffer = false;
         for (int i = 0; i < 3 && (current_piece + i) <= last_piece; ++i) {
             if (current_piece + i >= st.pieces.size() || !st.pieces.get_bit(lt::piece_index_t(current_piece + i))

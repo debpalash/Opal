@@ -1149,6 +1149,15 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_voice).step);
 
+    const test_voice_setup_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/voice_setup_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_voice_setup_pure).step);
+
     const test_plugins_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/plugins_pure.zig"),
@@ -1263,6 +1272,15 @@ fn buildSupported(b: *std.Build) void {
     });
     const run_test_browser_fetch = b.addRunArtifact(test_browser_fetch_pure);
     test_step.dependOn(&run_test_browser_fetch.step);
+    const test_fetch_target_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/fetch_target_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_fetch_target = b.addRunArtifact(test_fetch_target_pure);
+    test_step.dependOn(&run_test_fetch_target.step);
     const test_browser_tabs_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/browser_tabs_pure.zig"),

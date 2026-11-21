@@ -64,6 +64,9 @@ const Download = struct {
 
     url: [URL_LEN]u8 = undefined,
     url_len: usize = 0,
+    /// API downloads re-check every hop for a private address. Loopback engine
+    /// tests leave this false so a local fixture server still answers.
+    block_private: bool = false,
     dest: [PATH_LEN]u8 = undefined, // final absolute path
     dest_len: usize = 0,
     name: [NAME_LEN]u8 = undefined,
@@ -136,6 +139,7 @@ fn nopLog(level: []const u8, text: []const u8, is_error: bool) void {
     _ = is_error;
 }
 pub var log_fn: *const fn (level: []const u8, text: []const u8, is_error: bool) void = nopLog;
+pub var on_file_complete: ?*const fn (path: []const u8) void = null;
 
 fn logf(level: []const u8, is_error: bool, comptime fmt: []const u8, args: anytype) void {
     var b: [512]u8 = undefined;
@@ -185,6 +189,15 @@ fn pushCompletedLocked(slot: usize) void {
 /// Queue a download of `url` to the absolute file path `dest`. Returns false
 /// when the table is full or the same destination is already tracked.
 pub fn start(url: []const u8, dest: []const u8) bool {
+    return startInner(url, dest, false);
+}
+
+/// Same as `start`, and every redirect hop must stay on a public address.
+pub fn startGuarded(url: []const u8, dest: []const u8) bool {
+    return startInner(url, dest, true);
+}
+
+fn startInner(url: []const u8, dest: []const u8, block_private: bool) bool {
     if (url.len == 0 or url.len > URL_LEN or dest.len == 0 or dest.len > PATH_LEN) return false;
     mu.lock();
     var free_idx: ?usize = null;
@@ -210,14 +223,14 @@ pub fn start(url: []const u8, dest: []const u8) bool {
         log_fn("warn", "Download table full", true);
         return false;
     };
-    claimSlotLocked(idx, url, dest);
+    claimSlotLocked(idx, url, dest, block_private);
     slots[idx].status = .queued;
     mu.unlock();
     schedule();
     return true;
 }
 
-fn claimSlotLocked(idx: usize, url: []const u8, dest: []const u8) void {
+fn claimSlotLocked(idx: usize, url: []const u8, dest: []const u8, block_private: bool) void {
     const d = &slots[idx];
     _ = d.run_token.fetchAdd(1, .acq_rel);
     d.status = .empty;
@@ -225,6 +238,7 @@ fn claimSlotLocked(idx: usize, url: []const u8, dest: []const u8) void {
     next_seq += 1;
     @memcpy(d.url[0..url.len], url);
     d.url_len = url.len;
+    d.block_private = block_private;
     @memcpy(d.dest[0..dest.len], dest);
     d.dest_len = dest.len;
     const base = if (std.mem.lastIndexOfScalar(u8, dest, '/')) |i| dest[i + 1 ..] else dest;
@@ -262,7 +276,7 @@ pub fn restoreSidecar(meta: *const dp.PartMeta, dest: []const u8) bool {
         mu.unlock();
         return false;
     };
-    claimSlotLocked(idx, meta.urlSlice(), dest);
+    claimSlotLocked(idx, meta.urlSlice(), dest, true);
     const d = &slots[idx];
     @memcpy(d.etag[0..meta.etag_len], meta.etagSlice());
     d.etag_len = meta.etag_len;
@@ -554,6 +568,8 @@ const ProbeResult = struct {
     ranges_ok: bool = false,
     etag: [dp.ETAG_LEN]u8 = undefined,
     etag_len: usize = 0,
+    final_url: [URL_LEN]u8 = undefined,
+    final_url_len: usize = 0,
 };
 
 // Request and connection remain exclusively owned by the joined Io task.
@@ -594,7 +610,7 @@ fn probe(d: *Download, token: u32) ?ProbeResult {
     var guard: StreamGuard = .{};
     const deadline = io_global.monotonicMilliTimestamp() + 20_000;
     const task_io = @import("../core/http_transport.zig").nativeIo(io_global.io());
-    var task = task_io.concurrent(probeOwned, .{ d.urlSlice(), &guard }) catch return null;
+    var task = task_io.concurrent(probeOwned, .{ d.urlSlice(), &guard, d.block_private }) catch return null;
     while (!guard.done.load(.acquire)) {
         if (!alive(d, token) or io_global.monotonicMilliTimestamp() >= deadline) {
             guard.expire();
@@ -606,8 +622,121 @@ fn probe(d: *Download, token: u32) ?ProbeResult {
     return task.await(task_io);
 }
 
-fn probeOwned(url: []const u8, guard: *StreamGuard) ?ProbeResult {
+fn dropRequest(guard: *StreamGuard, req: *std.http.Client.Request) void {
+    if (req.connection) |connection| connection.closing = true;
+    guard.release(req);
+}
+
+/// Follow at most 5 redirects. Each hop is resolved and refused when it names
+/// or resolves to a private address. The final URL is what segment workers use,
+/// and those workers do not follow redirects.
+fn probeChecked(url: []const u8, guard: *StreamGuard) ?ProbeResult {
+    var client = @import("../core/http.zig").newClient();
+    defer client.deinit();
+    const targets = @import("fetch_target.zig");
+    const http_pure = @import("../core/http_std_pure.zig");
+    const policy = @import("fetch_target_pure.zig");
+
+    var current_buf: [URL_LEN]u8 = undefined;
+    if (url.len == 0 or url.len > current_buf.len) return null;
+    @memcpy(current_buf[0..url.len], url);
+    var current_len: usize = url.len;
+
+    var hop: u8 = 0;
+    while (true) {
+        const current = current_buf[0..current_len];
+        var pin_buf: [512]u8 = undefined;
+        if (targets.vetDownload(current, &pin_buf) == null) {
+            logf("warn", true, "Blocked private or loopback download target", .{});
+            return null;
+        }
+        const uri = std.Uri.parse(current) catch return null;
+        const headers = [_]std.http.Header{
+            .{ .name = "User-Agent", .value = UA },
+            .{ .name = "Range", .value = "bytes=0-0" },
+            .{ .name = "Accept", .value = "*/*" },
+        };
+        var req = client.request(.GET, uri, .{
+            .redirect_behavior = .unhandled,
+            .headers = .{ .accept_encoding = .{ .override = "identity" } },
+            .extra_headers = &headers,
+        }) catch return null;
+        req.sendBodiless() catch {
+            dropRequest(guard, &req);
+            return null;
+        };
+        var redirect_buf: [16 * 1024]u8 = undefined;
+        const response = req.receiveHead(&redirect_buf) catch |err| {
+            logf("warn", false, "Download probe response failed: {s}", .{@errorName(err)});
+            dropRequest(guard, &req);
+            return null;
+        };
+        const status: u16 = @intFromEnum(response.head.status);
+        if (http_pure.isRedirect(status)) {
+            var loc_buf: [URL_LEN]u8 = undefined;
+            const loc = response.head.location orelse {
+                dropRequest(guard, &req);
+                return null;
+            };
+            if (loc.len == 0 or loc.len > loc_buf.len) {
+                dropRequest(guard, &req);
+                return null;
+            }
+            @memcpy(loc_buf[0..loc.len], loc);
+            dropRequest(guard, &req);
+            if (hop == http_pure.max_redirects) return null;
+            var next_buf: [URL_LEN]u8 = undefined;
+            const next = policy.joinRedirect(current, loc_buf[0..loc.len], &next_buf) orelse return null;
+            if (next.len > current_buf.len) return null;
+            @memcpy(current_buf[0..next.len], next);
+            current_len = next.len;
+            hop += 1;
+            continue;
+        }
+        if (response.head.content_encoding != .identity) {
+            dropRequest(guard, &req);
+            return null;
+        }
+        var out = ProbeResult{};
+        switch (response.head.status) {
+            .partial_content => {
+                out.ranges_ok = true;
+                var it = response.head.iterateHeaders();
+                while (it.next()) |h| {
+                    if (std.ascii.eqlIgnoreCase(h.name, "Content-Range")) {
+                        if (dp.parseContentRangeTotal(h.value)) |t| out.total = t;
+                    }
+                }
+            },
+            .ok => {
+                out.ranges_ok = false;
+                if (response.head.content_length) |cl| out.total = cl;
+            },
+            else => {
+                dropRequest(guard, &req);
+                return null;
+            },
+        }
+        var it2 = response.head.iterateHeaders();
+        while (it2.next()) |h| {
+            const use = std.ascii.eqlIgnoreCase(h.name, "ETag") or
+                (out.etag_len == 0 and std.ascii.eqlIgnoreCase(h.name, "Last-Modified"));
+            if (use) {
+                const n = @min(h.value.len, dp.ETAG_LEN);
+                @memcpy(out.etag[0..n], h.value[0..n]);
+                out.etag_len = n;
+            }
+        }
+        @memcpy(out.final_url[0..current_len], current);
+        out.final_url_len = current_len;
+        guard.release(&req);
+        return out;
+    }
+}
+
+fn probeOwned(url: []const u8, guard: *StreamGuard, block_private: bool) ?ProbeResult {
     defer guard.done.store(true, .release);
+    if (block_private) return probeChecked(url, guard);
     var client = @import("../core/http.zig").newClient();
     defer client.deinit();
 
@@ -741,6 +870,10 @@ fn coordinate(idx: usize, token: u32) void {
     }
     d.ranges_ok = p.ranges_ok;
     d.total = p.total;
+    if (p.final_url_len > 0 and p.final_url_len <= URL_LEN) {
+        @memcpy(d.url[0..p.final_url_len], p.final_url[0..p.final_url_len]);
+        d.url_len = p.final_url_len;
+    }
     @memcpy(d.etag[0..p.etag_len], p.etag[0..p.etag_len]);
     d.etag_len = p.etag_len;
 
@@ -889,6 +1022,7 @@ fn coordinate(idx: usize, token: u32) void {
         schedule();
         return;
     };
+    if (on_file_complete) |cb| cb(d.destSlice());
 
     mu.lock();
     if (d.run_token.load(.acquire) == token) {
@@ -1012,7 +1146,7 @@ fn segmentAttempt(d: *Download, token: u32, si: usize, client: *std.http.Client,
     }
 
     var req = client.request(.GET, uri, .{
-        .redirect_behavior = @fromBackingInt(@intCast(5)),
+        .redirect_behavior = if (d.block_private) .not_allowed else @fromBackingInt(@intCast(5)),
         .headers = .{ .accept_encoding = .{ .override = "identity" } },
         .extra_headers = headers_buf[0..hn],
     }) catch {

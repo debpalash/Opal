@@ -17,6 +17,28 @@ pub fn blocksTorrent(file_name: []const u8) bool {
     return media_ext.isExecutable(file_name) or media_ext.hasBidiControl(file_name);
 }
 
+/// True when an HTTP download filename should be refused (executable,
+/// installer, script, or bidi-spoofed extension).
+pub fn isDangerousDownload(file_name: []const u8) bool {
+    return blocksTorrent(file_name);
+}
+
+/// Safely join a torrent save directory with a torrent-relative file path.
+/// Rejects empty inputs, absolute relative paths, drive-letter paths, and `..`
+/// traversal components so quarantine/MOTW marking never escapes `save_dir`.
+pub fn joinSavePath(save_dir: []const u8, rel_path: []const u8, out: []u8) ?[]const u8 {
+    if (save_dir.len == 0 or rel_path.len == 0) return null;
+    if (rel_path[0] == '/' or rel_path[0] == '\\') return null;
+    if (rel_path.len >= 2 and std.ascii.isAlphabetic(rel_path[0]) and rel_path[1] == ':') return null;
+    var parts = std.mem.tokenizeAny(u8, rel_path, "/\\");
+    while (parts.next()) |part| {
+        if (std.mem.eql(u8, part, "..")) return null;
+    }
+    const base = std.mem.trimEnd(u8, save_dir, "/\\");
+    if (base.len == 0) return null;
+    return std.fmt.bufPrint(out, "{s}/{s}", .{ base, rel_path }) catch null;
+}
+
 /// What one pass over a torrent's file list learned.
 pub const FileFacts = struct {
     executable: bool = false,
@@ -130,6 +152,27 @@ test "file lists: executables and bidi spoofs block the torrent, media and promo
     try std.testing.expect(!blocksTorrent("Subs/English.srt"));
     try std.testing.expect(!blocksTorrent("Torrent downloaded from site.com"));
     try std.testing.expect(!blocksTorrent("www.YTS.MX.jpg"));
+}
+
+test "joinSavePath joins relative torrent paths and blocks traversal/absolute paths" {
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings("/Users/u/Downloads/Movie/video.mkv", joinSavePath("/Users/u/Downloads", "Movie/video.mkv", &buf).?);
+    try std.testing.expectEqualStrings("/Users/u/Downloads/video.mkv", joinSavePath("/Users/u/Downloads/", "video.mkv", &buf).?);
+    try std.testing.expect(joinSavePath("/Users/u/Downloads", "../.zshrc", &buf) == null);
+    try std.testing.expect(joinSavePath("/Users/u/Downloads", "a/../../etc/passwd", &buf) == null);
+    try std.testing.expect(joinSavePath("/Users/u/Downloads", "/etc/passwd", &buf) == null);
+    try std.testing.expect(joinSavePath("/Users/u/Downloads", "C:\\Windows\\evil.exe", &buf) == null);
+    try std.testing.expect(joinSavePath("", "video.mkv", &buf) == null);
+    try std.testing.expect(joinSavePath("/Users/u/Downloads", "", &buf) == null);
+}
+
+test "isDangerousDownload flags executables, installers, scripts and bidi spoofs" {
+    try std.testing.expect(isDangerousDownload("installer.dmg"));
+    try std.testing.expect(isDangerousDownload("payload.pkg"));
+    try std.testing.expect(isDangerousDownload("run.command"));
+    try std.testing.expect(isDangerousDownload("setup.exe"));
+    try std.testing.expect(!isDangerousDownload("movie.mkv"));
+    try std.testing.expect(!isDangerousDownload("subtitles.srt"));
 }
 
 test "blocklist normalizes, dedupes, round-trips and evicts the oldest" {
