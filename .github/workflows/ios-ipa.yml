@@ -51,6 +51,8 @@ jobs:
           xcodebuild -version
       - name: Install build tools
         run: brew install xcodegen cmake boost ffmpeg
+      - name: Fetch Zig packages (retries codeberg)
+        run: scripts/zig-fetch-retry.sh --build-file build-ios.zig
       - name: Build unsigned IPA
         run: |
           VERSION=$(python3 -c 'import re; print(re.search(r"\.version\s*=\s*\"([^\"]+)\"", open("build.zig.zon").read())[1])')

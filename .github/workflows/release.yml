@@ -64,6 +64,8 @@ jobs:
           ./scripts/install-macos-deps.sh create-dmg
           ./scripts/install-macos-ffmpeg.sh
           ./scripts/install-macos-mpv.sh
+      - name: Fetch Zig packages (retries codeberg)
+        run: scripts/zig-fetch-retry.sh
       - name: Build .app bundle (ReleaseFast)
         # Bake the default TMDB/OMDb keys into the release binary so end users
         # work out of the box (build.zig reads these env vars). Absent secrets
@@ -117,6 +119,8 @@ jobs:
           sudo cp -r "$RUNNER_TEMP/onnxruntime/include/"* /usr/local/include/
           sudo cp -a "$RUNNER_TEMP/onnxruntime/lib/"*     /usr/local/lib/
           sudo ldconfig
+      - name: Fetch Zig packages (retries codeberg)
+        run: scripts/zig-fetch-retry.sh
       - name: Build (ReleaseSafe)
         # Bake the default TMDB/OMDb keys into the release binary (see build.zig).
         env:
@@ -406,6 +410,8 @@ jobs:
           # for zig and pwsh steps alike.
           echo "ONNXRUNTIME_DIR=$(pwd -W)/onnxruntime-win-x64-${ORT_VER}" >> "$GITHUB_ENV"
 
+      - name: Fetch Zig packages (retries codeberg)
+        run: scripts/zig-fetch-retry.sh
       - name: Build (ReleaseSafe)
         # Bake the default TMDB/OMDb keys into the release binary (see build.zig).
         env:
