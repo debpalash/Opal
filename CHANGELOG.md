@@ -12,6 +12,9 @@ match the tag exactly.
 
 ## Unreleased
 
+## v0.9.8 — 2026-11-21
+
+- **Faster posters and pages.** Most web requests reuse one pooled connection instead of starting curl for each; requests with a proxy configured still go through curl. Posters are downscaled to 512 px on a worker and kept in a 16 MB memory cache, so grids fill sooner and switching tabs redraws art from memory. SQLite gets a larger cache and more parallel readers. While a Jellyfin library loads, Opal checks four times a second instead of redrawing every frame.
 - **Plugins run in an OS sandbox.** On macOS and Linux a content plugin can no longer read the home directory (the API token lives there). It can still read its own folder and use the network. Windows keeps the Lua sandbox only.
 - **Downloads connect to the address they checked.** A download by hostname dials the public address Opal vetted, so a DNS answer that changes between the check and the connection cannot point it at a private host.
 

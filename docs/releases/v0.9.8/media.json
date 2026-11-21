@@ -1,0 +1,10 @@
+{
+  "tag": "v0.9.8",
+  "items": [
+    {
+      "path": "assets/releases/v0.9.8/search-gallery.png",
+      "alt": "Opal search results in a dark gallery: a featured Arrival card with a Save button, a Movies row of poster cards, and Music and Podcasts sections below.",
+      "caption": "Poster grids like this fill faster: posters are downscaled to 512 px on a worker, kept in a memory cache, and most fetches reuse one pooled connection. Native UI capture with offline fixture art; no live provider is shown."
+    }
+  ]
+}
