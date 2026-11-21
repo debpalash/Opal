@@ -39,6 +39,134 @@ pub fn refererHeader(plugin_referer: []const u8, image_url: []const u8, buf: []u
 
 pub const RunMode = enum { sandbox_lua, direct, deny };
 
+/// True when `path` can be embedded in a seatbelt profile or a bwrap argument
+/// without changing the profile's grammar.
+pub fn sandboxPath(path: []const u8) bool {
+    if (path.len < 2 or path[0] != '/') return false;
+    for (path) |c| {
+        if (c < 0x20 or c == 0x7f or c == '"' or c == '\\' or c == '(' or c == ')' or c == ';') return false;
+    }
+    return true;
+}
+
+/// macOS seatbelt: the process keeps the network and the system libraries, and
+/// cannot read or write the user home except to read its own plugin directory.
+pub fn seatbeltProfile(plugin_dir: []const u8, out: []u8) ?[]const u8 {
+    if (!sandboxPath(plugin_dir)) return null;
+    return std.fmt.bufPrint(out,
+        \\(version 1)
+        \\(allow default)
+        \\(deny file-read* (subpath "/Users") (subpath "/home") (subpath "/root"))
+        \\(deny file-write* (subpath "/Users") (subpath "/home") (subpath "/root"))
+        \\(allow file-read* (subpath "{s}"))
+        \\
+    , .{plugin_dir}) catch null;
+}
+
+pub fn wrapSeatbelt(profile: []const u8, argv: []const []const u8, out: [][]const u8) ?[]const []const u8 {
+    if (profile.len == 0 or argv.len == 0 or out.len < argv.len + 4) return null;
+    out[0] = "/usr/bin/sandbox-exec";
+    out[1] = "-p";
+    out[2] = profile;
+    out[3] = "--";
+    for (argv, 0..) |arg, i| out[4 + i] = arg;
+    return out[0 .. argv.len + 4];
+}
+
+pub const SandboxRoots = struct {
+    usr: bool = false,
+    lib: bool = false,
+    lib64: bool = false,
+    bin: bool = false,
+    sbin: bool = false,
+    opt: bool = false,
+    etc: bool = false,
+};
+
+/// Linux bubblewrap. The home directory is not mounted. `storage` only holds
+/// pointers; the caller owns every string.
+pub fn wrapBubblewrap(bwrap_bin: []const u8, plugin_dir: []const u8, roots: SandboxRoots, argv: []const []const u8, storage: [][]const u8) ?[]const []const u8 {
+    if (!sandboxPath(plugin_dir) or argv.len == 0) return null;
+    var n: usize = 0;
+    if (storage.len < 32 + argv.len) return null;
+    if (bwrap_bin.len == 0) return null;
+    storage[n] = bwrap_bin;
+    n += 1;
+    storage[n] = "--die-with-parent";
+    n += 1;
+    storage[n] = "--unshare-pid";
+    n += 1;
+    const binds = [_]struct { on: bool, path: []const u8 }{
+        .{ .on = roots.usr, .path = "/usr" },
+        .{ .on = roots.lib, .path = "/lib" },
+        .{ .on = roots.lib64, .path = "/lib64" },
+        .{ .on = roots.bin, .path = "/bin" },
+        .{ .on = roots.sbin, .path = "/sbin" },
+        .{ .on = roots.opt, .path = "/opt" },
+        .{ .on = roots.etc, .path = "/etc" },
+    };
+    for (binds) |bind| {
+        if (!bind.on) continue;
+        storage[n] = "--ro-bind";
+        n += 1;
+        storage[n] = bind.path;
+        n += 1;
+        storage[n] = bind.path;
+        n += 1;
+    }
+    storage[n] = "--proc";
+    n += 1;
+    storage[n] = "/proc";
+    n += 1;
+    storage[n] = "--dev";
+    n += 1;
+    storage[n] = "/dev";
+    n += 1;
+    storage[n] = "--tmpfs";
+    n += 1;
+    storage[n] = "/tmp";
+    n += 1;
+    storage[n] = "--ro-bind";
+    n += 1;
+    storage[n] = plugin_dir;
+    n += 1;
+    storage[n] = plugin_dir;
+    n += 1;
+    storage[n] = "--";
+    n += 1;
+    for (argv) |arg| {
+        storage[n] = arg;
+        n += 1;
+    }
+    return storage[0..n];
+}
+
+test "seatbelt profile reads only the plugin directory inside the home" {
+    var buf: [1024]u8 = undefined;
+    const profile = seatbeltProfile("/Users/u/.config/opal/plugins/demo", &buf).?;
+    try std.testing.expect(std.mem.indexOf(u8, profile, "(deny file-read* (subpath \"/Users\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, profile, "(subpath \"/Users/u/.config/opal/plugins/demo\")") != null);
+    try std.testing.expect(seatbeltProfile("/Users/u/plugin\")", &buf) == null);
+    try std.testing.expect(seatbeltProfile("relative/plugin", &buf) == null);
+    var argv_buf: [8][]const u8 = undefined;
+    const wrapped = wrapSeatbelt(profile, &.{ "/usr/bin/python3", "search" }, &argv_buf).?;
+    try std.testing.expectEqualStrings("/usr/bin/sandbox-exec", wrapped[0]);
+    try std.testing.expectEqualStrings("--", wrapped[3]);
+    try std.testing.expectEqualStrings("search", wrapped[5]);
+}
+
+test "bubblewrap does not mount the home directory" {
+    var storage: [40][]const u8 = undefined;
+    const wrapped = wrapBubblewrap("/usr/bin/bwrap", "/opt/opal/plugins/demo", .{ .usr = true, .etc = true }, &.{ "search", "query" }, &storage).?;
+    try std.testing.expectEqualStrings("/usr/bin/bwrap", wrapped[0]);
+    try std.testing.expect(std.mem.indexOf(u8, wrapped[wrapped.len - 1], "query") != null);
+    for (wrapped) |arg| {
+        try std.testing.expect(!std.mem.eql(u8, arg, "/home"));
+        try std.testing.expect(!std.mem.eql(u8, arg, "/Users"));
+    }
+    try std.testing.expect(wrapBubblewrap("/usr/bin/bwrap", "plugins/demo", .{}, &.{"search"}, &storage) == null);
+}
+
 pub const ResponseKind = enum { results, resolve };
 
 pub const SearchRow = struct {

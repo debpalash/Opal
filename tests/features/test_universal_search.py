@@ -108,7 +108,8 @@ def test_universal_search_fanout():
             and "hash.update(item.plugin_item_id" in res,
         "installed plugin fan-out is bounded and joined": "pub fn searchInstalledInto(" in plugins
             and "UNIVERSAL_PLUGIN_CAP: usize = 8" in plugins
-            and ".timeout_ms = 8_000" in plugins and "handle.join()" in plugins,
+            and "runPluginCommand(" in plugins and ", 8_000)" in plugins
+            and ".timeout_ms = timeout_ms" in plugins and "handle.join()" in plugins,
         "plugin rows are strictly projected": "pub fn parseSearchRows(" in plugins_pure
             and "plugin search projection is bounded strict and playable" in plugins_pure,
         "untrusted native plugins fail closed": "pluginContentApproved(&plugin)" in plugins

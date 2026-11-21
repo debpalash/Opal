@@ -645,11 +645,14 @@ fn probeChecked(url: []const u8, guard: *StreamGuard) ?ProbeResult {
     var hop: u8 = 0;
     while (true) {
         const current = current_buf[0..current_len];
-        var pin_buf: [512]u8 = undefined;
-        if (targets.vetDownload(current, &pin_buf) == null) {
+        const dial = targets.vetDownload(current) orelse {
             logf("warn", true, "Blocked private or loopback download target", .{});
             return null;
-        }
+        };
+        const pinned = if (dial.address) |address|
+            targets.openPinned(&client, current, address) orelse return null
+        else
+            null;
         const uri = std.Uri.parse(current) catch return null;
         const headers = [_]std.http.Header{
             .{ .name = "User-Agent", .value = UA },
@@ -657,6 +660,7 @@ fn probeChecked(url: []const u8, guard: *StreamGuard) ?ProbeResult {
             .{ .name = "Accept", .value = "*/*" },
         };
         var req = client.request(.GET, uri, .{
+            .connection = pinned,
             .redirect_behavior = .unhandled,
             .headers = .{ .accept_encoding = .{ .override = "identity" } },
             .extra_headers = &headers,
@@ -1145,7 +1149,19 @@ fn segmentAttempt(d: *Download, token: u32, si: usize, client: *std.http.Client,
         }
     }
 
+    const pinned = if (d.block_private) blk: {
+        const targets = @import("fetch_target.zig");
+        const dial = targets.vetDownload(d.urlSlice()) orelse {
+            d.seg_failed[si].store(true, .release);
+            return .fatal;
+        };
+        if (dial.address) |address| {
+            break :blk targets.openPinned(client, d.urlSlice(), address) orelse return .retry;
+        }
+        break :blk null;
+    } else null;
     var req = client.request(.GET, uri, .{
+        .connection = pinned,
         .redirect_behavior = if (d.block_private) .not_allowed else @fromBackingInt(@intCast(5)),
         .headers = .{ .accept_encoding = .{ .override = "identity" } },
         .extra_headers = headers_buf[0..hn],

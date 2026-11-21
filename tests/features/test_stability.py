@@ -263,7 +263,14 @@ def test_plugin_sandbox_hardened():
         return "fail", "allow_unsafe not gated behind user trust marker via runMode"
     if not pure_ok:
         return "fail", "plugins_pure runMode/tests missing"
-    return "pass", "content-hash trust gate + hardened prelude + native deny, pure-tested"
+    os_sandbox = (
+        "runPluginCommand(" in pg
+        and "seatbeltProfile(" in pgp
+        and "wrapBubblewrap(" in pgp
+    )
+    if not os_sandbox:
+        return "fail", "plugin spawns are not wrapped in an OS sandbox"
+    return "pass", "content-hash trust gate + hardened prelude + native deny + OS sandbox, pure-tested"
 
 
 @test("Playback Repaint Gated + Async UI Wakes", "Stability")
