@@ -329,3 +329,35 @@ def test_release_zig_fetch_retry():
     if missing:
         return "fail", "Zig package prefetch incomplete: " + ", ".join(missing)
     return "pass", "every release build fetches Zig packages up to 5 times before compiling"
+
+
+@test("Every build file declares the build_options the source reads", "Build")
+def test_build_options_parity():
+    # Regression: #201 added build_options.fixture_seams to build.zig only, so
+    # the v0.9.8 iOS and Android release builds failed to compile.
+    import re
+    used = set()
+    for path in Path(PROJECT_DIR, "src").rglob("*.zig"):
+        text = path.read_text(errors="ignore")
+        used |= set(re.findall(r'(?<![\w.])build_options\.([a-z_]+)', text))
+        used |= set(re.findall(r'@import\("build_options"\)\.([a-z_]+)', text))
+    missing = []
+    for build in ("build.zig", "build-ios.zig", "build-android.zig"):
+        declared = set(re.findall(r'addOption\([^,]+,\s*"([a-z_]+)"', _src(build)))
+        missing += [f"{build}:{k}" for k in sorted(used - declared)]
+    if not used:
+        return "fail", "found no build_options reads under src/"
+    if missing:
+        return "fail", "undeclared build options: " + ", ".join(missing)
+    return "pass", f"{len(used)} build options declared by desktop, iOS and Android builds"
+
+
+@test("Mobile re-attach runs can build a fixed commit for an existing tag", "Build")
+def test_mobile_reattach_ref():
+    # v0.9.8's tag could not build iOS/Android; tags are never moved, so the
+    # re-attach dispatch takes an optional ref to build and uploads under the tag.
+    for wf in ("ios-ipa.yml", "android-apk.yml"):
+        text = _src(".github/workflows/" + wf)
+        if "ref: ${{ inputs.ref || inputs.tag || github.ref }}" not in text or "      ref:\n" not in text:
+            return "fail", wf + " has no optional ref input for re-attach builds"
+    return "pass", "iOS and Android dispatches build inputs.ref, else the tag"

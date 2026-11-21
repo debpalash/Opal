@@ -33,6 +33,7 @@ pub fn build(b: *std.Build) void {
     mod.addImport("opal-native-c", bindings.mod);
     const options = b.addOptions();
     options.addOption(bool, "headless", false);
+    options.addOption(bool, "fixture_seams", false);
     options.addOption([]const u8, "app_version", "0.9.3-ios-dev");
     options.addOption([]const u8, "tmdb_default_token", "");
     options.addOption([]const u8, "omdb_default_key", "");
