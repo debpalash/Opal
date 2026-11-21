@@ -48,10 +48,11 @@ fn pinOrBlock(url: []const u8, pin_buf: []u8) ?[]const u8 {
     return pure.formatConnectTo(host, pure.portOf(url), address, pin_buf);
 }
 
-/// Debug builds only. Release binaries ignore the variable, so a shipped app
+/// Debug builds, or a build with `-Dfixture-seams=true` (CI's ReleaseSafe
+/// fixture binary). Release artifacts ignore the variable, so a shipped app
 /// cannot be pointed at a loopback download by its environment.
 fn loopbackFixturesAllowed() bool {
-    if (comptime @import("builtin").mode != .debug) return false;
+    if (comptime @import("builtin").mode != .debug and !@import("build_options").fixture_seams) return false;
     const v = io_global.getenv("OPAL_ALLOW_LOOPBACK_DOWNLOAD") orelse return false;
     return std.mem.eql(u8, v, "1");
 }

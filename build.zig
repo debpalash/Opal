@@ -38,6 +38,9 @@ fn buildSupported(b: *std.Build) void {
     // Expose the headless flag to the app as a `build_options` import.
     const build_options = b.addOptions();
     build_options.addOption(bool, "headless", headless);
+    // -Dfixture-seams: honour OPAL_ALLOW_LOOPBACK_DOWNLOAD outside Debug, for
+    // CI's ReleaseSafe hermetic fixture binary. Release artifacts leave it off.
+    build_options.addOption(bool, "fixture_seams", b.option(bool, "fixture-seams", "Honour test-only loopback fixture env vars in non-Debug builds (CI only)") orelse false);
 
     // Default API keys compiled into the binary so a fresh install works out of
     // the box — end users of a release build don't have to register their own.

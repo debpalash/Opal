@@ -403,7 +403,7 @@ jobs:
         run: ./scripts/install-mingw64-mpv.sh
       - name: Build headless (ReleaseSafe)
         run: |
-          zig build -Dheadless=true -Doptimize=safe
+          zig build -Dheadless=true -Doptimize=safe -Dfixture-seams=true
           test -f zig-out/bin/torrent_wrapper.dll
       - name: Hermetic media server and webcomic workflows
         timeout-minutes: 10
