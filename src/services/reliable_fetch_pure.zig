@@ -19,6 +19,92 @@ pub fn successfulStatus(status: u16) bool {
     return status >= 200 and status < 400;
 }
 
+/// Extract lowercase-comparable host slice from an http(s) URL (excluding port).
+pub fn extractHost(url: []const u8) ?[]const u8 {
+    const scheme_end = std.mem.indexOf(u8, url, "://") orelse return null;
+    const rest = url[scheme_end + 3 ..];
+    if (rest.len == 0) return null;
+    const auth_end = std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len;
+    const authority = rest[0..auth_end];
+    if (authority.len == 0) return null;
+    const host_port = if (std.mem.lastIndexOfScalar(u8, authority, '@')) |at| authority[at + 1 ..] else authority;
+    if (host_port.len == 0) return null;
+    if (host_port[0] == '[') {
+        const close = std.mem.indexOfScalar(u8, host_port, ']') orelse return null;
+        return host_port[1..close];
+    }
+    const colon = std.mem.indexOfScalar(u8, host_port, ':') orelse host_port.len;
+    return if (colon > 0) host_port[0..colon] else null;
+}
+
+/// Case-insensitive FNV-1a hash for host-level fallback caching.
+pub fn hostHash(host: []const u8) u64 {
+    var h: u64 = 0xcbf29ce484222325;
+    for (host) |ch| {
+        h ^= std.ascii.toLower(ch);
+        h *%= 0x100000001b3;
+    }
+    return if (h == 0) 1 else h;
+}
+
+/// True when a desktop request can use the in-process pooled std.http client
+/// instead of spawning a curl subprocess.
+/// Proxy variables curl honours. The in-process client does not read them, so
+/// any non-empty one keeps the request on curl (a user's proxy, or a test's
+/// rejecting proxy, must never be bypassed).
+pub const proxy_env_names = [_][:0]const u8{ "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy" };
+
+pub fn proxyEnvActive(values: []const ?[]const u8) bool {
+    for (values) |v| if (v) |text| {
+        if (std.mem.trim(u8, text, " \t\r\n").len > 0) return true;
+    };
+    return false;
+}
+
+pub fn canUseNativeFastPath(
+    impersonate_token_len: usize,
+    has_proxy: bool,
+    has_form: bool,
+    has_post_body_file: bool,
+    has_connect_to: bool,
+    method: ?[]const u8,
+) bool {
+    if (impersonate_token_len > 0 or has_proxy or has_form or has_post_body_file or has_connect_to) return false;
+    if (method) |m| {
+        if (std.meta.stringToEnum(std.http.Method, m) == null) return false;
+    }
+    return true;
+}
+
+/// True when a native std.http response should transparently retry via curl
+/// (e.g. TLS/CDN/WAF incompatibility). Never retries on cancel, timeout, or
+/// invalid input.
+pub fn shouldFallbackToCurl(is_transport_failure: bool, status: u16) bool {
+    if (is_transport_failure) return true;
+    return status == 403 or status == 406 or status == 429 or status == 503;
+}
+
+/// Fixed-size ring of host hashes that rejected std.http and should go
+/// straight to curl on subsequent requests.
+pub const HostFallbackCache = struct {
+    hashes: [64]u64 = @splat(0),
+    cursor: usize = 0,
+
+    pub fn contains(self: *const HostFallbackCache, h: u64) bool {
+        if (h == 0) return false;
+        for (self.hashes) |entry| {
+            if (entry == h) return true;
+        }
+        return false;
+    }
+
+    pub fn record(self: *HostFallbackCache, h: u64) void {
+        if (h == 0 or self.contains(h)) return;
+        self.hashes[self.cursor] = h;
+        self.cursor = (self.cursor + 1) % self.hashes.len;
+    }
+};
+
 pub const Spec = struct {
     /// Resolved binary: a curl-impersonate wrapper (browser JA3/JA4) or "curl".
     bin: []const u8,
@@ -647,6 +733,36 @@ test "option-looking url is rejected, never passed to curl" {
     try std.testing.expectError(error.InvalidUrl, buildAlloc(ar.allocator(), .{ .bin = "curl", .url = "https://x", .output_path = "-" }, &.{}));
 }
 
+test "native fast-path eligibility and host fallback cache" {
+    try std.testing.expect(canUseNativeFastPath(0, false, false, false, false, null));
+    try std.testing.expect(canUseNativeFastPath(0, false, false, false, false, "GET"));
+    try std.testing.expect(canUseNativeFastPath(0, false, false, false, false, "POST"));
+    try std.testing.expect(!canUseNativeFastPath(9, false, false, false, false, null));
+    try std.testing.expect(!canUseNativeFastPath(0, true, false, false, false, null));
+    try std.testing.expect(!canUseNativeFastPath(0, false, true, false, false, null));
+    try std.testing.expect(!canUseNativeFastPath(0, false, false, true, false, null));
+    try std.testing.expect(!canUseNativeFastPath(0, false, false, false, true, null));
+    try std.testing.expect(!canUseNativeFastPath(0, false, false, false, false, "PROPFIND"));
+
+    try std.testing.expect(shouldFallbackToCurl(true, 0));
+    try std.testing.expect(shouldFallbackToCurl(false, 403));
+    try std.testing.expect(shouldFallbackToCurl(false, 429));
+    try std.testing.expect(shouldFallbackToCurl(false, 503));
+    try std.testing.expect(!shouldFallbackToCurl(false, 200));
+    try std.testing.expect(!shouldFallbackToCurl(false, 404));
+
+    try std.testing.expectEqualStrings("image.tmdb.org", extractHost("https://image.tmdb.org/t/p/w500/abc.jpg").?);
+    try std.testing.expectEqualStrings("example.com", extractHost("http://user:pass@example.com:8080/path?x=1").?);
+    try std.testing.expectEqualStrings("::1", extractHost("http://[::1]:8080/a").?);
+    try std.testing.expectEqual(hostHash("Image.TMDB.org"), hostHash("image.tmdb.org"));
+
+    var cache: HostFallbackCache = .{};
+    const h = hostHash("cdn.myanimelist.net");
+    try std.testing.expect(!cache.contains(h));
+    cache.record(h);
+    try std.testing.expect(cache.contains(h));
+}
+
 test "multipart form: literal fields use --form-string, files -F name=@path" {
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer ar.deinit();
@@ -756,4 +872,12 @@ test "inline post body is sent with --data-raw so '@' never reads a file" {
         if (std.mem.eql(u8, a, "--data-raw")) raw_at = i;
     }
     try std.testing.expectEqualStrings("@/etc/passwd", argv[(raw_at orelse return error.NoBody) + 1]);
+}
+
+test "environment proxy keeps requests on curl" {
+    try std.testing.expect(!proxyEnvActive(&.{ null, null }));
+    try std.testing.expect(!proxyEnvActive(&.{ "", " " }));
+    try std.testing.expect(proxyEnvActive(&.{ null, "http://127.0.0.1:9" }));
+    try std.testing.expect(!canUseNativeFastPath(0, proxyEnvActive(&.{"http://proxy:3128"}), false, false, false, null));
+    try std.testing.expect(canUseNativeFastPath(0, proxyEnvActive(&.{null}), false, false, false, null));
 }

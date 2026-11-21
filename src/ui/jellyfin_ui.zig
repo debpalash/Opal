@@ -460,7 +460,7 @@ fn renderItems() void {
                 .gravity_x = 0.5,
                 .margin = dvui.Rect.all(12),
             });
-            dvui.refresh(null, @src(), null); // wake until the worker's items land
+            components.pollRefresh(250_000); // 4Hz poll instead of 120fps busy-spin
         }
     }
 }

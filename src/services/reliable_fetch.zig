@@ -26,6 +26,31 @@ var det_bin_len: usize = 0;
 var det_token: []const u8 = "";
 var det_mutex = sync.Mutex{};
 
+// Hosts that rejected in-process std.http (e.g. strict WAF/CDN) fall back to
+// curl immediately on subsequent requests without paying a retry.
+var native_fallback_mutex = sync.Mutex{};
+var native_fallback_cache: pure.HostFallbackCache = .{};
+
+fn hostNeedsCurl(host_hash: u64) bool {
+    if (host_hash == 0) return false;
+    native_fallback_mutex.lock();
+    defer native_fallback_mutex.unlock();
+    return native_fallback_cache.contains(host_hash);
+}
+
+fn markHostNeedsCurl(host_hash: u64) void {
+    if (host_hash == 0) return;
+    native_fallback_mutex.lock();
+    defer native_fallback_mutex.unlock();
+    native_fallback_cache.record(host_hash);
+}
+
+fn envProxyActive() bool {
+    var values: [pure.proxy_env_names.len]?[]const u8 = undefined;
+    for (pure.proxy_env_names, &values) |name, *v| v.* = io.getenv(name);
+    return pure.proxyEnvActive(&values);
+}
+
 fn setBin(b: []const u8, tok: []const u8) void {
     const n = @min(b.len, det_bin_buf.len);
     @memcpy(det_bin_buf[0..n], b[0..n]);
@@ -172,6 +197,28 @@ pub fn request(url: []const u8, body_out: []u8, headers_out: []u8, opts: Opts) F
         (@import("dpi_bypass.zig").proxyArgs() orelse empty)
     else
         empty;
+
+    // Fast path: reuse the process-global keep-alive std.http.Client instead of
+    // spawning a curl subprocess (eliminates fork/exec + fresh TLS handshake).
+    // Falls back transparently to curl on transport/WAF rejection and caches
+    // the host so subsequent requests don't double-attempt.
+    if (pure.canUseNativeFastPath(token.len, proxy.len > 0 or envProxyActive(), opts.form.len > 0, opts.post_body_file != null, opts.connect_to != null, opts.method)) {
+        const host_h: u64 = if (pure.extractHost(url)) |h| pure.hostHash(h) else 0;
+        if (!hostNeedsCurl(host_h)) {
+            var native_opts = opts;
+            if (native_opts.user_agent == null) {
+                native_opts.user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+            }
+            const native_res = @import("../core/http_std.zig").request(url, body_out, headers_out, native_opts);
+            if (native_res.failure == .cancelled or native_res.failure == .invalid_input or native_res.failure == .timed_out) {
+                return native_res;
+            }
+            if (!pure.shouldFallbackToCurl(native_res.failure == .transport, native_res.status)) {
+                return native_res;
+            }
+            markHostNeedsCurl(host_h);
+        }
+    }
 
     const config = secretConfig(arena, url, opts) catch return .{ .backend = used_backend, .failure = .invalid_input };
     var spec = specFor(url, token, opts, config.len > 0);

@@ -215,3 +215,23 @@ def test_private_fetch_targets():
     if missing:
         return "fail", "private fetch policy incomplete: " + ", ".join(missing)
     return "pass", "download/scrape hops stay public; torrent read-ahead asks only for the piece map"
+
+
+@test("Native HTTP fast path keeps proxied requests on curl; poster uploads stay spread", "Network")
+def test_native_fast_path_guards():
+    # Regression: the pooled std.http fast path ignored HTTPS_PROXY/ALL_PROXY
+    # (a public default bypassed the hermetic rejecting proxy), and the poster
+    # upload cap went 4 -> 12, breaking the per-frame upload bound.
+    rf = _src("src/services/reliable_fetch.zig")
+    pure = _src("src/services/reliable_fetch_pure.zig")
+    poster = _src("src/core/poster.zig")
+    checks = {
+        "env proxy disables fast path": "proxy.len > 0 or envProxyActive()" in rf,
+        "every curl proxy variable": all(n in pure for n in ('"HTTPS_PROXY"', '"https_proxy"', '"HTTP_PROXY"', '"http_proxy"', '"ALL_PROXY"', '"all_proxy"')),
+        "pure test": 'test "environment proxy keeps requests on curl"' in pure,
+        "upload cap is four": "const MAX_FRAME_UPLOADS = 4;" in poster,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "native fast path guards incomplete: " + ", ".join(missing)
+    return "pass", "proxied requests use curl; at most 4 poster uploads per frame"

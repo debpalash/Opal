@@ -63,8 +63,9 @@ pub fn init() void {
     // Performance tuning
     exec("PRAGMA journal_mode=WAL");
     exec("PRAGMA synchronous=NORMAL");
-    exec("PRAGMA cache_size=-8000"); // 8MB
+    exec("PRAGMA cache_size=-32000"); // 32MB page cache
     exec("PRAGMA temp_store=MEMORY");
+    exec("PRAGMA wal_autocheckpoint=2000");
     exec("PRAGMA mmap_size=0"); // Avoid faults if an external SQLite client changes the file.
     // Without a busy timeout a contended writer fails INSTANTLY with SQLITE_BUSY
     // instead of waiting, and every `exec`/`_ = step` caller in this codebase
@@ -97,7 +98,7 @@ pub fn init() void {
 // lets independent read-only connections run in parallel with each other and
 // with the writer. Each slot is used by one thread at a time (claimed with an
 // atomic swap), opened lazily, and closed in deinit after workers are drained.
-const READER_SLOTS = 8;
+const READER_SLOTS = 16;
 var readers: [READER_SLOTS]?*Sqlite3 = @splat(null);
 var reader_claimed: [READER_SLOTS]std.atomic.Value(bool) = @splat(std.atomic.Value(bool).init(false));
 var readers_ready = std.atomic.Value(bool).init(false);
@@ -138,6 +139,8 @@ fn openReader() ?*Sqlite3 {
     }
     const h = handle orelse return null;
     _ = c.sqlite3_busy_timeout(h, 5000);
+    _ = c.sqlite3_exec(h, "PRAGMA cache_size=-8000", null, null, null);
+    _ = c.sqlite3_exec(h, "PRAGMA temp_store=MEMORY", null, null, null);
     _ = c.sqlite3_exec(h, "PRAGMA mmap_size=0", null, null, null);
     return h;
 }
