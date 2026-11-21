@@ -303,3 +303,29 @@ def test_release_onnxruntime_vendor():
     if missing:
         return "fail", "ONNX Runtime vendoring incomplete: " + ", ".join(missing)
     return "pass", "both release jobs fetch Microsoft's NuGet build, SHA-256 pinned"
+
+
+@test("Release builds prefetch Zig packages with retries", "Build")
+def test_release_zig_fetch_retry():
+    # Regression: codeberg.org intermittently refused GitHub runners while
+    # fetching translate-c/arocc; v0.9.7 lost macOS twice and Android once.
+    rel = _src(".github/workflows/release.yml")
+    apk = _src(".github/workflows/android-apk.yml")
+    ipa = _src(".github/workflows/ios-ipa.yml")
+    sh = _src("scripts/zig-fetch-retry.sh")
+
+    def before(text, step):
+        at = text.find(step)
+        return at > 0 and "scripts/zig-fetch-retry.sh" in text[max(0, at - 200):at]
+
+    checks = {
+        "macOS before build": before(rel, "- name: Build .app bundle (ReleaseFast)"),
+        "linux and windows before build": rel.count("scripts/zig-fetch-retry.sh\n      - name: Build (ReleaseSafe)") == 2,
+        "android uses its build file": before(apk, "- name: Build APK") and "zig-fetch-retry.sh --build-file build-android.zig" in apk,
+        "ios uses its build file": before(ipa, "- name: Build unsigned IPA") and "zig-fetch-retry.sh --build-file build-ios.zig" in ipa,
+        "retries then fails": 'zig build --fetch "$@"' in sh and "exit 1" in sh and "ZIG_FETCH_ATTEMPTS" in sh,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "Zig package prefetch incomplete: " + ", ".join(missing)
+    return "pass", "every release build fetches Zig packages up to 5 times before compiling"

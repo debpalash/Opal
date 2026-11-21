@@ -95,6 +95,8 @@ jobs:
             echo "OPAL_ANDROID_KEYSTORE_PASSWORD=$KS_PASSWORD"
             echo "OPAL_ANDROID_KEY_ALIAS=${KS_ALIAS:-opal}"
           } >> "$GITHUB_ENV"
+      - name: Fetch Zig packages (retries codeberg)
+        run: scripts/zig-fetch-retry.sh --build-file build-android.zig
       - name: Build APK
         run: |
           VERSION=$(python3 -c 'import re; print(re.search(r"\.version\s*=\s*\"([^\"]+)\"", open("build.zig.zon").read())[1])')
