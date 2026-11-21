@@ -12,6 +12,9 @@ match the tag exactly.
 
 ## Unreleased
 
+- **Plugins run in an OS sandbox.** On macOS and Linux a content plugin can no longer read the home directory (the API token lives there). It can still read its own folder and use the network. Windows keeps the Lua sandbox only.
+- **Downloads connect to the address they checked.** A download by hostname dials the public address Opal vetted, so a DNS answer that changes between the check and the connection cannot point it at a private host.
+
 ## v0.9.7 — 2026-11-21
 
 - **Private-network fetches stay closed.** Downloads and scrapes requested through the web API need host-admin rights and refuse loopback, LAN, and link-local targets, including after a redirect. A hostname that resolves to a private address is refused. Playlist and remote-load URLs are http(s) or magnet only, and voice model downloads are checked against pinned hashes. Listening on the local network over plain HTTP warns that the session cookie travels in the clear.

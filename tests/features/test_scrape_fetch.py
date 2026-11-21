@@ -194,10 +194,16 @@ def test_private_fetch_targets():
         "guarded download entry": "startGuarded(" in dl and "stringPermitted(" in dl,
         "loopback fixtures are address literals only": (
             "OPAL_ALLOW_LOOPBACK_DOWNLOAD" in ft
+            and '@import("builtin").mode != .debug' in ft
             and "pub fn isLoopbackAddress(" in pure
             and "downloadPermitted(url, false)" in pure
         ),
-        "probe rechecks every hop": "fn probeChecked(" in eng and "vetDownload(" in eng,
+        "fixture seam is off in release artifacts": (
+            '!@import("build_options").fixture_seams' in ft
+            and 'b.option(bool, "fixture-seams"' in bz and 'orelse false);' in bz[bz.find('"fixture-seams"'):][:200]
+            and "fixture-seams" not in _src(".github/workflows/release.yml")
+        ),
+        "probe rechecks every hop": "fn probeChecked(" in eng and "vetDownload(" in eng and "openPinned(" in eng,
         "guarded segments do not follow redirects": ".not_allowed" in eng,
         "scrape checks each hop": "vetScrape(" in sc and ".follow_redirects = false" in sc,
         "scrape fixture seam is loopback literals only": "pure.fixtureLoopbackLiteral(url, loopbackFixturesAllowed())" in ft and "pub fn fixtureLoopbackLiteral(" in pure,

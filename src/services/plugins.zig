@@ -390,9 +390,10 @@ fn pluginDigest(p: *const Plugin, out: *[32]u8) bool {
 // binaries and non-Lua interpreters bypass this and need OS sandbox
 // hardening instead.
 //
-// TODO(security): per-spawn OS sandboxing (macOS `sandbox-exec -p`
-// / Linux `bwrap`), manifest `require` allow-list, and a one-time
-// user consent prompt for `allow_unsafe = true` plugins.
+// macOS `sandbox-exec` and Linux `bwrap` wrap every spawn in
+// `runPluginCommand`. Windows has no equivalent tool in this install.
+// TODO(security): manifest `require` allow-list, and a one-time
+// consent prompt for `allow_unsafe = true` plugins.
 const LUA_SANDBOX_PRELUDE: []const u8 =
     \\os.execute=nil os.remove=nil os.rename=nil os.exit=nil os.tmpname=nil os.getenv=nil
     \\io.popen=nil io.open=nil io.input=nil io.output=nil io.lines=nil
@@ -526,7 +527,7 @@ fn runSearch(plugin: Plugin, query: []const u8, rows: []@import("plugins_pure.zi
     };
 
     var response: [64 * 1024]u8 = undefined;
-    const run = bounded_process.run(argv, &response, .{ .timeout_ms = 8_000 });
+    const run = runPluginCommand(plugin.path[0..plugin.path_len], argv, &response, 8_000);
     if (!run.ok()) {
         logPluginProcessFailure(plugin.name[0..plugin.name_len], run);
         return .{ .outcome = .run_failed };
@@ -700,12 +701,12 @@ pub fn runPluginSearch(query: []const u8) void {
                     const extras = [_][]const u8{q};
                     const argv = buildSandboxedLuaArgv(&sandbox_argv, exec, &extras);
                     logSandboxed(p.name[0..p.name_len]);
-                    executeAndParse(argv);
+                    executeAndParse(p.path[0..p.path_len], argv);
                 },
                 .direct => {
                     if (p.allow_unsafe and trusted_now) logUnsafeWarn(p.name[0..p.name_len]);
                     const argv = [_][]const u8{ exec, q };
-                    executeAndParse(&argv);
+                    executeAndParse(p.path[0..p.path_len], &argv);
                 },
                 .deny => logUntrustedNative(&p),
             }
@@ -736,12 +737,12 @@ pub fn runPluginTrending() void {
                     var sandbox_argv: [8][]const u8 = undefined;
                     const argv = buildSandboxedLuaArgv(&sandbox_argv, exec, &.{});
                     logSandboxed(p.name[0..p.name_len]);
-                    executeAndParse(argv);
+                    executeAndParse(p.path[0..p.path_len], argv);
                 },
                 .direct => {
                     if (p.allow_unsafe and trusted_now) logUnsafeWarn(p.name[0..p.name_len]);
                     const argv = [_][]const u8{exec};
-                    executeAndParse(&argv);
+                    executeAndParse(p.path[0..p.path_len], &argv);
                 },
                 .deny => logUntrustedNative(&p),
             }
@@ -907,7 +908,7 @@ fn runPluginResolveWith(plugin: Plugin, id: []const u8, episode: []const u8, res
                 }
             };
             var buf: [64 * 1024]u8 = undefined;
-            const run = bounded_process.run(argv, &buf, .{ .timeout_ms = 30_000 });
+            const run = runPluginCommand(p.path[0..p.path_len], argv, &buf, 30_000);
             if (!run.ok()) {
                 logPluginProcessFailure(p.name[0..p.name_len], run);
                 completion.message = switch (run.failure) {
@@ -1093,9 +1094,53 @@ fn runPluginResolveWith(plugin: Plugin, id: []const u8, episode: []const u8, res
     }
 }
 
-fn executeAndParse(argv: []const []const u8) void {
+fn linuxRoot(path: []const u8) bool {
+    var dir = @import("../core/io_global.zig").openDirAbsolute(path, .{}) catch return false;
+    dir.close(@import("../core/io_global.zig").io());
+    return true;
+}
+
+fn bwrapBin() ?[]const u8 {
+    const io = @import("../core/io_global.zig");
+    if (io.cwdAccess("/usr/bin/bwrap", .{})) |_| return "/usr/bin/bwrap" else |_| {}
+    return null;
+}
+
+/// macOS seatbelt or Linux bubblewrap around a plugin argv. Windows keeps the
+/// Lua prelude only: there is no equivalent per-spawn tool in the install.
+fn runPluginCommand(plugin_dir: []const u8, argv: []const []const u8, output: []u8, timeout_ms: u32) bounded_process.Result {
+    const pp = @import("plugins_pure.zig");
+    var profile: [2048]u8 = undefined;
+    var wrapped: [40][]const u8 = undefined;
+    const final_argv: []const []const u8 = switch (@import("builtin").os.tag) {
+        .macos => blk: {
+            const text = pp.seatbeltProfile(plugin_dir, &profile) orelse return .{ .failure = .spawn };
+            break :blk pp.wrapSeatbelt(text, argv, &wrapped) orelse return .{ .failure = .spawn };
+        },
+        .linux => blk: {
+            const bin = bwrapBin() orelse {
+                logs.pushLog("error", "plugins", "Linux plugins need bubblewrap (bwrap) installed", true);
+                return .{ .failure = .spawn };
+            };
+            const roots = pp.SandboxRoots{
+                .usr = linuxRoot("/usr"),
+                .lib = linuxRoot("/lib"),
+                .lib64 = linuxRoot("/lib64"),
+                .bin = linuxRoot("/bin"),
+                .sbin = linuxRoot("/sbin"),
+                .opt = linuxRoot("/opt"),
+                .etc = linuxRoot("/etc"),
+            };
+            break :blk pp.wrapBubblewrap(bin, plugin_dir, roots, argv, &wrapped) orelse return .{ .failure = .spawn };
+        },
+        else => argv,
+    };
+    return bounded_process.run(final_argv, output, .{ .timeout_ms = timeout_ms });
+}
+
+fn executeAndParse(plugin_dir: []const u8, argv: []const []const u8) void {
     var buf: [64 * 1024]u8 = undefined;
-    const run = bounded_process.run(argv, &buf, .{ .timeout_ms = 30_000 });
+    const run = runPluginCommand(plugin_dir, argv, &buf, 30_000);
     if (!run.ok()) {
         const name = if (active_plugin < plugin_count) plugins[active_plugin].name[0..plugins[active_plugin].name_len] else "plugin";
         logPluginProcessFailure(name, run);

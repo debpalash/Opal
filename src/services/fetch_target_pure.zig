@@ -187,6 +187,29 @@ pub fn hostOfUrl(url: []const u8) []const u8 {
     return stripDot(bf.hostOf(url));
 }
 
+/// Text passed to `getaddrinfo` for an address we already accepted. IPv4-mapped
+/// IPv6 is written as dotted IPv4. IPv6 is unbracketed so it is a numeric
+/// lookup, not a hostname.
+pub fn formatDialName(address: std.Io.net.IpAddress, buf: []u8) ?[]const u8 {
+    var w = std.Io.Writer.fixed(buf);
+    switch (address) {
+        .ip4 => |a| w.print("{d}.{d}.{d}.{d}", .{ a.bytes[0], a.bytes[1], a.bytes[2], a.bytes[3] }) catch return null,
+        .ip6 => |a| {
+            if (std.Io.net.Ip4Address.fromIp6(a)) |v4| {
+                w.print("{d}.{d}.{d}.{d}", .{ v4.bytes[0], v4.bytes[1], v4.bytes[2], v4.bytes[3] }) catch return null;
+            } else {
+                var i: usize = 0;
+                while (i < 16) : (i += 2) {
+                    if (i != 0) w.writeByte(':') catch return null;
+                    const group: u16 = (@as(u16, a.bytes[i]) << 8) | a.bytes[i + 1];
+                    w.print("{x}", .{group}) catch return null;
+                }
+            }
+        },
+    }
+    return buf[0..w.end];
+}
+
 test "private ranges cover loopback, metadata, cgnat, and documentation" {
     try std.testing.expect(isPrivateIpv4(.{ 127, 0, 0, 1 }));
     try std.testing.expect(isPrivateIpv4(.{ 10, 1, 2, 3 }));
@@ -230,6 +253,13 @@ test "download string gate allows public addresses and rejects private names" {
     try std.testing.expect(!downloadStringAllowed("http://127.0.0.1/"));
     try std.testing.expect(downloadPermitted("http://127.0.0.1:9/fixture", true));
     try std.testing.expect(downloadPermitted("http://[::1]/fixture", true));
+    var dial_buf: [64]u8 = undefined;
+    const v4 = std.Io.net.IpAddress.parse("1.1.1.1", 0) catch unreachable;
+    try std.testing.expectEqualStrings("1.1.1.1", formatDialName(v4, &dial_buf).?);
+    const v6 = std.Io.net.IpAddress.parse("2001:4860:4860::8888", 0) catch unreachable;
+    const v6_text = formatDialName(v6, &dial_buf).?;
+    try std.testing.expect(std.mem.indexOfScalar(u8, v6_text, ':') != null);
+    try std.testing.expect(std.mem.indexOfScalar(u8, v6_text, '[') == null);
     try std.testing.expect(!downloadPermitted("http://169.254.169.254/latest", true));
     try std.testing.expect(!downloadPermitted("http://10.0.0.1/", true));
     try std.testing.expect(!downloadPermitted("http://localhost/", true));
