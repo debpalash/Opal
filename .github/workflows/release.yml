@@ -110,12 +110,12 @@ jobs:
             makeself xauth xvfb
       - name: Vendor ONNX Runtime
         run: |
-          ORT_VER=1.20.1
-          curl -fsSL -o ort.tgz \
-            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/onnxruntime-linux-x64-${ORT_VER}.tgz"
-          tar xzf ort.tgz
-          sudo cp -r onnxruntime-linux-x64-${ORT_VER}/include/* /usr/local/include/
-          sudo cp -r onnxruntime-linux-x64-${ORT_VER}/lib/*     /usr/local/lib/
+          # Microsoft's NuGet build, pinned by hash (see the script).
+          scripts/vendor-onnxruntime.sh linux 1.20.1 \
+            9c32108e9a1c78b090a95c2a219f244dd5f067d4caf68fb0f967103f3f20839c \
+            "$RUNNER_TEMP/onnxruntime"
+          sudo cp -r "$RUNNER_TEMP/onnxruntime/include/"* /usr/local/include/
+          sudo cp -a "$RUNNER_TEMP/onnxruntime/lib/"*     /usr/local/lib/
           sudo ldconfig
       - name: Build (ReleaseSafe)
         # Bake the default TMDB/OMDb keys into the release binary (see build.zig).
@@ -397,10 +397,11 @@ jobs:
           # exactly what the vendored ort/onnxruntime_c_api.h header requests —
           # an older DLL would make OrtGetApiBase()->GetApi(24) return NULL and
           # silently disable OCR.
+          # Microsoft's NuGet build, pinned by hash (see the script).
           ORT_VER=1.24.4
-          curl -fsSL -o ort.zip \
-            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/onnxruntime-win-x64-${ORT_VER}.zip"
-          unzip -q ort.zip
+          scripts/vendor-onnxruntime.sh windows "$ORT_VER" \
+            4b978d5065b85e7004b6c6f60ca494bd978fbe6836cbf0a0b52d82b61ab99638 \
+            "onnxruntime-win-x64-${ORT_VER}"
           # pwd -W prints the Windows-style path (D:/a/...) so the value works
           # for zig and pwsh steps alike.
           echo "ONNXRUNTIME_DIR=$(pwd -W)/onnxruntime-win-x64-${ORT_VER}" >> "$GITHUB_ENV"

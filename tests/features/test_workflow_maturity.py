@@ -281,3 +281,25 @@ def test_poster_cache_readers():
     if missing:
         return "fail", "poster cache reader pool incomplete: " + ", ".join(missing)
     return "pass", "cache hits read on up to 8 read-only WAL connections; shared connection is the fallback"
+
+
+@test("Release jobs vendor ONNX Runtime from Microsoft's NuGet package, hash-pinned", "Build")
+def test_release_onnxruntime_vendor():
+    # Regression: github.com/microsoft/onnxruntime stopped serving release
+    # archives (Nov 2026) and the v0.9.7 Linux and Windows builds hit 404.
+    wf = _src(".github/workflows/release.yml")
+    sh = _src("scripts/vendor-onnxruntime.sh")
+    checks = {
+        "no GitHub release archive URL": "microsoft/onnxruntime/releases/download" not in wf,
+        "linux job uses the script": "scripts/vendor-onnxruntime.sh linux 1.20.1" in wf,
+        "windows job uses the script": 'scripts/vendor-onnxruntime.sh windows "$ORT_VER"' in wf and "ORT_VER=1.24.4" in wf,
+        "nuget source": "api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime" in sh,
+        "sha256 enforced": 'if [ "$got" != "$want" ]' in sh,
+        "https only": "--proto '=https'" in sh,
+        "linux soname recreated": "SONAME" in sh,
+        "windows import library": "onnxruntime.lib" in sh,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "ONNX Runtime vendoring incomplete: " + ", ".join(missing)
+    return "pass", "both release jobs fetch Microsoft's NuGet build, SHA-256 pinned"
