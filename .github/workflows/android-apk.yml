@@ -5,6 +5,7 @@ name: Android APK
 #     release and added to SHA256SUMS.txt. A failed Android build never blocks
 #     the desktop release.
 #   • workflow_dispatch re-attaches the APK to an existing release tag.
+#     Optional `ref` builds a later commit when the tagged source cannot build.
 #   • pull requests touching the Android build only build it (no upload).
 # Without OPAL_ANDROID_KEYSTORE secrets the APK is debug-signed.
 
@@ -19,6 +20,10 @@ on:
       tag:
         description: "Existing release tag to attach the APK to (for example v0.9.4)"
         required: true
+        type: string
+      ref:
+        description: "Commit or branch to build instead of the tag (for a build fix landed after tagging)"
+        required: false
         type: string
   pull_request:
     paths:
@@ -42,7 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
