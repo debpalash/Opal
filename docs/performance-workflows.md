@@ -183,3 +183,56 @@ python3 tests/test_browse_parallel_live.py --binary /path/to/opal
 python3 tests/test_audio_browse_progressive_live.py --binary /path/to/opal
 node --test tests/test_web_lifecycle.mjs
 ```
+
+## Reliability budgets and soak
+
+`tests/bench_reliability_live.py` drives an isolated headless binary through
+launch, navigation (seven API views), search cancellation against a stalled
+provider socket, artwork (first and cached), stream start, paused seek, reader
+page advance and player close. It records p50/p95 for each step plus CPU time,
+resident memory, OS threads and live descendant processes after each phase. A
+soak then runs 300 navigate/play/close cycles. It fails on any failed cycle,
+any player still active after close, any subprocess left after close, or any
+subprocess outliving a SIGTERM quit of the app. Fixtures are owned and served
+over loopback. Background services that try to reach the internet are refused
+by an owned proxy and listed under `rejected_external`.
+
+The gate is relative. A metric regresses only when it exceeds the baseline by
+more than 50% (`--threshold`) and also exceeds its unit's noise floor: 25 ms,
+250 ms CPU, 16 MiB RSS, 4 threads or 2 subprocesses. A metric missing from a
+new report also counts as a regression. Logic and tests live in
+`tests/reliability_budget.py` and `tests/test_reliability_budget.py`. The
+[baseline](benchmarks/reliability-baseline.json) is a Debug headless build on
+an Apple Silicon macOS workstation. Other agents' builds were running at the
+time (load average 5 to 19), so compare it only on the same machine class.
+The soak first exposed a real defect: the headless owner loop never drained
+deferred player removal, so `/api/player/action?action=close` reported success
+while playback continued. That loop now runs the shared `tickPlayers`.
+
+| Step | Samples | p50 / p95 |
+| --- | --- | --- |
+| Launch to health | 5 | 210.8 / 422.1 ms |
+| Navigate (API view) | 140 | 1.1 / 2.5 ms |
+| Search cancel to socket closed | 20 | 11.2 / 13.4 ms |
+| Stream start to advancing | 20 | 221.5 / 257.3 ms |
+| First / repeat artwork | 20 | 3.7 / 10.9, 0.7 / 4.7 ms |
+| Paused seek | 20 | 102.5 / 112.5 ms |
+| Reader page advance | 22 | 0.6 / 0.7 ms |
+| Close to no active player | 20 | 128.0 / 137.9 ms |
+
+Resident memory was 57 MiB when ready, 87 MiB at its peak (after search) and
+59 MiB after the soak. Peak worker threads were 30, during search fan-out. The
+300-cycle soak finished with zero failed cycles, orphan players or orphan
+subprocesses.
+
+```sh
+zig build -Dheadless=true --prefix /tmp/opal-headless
+python3 tests/bench_reliability_live.py --binary /tmp/opal-headless/bin/opal \
+  --results /tmp/reliability.json --baseline docs/benchmarks/reliability-baseline.json
+python3 tests/bench_reliability_live.py --check /tmp/reliability.json \
+  --baseline docs/benchmarks/reliability-baseline.json   # gate only, no launch
+```
+
+The live run is opt-in, not part of CI, because CI runners would need their own
+baseline. The feature suite runs the pure budget tests and validates the
+recorded baseline.

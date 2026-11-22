@@ -66,6 +66,7 @@ from features import (  # noqa: F401
     test_player,
     test_stability,
     test_workflow_maturity,
+    test_reliability,
     test_browse_parallel,
     test_browse_loading,
     test_browse_loading_maturity,

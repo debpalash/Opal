@@ -4,7 +4,7 @@
 
 # Opal
 
-### The Open-source Netflix, Spotify, Crunchyroll, Plex/Jellyfin alternative — in one native binary.
+### The Open-source Netflix, Spotify and Crunchyroll alternative, and a Plex/Jellyfin client — in one native binary.
 
 #### Movies, shows, comics, manga, TV, torrents, streaming, music, podcasts, radio, wallpapers and local ai
 

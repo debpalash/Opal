@@ -12,7 +12,6 @@ from collections import defaultdict
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
-import math
 import os
 from pathlib import Path
 import platform
@@ -27,13 +26,12 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import urlencode, urlsplit
 
+import reliability_budget
 import test_setup_token_live as live
 
 
-def summarize(values):
-    ordered = sorted(values)
-    return {"samples": len(values), "p50_ms": round(statistics.median(values), 3),
-            "p95_ms": round(ordered[max(0, math.ceil(len(ordered) * .95) - 1)], 3)}
+# One percentile definition for every benchmark (tests/reliability_budget.py).
+summarize = reliability_budget.summarize
 
 
 class Fixture(SimpleHTTPRequestHandler):
