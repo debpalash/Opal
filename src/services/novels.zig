@@ -2138,7 +2138,7 @@ fn fetchBody(url: []const u8, cap: usize) ?[]u8 {
 /// but routes the GET through scrapeFetch so a Cloudflare/DDoS-Guard/captcha-
 /// fronted scraper source (Madara-novel / lightnovelwp / readwn) resolves via the
 /// anti-detect browser when the plain fetch is challenged. Gated internally by the
-/// `scrape_use_browser` config toggle — OFF ⇒ plain HTTP, identical to `curl`.
+/// `extraction_browser_opt_in` config toggle — OFF ⇒ plain HTTP, identical to `curl`.
 ///
 /// Used for the HTML-scraper engines' search / chapter-list / chapter-text GETs.
 /// Wikisource's keyless JSON API stays on `curl` (never challenged, and a browser-

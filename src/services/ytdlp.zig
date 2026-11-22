@@ -7,6 +7,7 @@ const workers = @import("../core/workers.zig");
 const bounded_process = @import("../core/bounded_process.zig");
 const update_pure = @import("ytdlp_update_pure.zig");
 const sync = @import("../core/sync.zig");
+const helper_install = @import("../core/helper_install.zig");
 
 // yt-dlp GitHub releases URL for standalone binary
 const YTDLP_URL_LINUX = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
@@ -55,6 +56,11 @@ fn verifyWorker() void {
     // both guards against a truncated file that spawns and dies instantly.
     const ok = result.ok() and std.mem.trim(u8, result.output, " \r\n\t").len > 0;
     if (ok) return;
+    // A kept previous copy that still runs beats a PATH lookup.
+    if (rollback()) {
+        const again = bounded_process.run(&.{ path, "--version" }, &buf, .{ .timeout_ms = 30_000, .terminate_grace_ms = 150 });
+        if (again.ok() and std.mem.trim(u8, again.output, " \r\n\t").len > 0) return;
+    }
     // Stand down: getPath() goes null, so binary() can use a PATH install while
     // the checksum-verified replacement is downloaded in the background.
     existing_rejected.store(true, .release);
@@ -181,6 +187,7 @@ pub fn discoverExisting() bool {
     defer discovery_mutex.unlock();
     if (is_ready.load(.acquire)) return true;
     if (is_downloading.load(.acquire) or existing_rejected.load(.acquire)) return false;
+    cleanupStaleOnce();
 
     // Install under the app's REAL config dir (paths.configDir), not a
     // hand-rolled HOME + "/.config/opal".
@@ -250,69 +257,98 @@ pub fn update() void {
     };
 }
 
+const DL_URL = switch (builtin.os.tag) {
+    .macos => YTDLP_URL_MACOS,
+    .windows => YTDLP_URL_WINDOWS,
+    else => YTDLP_URL_LINUX,
+};
+const ASSET_NAME = switch (builtin.os.tag) {
+    .macos => "yt-dlp_macos",
+    .windows => "yt-dlp.exe",
+    else => "yt-dlp",
+};
+const EXE_NAME = if (builtin.os.tag == .windows) "yt-dlp.exe" else "yt-dlp";
+
+/// Hooks for helper_install: the release download, the staged `--version`
+/// probe, and shutdown as cancellation.
+const InstallHooks = struct {
+    fn fetch(_: ?*anyopaque, stage_path: []const u8) helper_install.FetchResult {
+        // HTTPS on every hop, status-checked (rejects GitHub error pages).
+        const dl = @import("reliable_fetch.zig").download(DL_URL, stage_path, .{
+            .timeout_secs = 120,
+            .connect_timeout_secs = 15,
+            .https_only = true,
+            .impersonate = false,
+        });
+        if (dl.failure == .cancelled) return .cancelled;
+        if (dl.ok()) return .ok;
+        return if (dl.status >= 400) .http_error else .transport;
+    }
+    fn probe(_: ?*anyopaque, stage_path: []const u8) bool {
+        var out: [1024]u8 = undefined;
+        const r = bounded_process.run(&.{ stage_path, "--version" }, &out, .{ .timeout_ms = 30_000 });
+        return r.ok() and update_pure.validVersionOutput(r.output);
+    }
+    fn cancelled(_: ?*anyopaque) bool {
+        return workers.isQuitting();
+    }
+};
+
+fn binDirPath(buf: []u8) ?[]const u8 {
+    var cfg_buf: [512]u8 = undefined;
+    const cfg = @import("../core/paths.zig").configDir(&cfg_buf);
+    return std.fmt.bufPrint(buf, "{s}/bin", .{cfg}) catch null;
+}
+
+/// Startup repair, once per process and never while a download runs: drop
+/// partial downloads and restore a kept copy a crash left without a live file.
+var stale_cleaned = std.atomic.Value(bool).init(false);
+fn cleanupStaleOnce() void {
+    if (stale_cleaned.swap(true, .acq_rel)) return;
+    var dir_buf: [512]u8 = undefined;
+    const dir_path = binDirPath(&dir_buf) orelse return;
+    const dir = io.openDirAbsolute(dir_path, .{}) catch return;
+    defer io.closeDir(dir);
+    const report = helper_install.cleanupStale(io.io(), dir, EXE_NAME);
+    if (report.removed > 0) logs.pushLog("info", "ytdlp", "Removed a partial yt-dlp download", false);
+    if (report.restored) logs.pushLog("warn", "ytdlp", "Restored the previous yt-dlp after an interrupted update", true);
+}
+
+/// Put the previous yt-dlp back (kept by the last update). False when there
+/// is no previous copy.
+pub fn rollback() bool {
+    if (is_downloading.load(.acquire)) return false;
+    var dir_buf: [512]u8 = undefined;
+    const dir_path = binDirPath(&dir_buf) orelse return false;
+    const dir = io.openDirAbsolute(dir_path, .{}) catch return false;
+    defer io.closeDir(dir);
+    if (!helper_install.rollback(io.io(), dir, EXE_NAME)) return false;
+    invalidateVersion();
+    logs.pushLog("info", "ytdlp", "Rolled back to the previous yt-dlp", true);
+    return true;
+}
+
 fn downloadWorker() void {
     defer {
         is_downloading.store(false, .release);
         state.wakeUi();
     }
 
-    const path = bin_path_buf[0..bin_path_len];
-    var stage_buf: [544]u8 = undefined;
-    const stage_path = std.fmt.bufPrint(
-        &stage_buf,
-        if (builtin.os.tag == .windows) "{s}.new.exe" else "{s}.new",
-        .{path},
-    ) catch return;
-    io.deleteFileAbsolute(stage_path) catch {};
-    defer io.deleteFileAbsolute(stage_path) catch {};
-
     // Ensure directory exists — same configDir() the install path above uses.
     // (This had the identical HOME bug: null on Windows meant an early return,
     // so the download never even started.)
     var dir_buf: [512]u8 = undefined;
-    var cfg_buf2: [512]u8 = undefined;
-    const cfg2 = @import("../core/paths.zig").configDir(&cfg_buf2);
-    const dir_path = @import("opal-fmt").bufPrintZ(&dir_buf, "{s}/bin", .{cfg2}) catch return;
+    const dir_path = binDirPath(&dir_buf) orelse return;
     io.cwdMakePath(dir_path) catch {};
 
-    const dl_url = switch (comptime builtin.os.tag) {
-        .macos => YTDLP_URL_MACOS,
-        .windows => YTDLP_URL_WINDOWS,
-        else => YTDLP_URL_LINUX,
-    };
-    const asset_name = switch (comptime builtin.os.tag) {
-        .macos => "yt-dlp_macos",
-        .windows => "yt-dlp.exe",
-        else => "yt-dlp",
-    };
-
-    // Download beside the live executable. --fail rejects GitHub error pages;
-    // HTTPS-only redirect policy prevents a compromised redirect from
-    // downgrading transport. The process supervisor owns timeout/tree cleanup.
-    // Through the reliable-fetch seam: status-checked (rejects GitHub error
-    // pages), atomic temp+rename into stage_path, HTTPS-only incl. redirects.
-    var helper_output: [1024]u8 = undefined;
-    const rf = @import("reliable_fetch.zig");
-    const download = rf.download(dl_url, stage_path, .{
-        .timeout_secs = 120,
-        .connect_timeout_secs = 15,
-        .https_only = true,
-        .impersonate = false,
-    });
-    if (workers.isQuitting() or download.failure == .cancelled) return;
-    if (!download.ok()) {
-        logs.pushLog("error", "ytdlp", "yt-dlp staged download failed; keeping the working version", true);
-        return;
-    }
-
+    // Checksum first: without it nothing is downloaded. The release CDN
+    // publishes several addresses and a single unreachable one can eat a whole
+    // attempt's connect budget, so the small sums file gets one retry.
     var sums_buf: [16 * 1024]u8 = undefined;
-    // The release CDN publishes several addresses and a single unreachable one
-    // can eat a whole attempt's connect budget; the binary is already staged,
-    // so one more try is cheaper than discarding a verified-able update.
     var sums_output: ?[]const u8 = null;
     var sums_attempt: u8 = 0;
     while (sums_output == null and update_pure.shouldFetchChecksums(sums_attempt, workers.isQuitting())) : (sums_attempt += 1) {
-        sums_output = rf.fetch(YTDLP_SUMS_URL, &sums_buf, .{
+        sums_output = @import("reliable_fetch.zig").fetch(YTDLP_SUMS_URL, &sums_buf, .{
             .timeout_secs = 30,
             .connect_timeout_secs = 15,
             .https_only = true,
@@ -324,57 +360,40 @@ fn downloadWorker() void {
         logs.pushLog("error", "ytdlp", "yt-dlp checksum download failed; keeping the working version", true);
         return;
     };
-    const expected = update_pure.expectedChecksum(sums, asset_name) orelse {
+    const expected = update_pure.expectedChecksum(sums, ASSET_NAME) orelse {
         logs.pushLog("error", "ytdlp", "yt-dlp release checksum is missing; refusing update", true);
         return;
     };
-    if (!fileChecksumMatches(stage_path, expected)) {
-        logs.pushLog("error", "ytdlp", "yt-dlp SHA-256 mismatch; refusing update", true);
-        return;
-    }
 
-    // Windows executes the staged .exe directly. POSIX needs the executable bit
-    // before the probe; never spawn a nonexistent chmod on Windows.
-    if (builtin.os.tag != .windows) {
-        const chmod = bounded_process.run(&.{ "chmod", "+x", stage_path }, &helper_output, .{ .timeout_ms = 5_000 });
-        if (!chmod.ok()) {
-            logs.pushLog("error", "ytdlp", "Could not mark staged yt-dlp executable", true);
-            return;
-        }
-    }
-
-    const probe = bounded_process.run(&.{ stage_path, "--version" }, &helper_output, .{ .timeout_ms = 30_000 });
-    if (!probe.ok() or !update_pure.validVersionOutput(probe.output)) {
-        logs.pushLog("error", "ytdlp", "Staged yt-dlp failed its version probe; keeping the working version", true);
-        return;
-    }
-    if (workers.isQuitting()) return;
-
-    // renameAbsolute replaces atomically. Until this line every player keeps
-    // using the previous executable; a failed publish leaves it untouched.
-    io.renameAbsolute(stage_path, path) catch {
-        logs.pushLog("error", "ytdlp", "Could not publish yt-dlp update; keeping the working version", true);
+    const dir = io.openDirAbsolute(dir_path, .{}) catch {
+        logs.pushLog("error", "ytdlp", "Could not open the yt-dlp folder; keeping the working version", true);
         return;
     };
+    defer io.closeDir(dir);
+
+    // Stage beside the live executable, verify SHA-256, set native
+    // permissions, run a bounded version probe, keep the previous copy, then
+    // publish with an atomic rename. Until publish every player keeps using
+    // the previous executable; any failure leaves it untouched.
+    const result = helper_install.install(io.io(), .{ .dir = dir, .dir_path = dir_path, .name = EXE_NAME }, .{
+        .expect = .{ .sha256_hex = expected },
+        .executable = true,
+    }, .{ .fetch = InstallHooks.fetch, .probe = InstallHooks.probe, .cancelled = InstallHooks.cancelled });
+    if (!result.ok()) {
+        const failure = result.failure orelse return;
+        if (failure == .cancelled) return;
+        logs.pushLog("error", "ytdlp", switch (failure) {
+            .checksum_mismatch, .size_mismatch, .empty => "yt-dlp SHA-256 mismatch; refusing update",
+            .probe_failed => "Staged yt-dlp failed its version probe; keeping the working version",
+            .permissions => "Could not mark staged yt-dlp executable",
+            .fetch_http, .fetch_transport => "yt-dlp staged download failed; keeping the working version",
+            else => "Could not publish yt-dlp update; keeping the working version",
+        }, true);
+        return;
+    }
     existing_rejected.store(false, .release);
     is_ready.store(true, .release);
     invalidateVersion(); // re-query the version after a fresh download/update
     logs.pushLog("info", "ytdlp", "yt-dlp binary ready!", true);
     state.showToast("yt-dlp updated successfully!");
-}
-
-fn fileChecksumMatches(path: []const u8, expected: []const u8) bool {
-    const file = io.openFileAbsolute(path, .{}) catch return false;
-    defer io.closeFile(file);
-    var sha = std.crypto.hash.sha2.Sha256.init(.{});
-    var buf: [64 * 1024]u8 = undefined;
-    while (true) {
-        if (workers.isQuitting()) return false;
-        const n = io.read(file, &buf) catch return false;
-        if (n == 0) break;
-        sha.update(buf[0..n]);
-    }
-    var actual: [32]u8 = undefined;
-    sha.final(&actual);
-    return update_pure.checksumMatches(expected, actual);
 }

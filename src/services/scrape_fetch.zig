@@ -5,17 +5,19 @@ const browser = @import("browser.zig");
 const pure = @import("scrape_fetch_pure.zig");
 const reliable_fetch = @import("reliable_fetch.zig");
 const browser_fetch = @import("browser_fetch.zig");
+const policy = @import("extraction_policy_pure.zig");
 
 // ══════════════════════════════════════════════════════════
-// Anti-block scrape fetch — the "never blocked" fetch layer
+// Anti-block scrape fetch
 //
 // scrapeFetch() is a drop-in replacement for the plain-HTTP / curl fetch every
-// scraper does today, with one difference: when the fast plain fetch comes
-// back as a Cloudflare / DDoS-Guard / JS-challenge / captcha interstitial (see
-// scrape_fetch_pure.needsBrowser), it transparently RE-FETCHES the same URL
-// through Opal's already-integrated anti-detect browser (camoufox /
-// CloakBrowser via the Playwright bridge), which passes those challenges, and
-// returns the unblocked HTML/JSON instead.
+// scraper does today. When the fast plain fetch comes back as a Cloudflare /
+// DDoS-Guard / JS-challenge / captcha interstitial (see
+// scrape_fetch_pure.needsBrowser) AND the user has opted in
+// (`extraction_browser_opt_in`, default off), it re-fetches the same URL
+// through the paired browser, then the anti-detect engine (camoufox /
+// CloakBrowser via the Playwright bridge). The order and the typed outcome
+// come from extraction_policy_pure; without the opt-in no browser is used.
 //
 // SYNCHRONOUS — call from a scraper WORKER thread (exactly like curl today),
 // never the UI thread. The browser fallback can block up to ~45s.
@@ -35,14 +37,34 @@ var announced = std.atomic.Value(bool).init(false);
 
 fn announceReady() void {
     if (announced.swap(true, .acq_rel)) return;
-    logs.pushLog("info", "scrape", "Anti-block fetch ready (browser fallback on Cloudflare/captcha)", true);
+    logs.pushLog("info", "scrape", if (state.app.extraction_browser_opt_in)
+        "Anti-block fetch ready (browser fallback on Cloudflare/captcha is on)"
+    else
+        "Anti-block fetch ready (browser fallback is off until you opt in)", false);
 }
 
-/// Is the browser-backed fallback usable right now? Config toggle ON and an
-/// anti-detect engine installed.
-fn browserFallbackAvailable() bool {
-    if (!state.app.scrape_use_browser) return false;
-    return browser.engineReady(browser.active_engine);
+/// What the browser tiers look like right now. The opt-in is read first: with
+/// it off, nothing else about the browsers is consulted.
+fn availability() policy.Availability {
+    if (!state.app.extraction_browser_opt_in) return .{};
+    return .{
+        .opted_in = true,
+        .paired_connected = browser_fetch.connected(),
+        .engine_ready = browser.engineReady(browser.active_engine),
+    };
+}
+
+/// A typed fetch result: the body (into the caller's buffer) when the outcome
+/// is `.ok`, the tier that produced it, and why it failed otherwise.
+pub const Fetch = struct {
+    outcome: policy.Outcome,
+    tier: policy.Tier = .plain,
+    body: ?[]const u8 = null,
+};
+
+/// `/api/scrape` error body naming the typed outcome.
+pub fn errorJson(buf: []u8, outcome: policy.Outcome) []const u8 {
+    return std.fmt.bufPrint(buf, "{{\"error\":\"fetch failed\",\"outcome\":\"{s}\"}}", .{outcome.label()}) catch "{\"error\":\"fetch failed\"}";
 }
 
 /// Plain HTTP GET via curl, capturing the final status code, response headers,
@@ -83,12 +105,11 @@ fn plainFetch(
     return result.body;
 }
 
-/// Fetch `url` into `out_buf`, transparently defeating Cloudflare/DDoS-Guard/
-/// captcha blocks via the anti-detect browser when the plain fetch is blocked.
-/// Returns the (possibly browser-unblocked) body, or null if nothing could be
-/// fetched. SYNCHRONOUS — worker-thread only.
+/// Fetch `url` into `out_buf`. A challenge page is retried through a browser
+/// only with the user's opt-in (see extraction_policy_pure). Returns the body,
+/// or null if nothing could be fetched. SYNCHRONOUS — worker-thread only.
 pub fn scrapeFetch(url: []const u8, out_buf: []u8) ?[]const u8 {
-    return scrapeFetchBody(url, null, out_buf, null);
+    return scrapeFetchBody(url, null, out_buf, null).body;
 }
 
 /// POST variant. `post_body` is sent as `application/x-www-form-urlencoded` on
@@ -97,6 +118,12 @@ pub fn scrapeFetch(url: []const u8, out_buf: []u8) ?[]const u8 {
 /// which is what gates its magnet links) is reachable through the unblock path
 /// rather than only over GET.
 pub fn scrapeFetchPost(url: []const u8, post_body: []const u8, out_buf: []u8) ?[]const u8 {
+    return scrapeFetchBody(url, post_body, out_buf, null).body;
+}
+
+/// Typed variant: the outcome says why a fetch came back empty (refused
+/// target, HTTP error, blocked without the browser opt-in, ...).
+pub fn scrapeFetchTyped(url: []const u8, post_body: ?[]const u8, out_buf: []u8) Fetch {
     return scrapeFetchBody(url, post_body, out_buf, null);
 }
 
@@ -104,7 +131,7 @@ pub fn scrapeFetchPost(url: []const u8, post_body: []const u8, out_buf: []u8) ?[
 /// request is cancelled physically. An already-issued browser scrape must drain
 /// its shared response before another scrape can safely acquire the single page.
 pub fn scrapeFetchWithCancellation(url: []const u8, out_buf: []u8, epoch: ?@import("../core/bounded_process.zig").CancelEpoch) ?[]const u8 {
-    return scrapeFetchBody(url, null, out_buf, epoch);
+    return scrapeFetchBody(url, null, out_buf, epoch).body;
 }
 fn cancelled(epoch: ?@import("../core/bounded_process.zig").CancelEpoch) bool {
     const token = epoch orelse return false;
@@ -113,13 +140,17 @@ fn cancelled(epoch: ?@import("../core/bounded_process.zig").CancelEpoch) bool {
         .epoch64 => |e| e.value.load(.acquire) != e.expected,
     };
 }
-fn scrapeFetchBody(requested_url: []const u8, requested_post: ?[]const u8, out_buf: []u8, cancel_epoch: ?@import("../core/bounded_process.zig").CancelEpoch) ?[]const u8 {
+
+const cancelled_fetch: Fetch = .{ .outcome = .cancelled };
+const refused_fetch: Fetch = .{ .outcome = .refused_target };
+
+fn scrapeFetchBody(requested_url: []const u8, requested_post: ?[]const u8, out_buf: []u8, cancel_epoch: ?@import("../core/bounded_process.zig").CancelEpoch) Fetch {
     announceReady();
-    if (requested_url.len == 0 or out_buf.len == 0 or cancelled(cancel_epoch)) return null;
-    if (requested_url.len > 2048) return null;
+    if (cancelled(cancel_epoch)) return cancelled_fetch;
+    if (requested_url.len == 0 or out_buf.len == 0 or requested_url.len > 2048) return refused_fetch;
 
     const targets = @import("fetch_target.zig");
-    const policy = @import("fetch_target_pure.zig");
+    const target_policy = @import("fetch_target_pure.zig");
     const http_pure = @import("../core/http_std_pure.zig");
 
     var url_buf: [2048]u8 = undefined;
@@ -134,21 +165,21 @@ fn scrapeFetchBody(requested_url: []const u8, requested_post: ?[]const u8, out_b
     var body: ?[]const u8 = null;
     var hop: u8 = 0;
     while (true) {
-        if (cancelled(cancel_epoch)) return null;
+        if (cancelled(cancel_epoch)) return cancelled_fetch;
         const current = url_buf[0..current_len];
         var pin_buf: [512]u8 = undefined;
         const pin = targets.vetScrape(current, &pin_buf) orelse {
             logs.pushLog("warn", "scrape", "Blocked private network target", false);
-            return null;
+            return refused_fetch;
         };
         body = plainFetch(current, post, out_buf, &hdr_buf, &hdr_len, &status, &plain_succeeded, cancel_epoch, if (pin.len > 0) pin else null);
-        if (cancelled(cancel_epoch)) return null;
+        if (cancelled(cancel_epoch)) return cancelled_fetch;
         if (!http_pure.isRedirect(status)) break;
-        if (hop == http_pure.max_redirects) return null;
-        const loc = policy.locationHeader(hdr_buf[0..hdr_len]) orelse return null;
+        if (hop == http_pure.max_redirects) return .{ .outcome = .http_error };
+        const loc = target_policy.locationHeader(hdr_buf[0..hdr_len]) orelse return .{ .outcome = .http_error };
         var next_buf: [2048]u8 = undefined;
-        const next = policy.joinRedirect(current, loc, &next_buf) orelse return null;
-        if (next.len > url_buf.len) return null;
+        const next = target_policy.joinRedirect(current, loc, &next_buf) orelse return refused_fetch;
+        if (next.len > url_buf.len) return refused_fetch;
         @memcpy(url_buf[0..next.len], next);
         current_len = next.len;
         if (http_pure.redirectDropsBody(status, post != null, false)) post = null;
@@ -163,44 +194,56 @@ fn scrapeFetchBody(requested_url: []const u8, requested_post: ?[]const u8, out_b
     const body_head = if (body) |b| b[0..@min(b.len, 16 * 1024)] else "";
     const headers = hdr_buf[0..hdr_len];
 
-    // Not blocked → the fast path result stands. A redirect body is not content;
-    // the loop above only arrives here for a non-redirect status.
-    if (!pure.needsBrowser(status, headers, body_head)) {
-        // The typed fetch may intentionally expose an error body for challenge
-        // classification, but a 4xx/5xx document is never scraper content.
-        return if (plain_succeeded) body else null;
+    // A redirect body is not content; the loop above only arrives here for a
+    // non-redirect status. A 4xx/5xx document is never scraper content either.
+    switch (policy.classifyPlain(.{
+        .succeeded = plain_succeeded,
+        .status = status,
+        .challenge = pure.needsBrowser(status, headers, body_head),
+    })) {
+        .content => return .{ .outcome = .ok, .body = body orelse out_buf[0..0] },
+        .http_error => return .{ .outcome = .http_error },
+        .unreachable_host => return .{ .outcome = .unreachable_host },
+        .challenge => {},
     }
 
-    // Blocked. First ask the user's own paired browser: it has their cookies
-    // and a real fingerprint, and needs no Python or engine download. It never
-    // prompts from here (an origin the user has not allowed answers "not
-    // allowed" at once; a private-network target is refused the same way unless the
-    // user named it). A page that is
-    // still a challenge, or an error status, falls through to the bridge.
-    // The URL is the hop that was actually fetched, already vetted above.
-    if (cancelled(cancel_epoch)) return null;
-    if (browser_fetch.fetchText(url, post_body, out_buf, cancel_epoch)) |t| {
-        if (cancelled(cancel_epoch)) return null;
-        const head = t.body[0..@min(t.body.len, 16 * 1024)];
-        if (t.status < 400 and t.body.len > 0 and !pure.needsBrowser(t.status, "", head)) {
-            logs.pushLog("info", "scrape", "Blocked: fetched through the paired browser", true);
-            return t.body;
+    // Blocked. Every browser tier below comes from policy.browserTiers, which
+    // is empty unless the user opted in. The URL is the hop that was actually
+    // fetched, already vetted above.
+    const avail = availability();
+    const plan = policy.browserTiers(avail);
+    var tried: usize = 0;
+    for (plan.slice()) |tier| {
+        if (cancelled(cancel_epoch)) return cancelled_fetch;
+        tried += 1;
+        switch (tier) {
+            .plain => unreachable,
+            // The user's own paired browser. It never prompts from here (an
+            // origin the user has not allowed answers "not allowed" at once).
+            .paired_browser => if (browser_fetch.fetchText(url, post_body, out_buf, cancel_epoch)) |t| {
+                if (cancelled(cancel_epoch)) return cancelled_fetch;
+                const head = t.body[0..@min(t.body.len, 16 * 1024)];
+                if (policy.browserAnswerUsable(t.status, t.body.len, pure.needsBrowser(t.status, "", head))) {
+                    logs.pushLog("info", "scrape", "Blocked: fetched through the paired browser", true);
+                    return .{ .outcome = .ok, .tier = tier, .body = t.body };
+                }
+            },
+            .antidetect_browser => {
+                logs.pushLog("info", "scrape", "Blocked — retrying through the anti-detect browser", true);
+                const unblocked = browser.fetchHtmlWithCancellation(url, post_body, out_buf, cancel_epoch);
+                if (cancelled(cancel_epoch)) return cancelled_fetch;
+                if (unblocked) |html| return .{ .outcome = .ok, .tier = tier, .body = html };
+            },
         }
     }
 
-    // Then the anti-detect browser, if it is available.
-    if (cancelled(cancel_epoch)) return null;
-    if (!browserFallbackAvailable()) {
-        logs.pushLog("warn", "scrape", "Blocked page and browser fallback is off/unavailable", false);
-        return null;
-    }
-
-    logs.pushLog("info", "scrape", "Blocked — retrying through the anti-detect browser", true);
-    const unblocked = browser.fetchHtmlWithCancellation(url, post_body, out_buf, cancel_epoch);
-    if (cancelled(cancel_epoch)) return null;
-    if (unblocked) |html| return html;
-
-    // Browser path failed/timed out. Never hand the original challenge/error
-    // document to a parser as though it were the requested content.
-    return null;
+    // Never hand the original challenge/error document to a parser as though
+    // it were the requested content.
+    const outcome = policy.blockedOutcome(avail, tried);
+    logs.pushLog("warn", "scrape", switch (outcome) {
+        .blocked_opt_in_required => "Blocked page; browser fallback is off (opt in under Network settings)",
+        .blocked_no_browser => "Blocked page; no paired browser or installed browser engine",
+        else => "Blocked page; the browser fallback also failed",
+    }, false);
+    return .{ .outcome = outcome };
 }

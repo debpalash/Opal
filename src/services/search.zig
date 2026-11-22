@@ -1106,12 +1106,16 @@ pub fn triggerSearch(query_text: []const u8) void {
     // the engines are still fetching, and it is already warm (~2s per scrape) by
     // the time one of them is actually blocked.
     //
-    // Gated on the user having opted into browser-backed scraping AND having an
+    // Gated by extraction_policy_pure.shouldPrewarm: the browser opt-in AND an
     // engine installed, so this never spawns a ~200 MB browser for someone who
     // does not use it. ensureBridge() is itself a no-op once running.
-    if (state.app.scrape_use_browser) {
+    {
         const browser = @import("browser.zig");
-        if (browser.engineReady(browser.active_engine)) browser.ensureBridge();
+        const policy = @import("extraction_policy_pure.zig");
+        if (policy.shouldPrewarm(.{
+            .opted_in = state.app.extraction_browser_opt_in,
+            .engine_ready = browser.engineReady(browser.active_engine),
+        })) browser.ensureBridge();
     }
 
     history.addSearchHistory(query_text);
