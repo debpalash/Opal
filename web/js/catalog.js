@@ -198,6 +198,16 @@ $('queue-next').onclick = () => changeQueue('next');
 $('queue-shuffle').onclick = () => changeQueue('toggle-shuffle');
 $('queue-repeat').onclick = () => changeQueue('cycle-repeat');
 
+// One button per real target from the shared identity card: "Play here" when
+// this browser can decode or transcode it, "Play on Opal" when a desktop host
+// exists. Never one toggle-dependent button that hides the other choice.
+function downloadPlayButtons(item, name){
+  const n = encodeURIComponent(name);
+  return identityActions(item.identity)
+    .filter(action => action.id === 'play_here' || action.id === 'play_on_opal')
+    .map(action => `<button class="play" data-file-play="${action.id}" data-n="${n}">${esc(action.label)}</button>`).join('');
+}
+
 async function loadDownloads(){
   try {
     const d = await api('/downloads');
@@ -228,7 +238,7 @@ async function loadDownloads(){
       const detail = item.is_dir ? 'Folder' : fmtSize(item.size);
       return `<div class="file"><div class="n">${esc(name)}${detail ? `<div class="file-meta">${esc(detail)}</div>` : ''}</div>
         <div class="transfer-actions">
-          ${item.is_dir ? '' : `<button class="play" data-destination-verb="Play" data-n="${encodeURIComponent(name)}">${destinationActionLabel('Play')}</button>`}
+          ${item.is_dir ? '' : downloadPlayButtons(item, name)}
           ${HOSTED ? '' : `<button data-file-action="reveal" data-n="${encodeURIComponent(name)}">Reveal</button>`}
           <button data-file-action="remove" data-n="${encodeURIComponent(name)}">Remove from list</button>
           <button class="danger" data-file-action="delete" data-n="${encodeURIComponent(name)}">Delete from disk</button>
@@ -237,13 +247,14 @@ async function loadDownloads(){
       ? `<div class="empty">${files.length - cap} more not shown — newest ${cap} listed</div>` : '')
       || '<div class="empty">No downloaded files</div>';
     if (!setSafeHtml(downloads, filesHtml)) return;
-    downloads.querySelectorAll('.play').forEach(button => button.onclick = () => {
+    downloads.querySelectorAll('[data-file-play]').forEach(button => button.onclick = () => {
       const rel = decodeURIComponent(button.dataset.n);
-      if (HOSTED) return openPlayer(rel);
-      dispatchPlay(streamUrl(rel), rel, () => {
-        button.textContent = 'Sent ✓';
-        apiMutation('/downloads/play?file=' + button.dataset.n).catch(()=>{});
-      }, rel);
+      if (button.dataset.filePlay === 'play_here') {
+        if (HOSTED) return openPlayer(rel);
+        return playInBrowser(streamUrl(rel), rel, rel);
+      }
+      button.textContent = 'Sent ✓';
+      apiMutation('/downloads/play?file=' + button.dataset.n).catch(() => { button.textContent = 'Retry on Opal'; });
     });
     downloads.querySelectorAll('[data-file-action]').forEach(button => button.onclick = async () => {
       const action = button.dataset.fileAction, name = decodeURIComponent(button.dataset.n || '');

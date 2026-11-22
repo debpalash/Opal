@@ -64,7 +64,7 @@ $('search-cancel').onclick = async () => {
       $('search-hint').textContent += ' Search stopped; loaded titles remain available.';
     } catch (error) {
       if (stoppedRun !== unifiedSearchRun) return;
-      if (unifiedSearchPayload?.generation === generation) renderUnifiedResults({...unifiedSearchPayload, loading:false, results:unifiedSearchPayload.results.map(row => ({...row, key:'', queueable:false}))});
+      if (unifiedSearchPayload?.generation === generation) renderUnifiedResults({...unifiedSearchPayload, loading:false, results:unifiedSearchPayload.results.map(row => ({...row, key:'', queueable:false, identity:row.identity && {...row.identity, actions:identityActions(row.identity).filter(action => action.id !== 'queue')}}))});
       $('search-hint').textContent = error?.message || 'Search stopped. Refresh before opening loaded titles.';
     }
   } catch (error) {
@@ -224,12 +224,10 @@ function unifiedResultCount(payload){
   if (unavailable.length) text += ` · ${unavailable.length} source${unavailable.length === 1 ? ' needs' : 's need'} attention`;
   return text + '.';
 }
-function unifiedActionLabel(source){
-  if (source === 'comics' || source === 'novels' || source === 'opds') return 'Read';
-  if (source === 'vndb' || source === 'tmdb') return 'View details';
-  if (source === 'audiobooks') return 'Open audio';
-  if (source === 'podcast' || source === 'anime') return 'Open';
-  return 'Play on Opal';
+// The verb comes from the row's shared identity card (identity.js), the same
+// one native search renders, so the two can never label a result differently.
+function unifiedActionLabel(row){
+  return identityPrimaryAction(row?.identity)?.label || 'Open';
 }
 function unifiedArtwork(value){
   if (typeof value !== 'string' || !value) return '';
@@ -342,7 +340,8 @@ let selectedSearchWork = null;
 function searchWorkIdentity(row){
   // Only provider-issued typed identity may combine releases/catalog entries.
   if (typeof row.work_key === 'string' && /^[a-z0-9:_-]{1,160}$/i.test(row.work_key)) return 'work:' + row.work_key;
-  if (row.source === 'tmdb' && ['movie', 'tv'].includes(row.media) && Number.isSafeInteger(Number(row.id)) && Number(row.id) > 0) return `tmdb:${row.media}:${row.id}`;
+  const shared = mediaIdentityKey(row);
+  if (shared) return 'id:' + shared;
   return 'row:' + String(row.source || '') + ':' + String(row.key || '');
 }
 function groupSearchRows(rows){
@@ -371,7 +370,7 @@ function searchRowSources(row, generation, index){
   return `<details class="search-row-sources"><summary>${sources.length} sources</summary><div class="search-row-source-list">${sources.map(source => `<button class="play-source" data-i="${index}" data-gen="${generation}" data-source="${source.index}">${esc(source.label || 'Source ' + (source.index + 1))}</button>`).join('')}</div></details>`;
 }
 function searchRowActions(row, generation, index){
-  return `<div class="search-card-actions">${row.queueable ? `<button class="queue-btn" data-i="${index}" data-gen="${generation}">Queue</button>` : ''}<button class="play" data-i="${index}" data-gen="${generation}"${row.key ? '' : ' disabled'}>${unifiedActionLabel(row.source)}</button></div>${searchRowSources(row, generation, index)}`;
+  return `<div class="search-card-actions">${identityHas(row.identity, 'queue') ? `<button class="queue-btn" data-i="${index}" data-gen="${generation}">Queue</button>` : ''}<button class="play" data-i="${index}" data-gen="${generation}"${row.key ? '' : ' disabled'}>${esc(unifiedActionLabel(row))}</button></div>${searchRowSources(row, generation, index)}`;
 }
 function confidentSearchFeature(groups){
   const query = $('q').value.trim().toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
@@ -426,7 +425,7 @@ function renderSearchDetail(group, generation){
     <div class="search-detail-content">${artwork ? `<img class="search-detail-art" src="${esc(artwork)}" alt="" referrerpolicy="no-referrer">` : ''}<div class="search-detail-copy"><h2>${esc(row.title)}</h2>
       ${row.author ? `<p class="search-detail-author">${esc(row.author)}</p>` : ''}${row.summary ? `<p class="search-detail-summary">${esc(row.summary)}</p>` : '<p class="search-detail-summary">Choose an available source below.</p>'}
       ${row.source === 'tmdb' && row.id > 0 && ['movie','tv'].includes(row.media) ? `<button id="search-preview-start" class="search-preview-start">Preview trailer</button><div id="search-preview-slot">${searchPreviewMarkup}</div>` : ''}
-      <h3>Available sources</h3><div class="search-source-options">${group.rows.map((variant, i) => `<div class="search-source-option"><div><strong>${esc(variant.provider || variant.source || 'Source')}</strong><span>${esc([searchReleaseMetadata(variant), variant.detail].filter(Boolean).join(' · ') || unifiedActionLabel(variant.source))}</span></div><div>${variant.can_prefer ? `<button data-detail-prefer="${i}" aria-pressed="${variant.preferred === true}">${variant.preferred ? 'Preferred provider' : 'Prefer provider'}</button>` : ''}${variant.queueable ? `<button data-detail-queue="${i}">Queue</button>` : ''}<button data-detail-play="${i}"${variant.key ? '' : ' disabled'}>${unifiedActionLabel(variant.source)}</button></div></div>`).join('')}</div></div></div>`;
+      <h3>Available sources</h3><div class="search-source-options">${group.rows.map((variant, i) => `<div class="search-source-option"><div><strong>${esc(variant.provider || variant.source || 'Source')}</strong><span>${esc([searchReleaseMetadata(variant), variant.detail].filter(Boolean).join(' · ') || unifiedActionLabel(variant))}</span></div><div>${variant.can_prefer ? `<button data-detail-prefer="${i}" aria-pressed="${variant.preferred === true}">${variant.preferred ? 'Preferred provider' : 'Prefer provider'}</button>` : ''}${identityHas(variant.identity, 'queue') ? `<button data-detail-queue="${i}">Queue</button>` : ''}<button data-detail-play="${i}"${variant.key ? '' : ' disabled'}>${esc(unifiedActionLabel(variant))}</button></div></div>`).join('')}</div></div></div>`;
   $('search-detail').querySelectorAll('[data-detail-prefer]').forEach(button => button.onclick = async () => {
     const variant = group.rows[Number(button.dataset.detailPrefer)];
     if (!variant?.key) return;
@@ -506,7 +505,7 @@ async function runUnifiedAction(r, generation, action, button, source = 0){
     toast(action === 'queue' ? 'Added to queue' : 'Opening in Opal');
   } catch (error) {
     button.disabled = false;
-    button.textContent = action === 'queue' ? 'Retry queue' : source > 0 ? restoreLabel : unifiedActionLabel(r.source);
+    button.textContent = action === 'queue' ? 'Retry queue' : source > 0 ? restoreLabel : unifiedActionLabel(r);
     toast(error?.message || 'Result changed; search again');
   }
 }

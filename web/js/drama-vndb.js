@@ -52,11 +52,15 @@ async function runDrama(){
     if (generation === dramaGeneration) pollDrama(generation);
   } catch { if (generation === dramaGeneration) failBrowse('dr-results', 'dr-hint', 'Could not search Asian dramas. Try again.'); }
 }
-async function showDramaEpisodes(index, target){
+// `current` is the caller's selection-token check: the dialog element is
+// shared, so a list that finishes after another title opened must not land.
+async function showDramaEpisodes(index, target, current = () => true){
+  if (!current()) return;
   target.style.whiteSpace = 'pre-line'; target.style.maxHeight = '40vh'; target.style.overflow = 'auto';
   const base = target.dataset.base || '';
   for (let tick = 0; tick < 40; tick++) {
     const d = await api('/drama/episodes?idx=' + encodeURIComponent(index));
+    if (!current()) return;
     if (d.state === 'ready') {
       target.textContent = (base ? base + '\n\n' : '') + (d.results.length
         ? d.results.map(e => `S${e.season} ${e.number ? 'E' + String(e.number).padStart(2, '0') : 'Special'}  ${e.name}${e.airdate ? '  (' + e.airdate + ')' : ''}`).join('\n')
@@ -66,6 +70,7 @@ async function showDramaEpisodes(index, target){
     if (d.state === 'failed') { target.textContent = (base ? base + '\n\n' : '') + 'Could not load the episode list.'; return; }
     target.textContent = (base ? base + '\n\n' : '') + 'Loading episodes…';
     await new Promise(resolve => setTimeout(resolve, 500));
+    if (!current()) return;
   }
 }
 function renderDrama(rows, loading = false){

@@ -21,7 +21,7 @@ test('Search facets count matching rows and retain opaque generation actions', (
     globalThis.fmtSize = size => String(size) + ' B';
     const searchFixture = {generation:42, loading:false, returned:3, total:3, sources:[], results:[
       {title:'Runner catalog', source:'tmdb', content_kind:'movies', playable:false, key:'a', score:1},
-      {title:'Runner release', source:'torrent', provider:'yts', content_kind:'movies', torrent:true, quality:3, seeds:25, leech:2, size_bytes:2147483648, key:'b', queueable:true, score:2},
+      {title:'Runner release', source:'torrent', provider:'yts', content_kind:'movies', torrent:true, quality:3, seeds:25, leech:2, size_bytes:2147483648, key:'b', queueable:true, identity:{key:'other:local:b',actions:[{id:'play_on_opal',label:'Play on Opal'},{id:'queue',label:'Queue'}]}, score:2},
       {title:'Unknown size', source:'torrent', provider:'nova', torrent:true, quality:3, seeds:30, key:'c', score:3}
     ]};
     $('search-availability').value = 'torrents';
@@ -191,6 +191,11 @@ function fixture(...files){
     fetch: async () => ({status:200, ok:true, json:async () => ({})}),
     toast(){},
   });
+  // The page loads the shared identity reader right after core.js.
+  if (!files.includes('identity.js')) {
+    try { vm.runInContext(source('identity.js'), context, {filename:'identity.js'}); }
+    catch (error) { if (!process.env.OPAL_WEB_REVISION) throw error; }
+  }
   for (const file of files) {
     // Browse bundles share the same loading dependency as the production page.
     if (file === 'media.js' && !files.includes('browse-loading.js')) {
@@ -931,11 +936,11 @@ test('offline shell includes every script loaded by the production document', ()
 test('Search discovery never groups unrelated releases by title', () => {
   const f = fixture('catalog.js');
   f.run(`globalThis.visualRows = [
-    {title:'Arrival', source:'tmdb', media:'movie', id:12, key:'a'},
-    {title:'Arrival', source:'tmdb', media:'movie', id:12, key:'b'},
-    {title:'Arrival', source:'tmdb', media:'tv', id:12, key:'c'},
-    {title:'Arrival 1080p', source:'torrent', key:'d'},
-    {title:'Arrival 1080p', source:'torrent', key:'e'}];`);
+    {title:'Arrival', source:'tmdb', media:'movie', id:12, key:'a', identity:{key:'film:tmdb:12'}},
+    {title:'Arrival', source:'tmdb', media:'movie', id:12, key:'b', identity:{key:'film:tmdb:12'}},
+    {title:'Arrival', source:'tmdb', media:'tv', id:12, key:'c', identity:{key:'series:tmdb:12'}},
+    {title:'Arrival 1080p', source:'torrent', key:'d', identity:{key:'other:local:d'}},
+    {title:'Arrival 1080p', source:'torrent', key:'e', identity:{key:'other:local:e'}}];`);
   assert.equal(f.run('groupSearchRows(visualRows).length'), 4);
   assert.equal(f.run('groupSearchRows(visualRows)[0].rows.length'), 2);
   assert.equal(f.run('groupSearchRows([{title:"Missing key"},{title:"Missing key"}]).length'), 2);
@@ -973,7 +978,7 @@ test('Search selected title compares actual source variants with opaque actions'
   const f = fixture('catalog.js');
   f.run(`globalThis.fmtSize=String;globalThis.detailGroup={identity:'tmdb:movie:1',kind:'movies',row:{title:'Film',summary:'Real provider summary',source:'tmdb',key:'a'},rows:[
     {title:'Film',source:'tmdb',provider:'catalog',key:'a'},
-    {title:'Film 1080p',source:'torrent',provider:'yts',key:'b',torrent:true,quality:3,seeds:35,queueable:true}]};renderSearchDetail(detailGroup,41);`);
+    {title:'Film 1080p',source:'torrent',provider:'yts',key:'b',torrent:true,quality:3,seeds:35,queueable:true,identity:{key:'other:local:b',actions:[{id:'play_on_opal',label:'Play on Opal'},{id:'queue',label:'Queue'}]}}]};renderSearchDetail(detailGroup,41);`);
   assert.equal(f.$('search-detail').hidden, false);
   assert.match(f.$('search-detail').innerHTML, /Real provider summary/);
   assert.match(f.$('search-detail').innerHTML, /catalog/);
@@ -1007,7 +1012,7 @@ test('Search grouped facets retain catalog artwork while matching an attached to
   f.$('search-availability').value = 'torrents';
   f.run(`globalThis.fmtSize=String;renderUnifiedResults({generation:42,results:[
     {title:'Authoritative title',source:'tmdb',media:'movie',id:1,content_kind:'movies',work_key:'abc',work_category:'movies',work_representative:true,key:'1',poster_url:'https://images.example/title.jpg'},
-    {title:'Authoritative title 1080p',source:'torrent',work_key:'abc',work_category:'movies',key:'2',torrent:true,quality:3,seeds:50,queueable:true}],sources:[]});`);
+    {title:'Authoritative title 1080p',source:'torrent',work_key:'abc',work_category:'movies',key:'2',torrent:true,quality:3,seeds:50,queueable:true,identity:{key:'other:local:2',actions:[{id:'play_on_opal',label:'Play on Opal'},{id:'queue',label:'Queue'}]}}],sources:[]});`);
   const html = f.$('results').innerHTML;
   assert.match(html, /https:\/\/images.example\/title.jpg/);
   assert.match(html, /2 sources/);
@@ -1534,4 +1539,80 @@ test('Release cards show provider health and dates without invented completion p
   const markup = f.$('results').innerHTML;
   assert.match(markup, /search-card-release">[^<]*Strong swarm[^<]*2026-11-01/);
   assert.doesNotMatch(markup, /search-card-release"[^>]*title=|Full-file success|Updates unknown/);
+});
+
+// ── Shared media identity (media_identity_pure.zig → row.identity) ──
+
+test('Shared identity: search verbs and Queue come from the server identity card', () => {
+  const f = fixture('catalog.js');
+  f.run(`globalThis.fmtSize=String; renderUnifiedResults({generation:7, loading:false, results:[
+    {title:'Book', source:'comics', content_kind:'comics', key:'a', identity:{key:'other:local:a', actions:[{id:'read',label:'Read'}]}},
+    {title:'Clip', source:'youtube', content_kind:'video', key:'b', queueable:true, identity:{key:'other:local:b', actions:[{id:'play_on_opal',label:'Play on Opal'},{id:'queue',label:'Queue'}]}},
+    {title:'Legacy', source:'youtube', content_kind:'video', key:'c', queueable:true}], sources:[]})`);
+  const html = f.$('results').innerHTML;
+  assert.match(html, /data-i="0"[^>]*>Read</);
+  assert.match(html, /data-i="1"[^>]*>Play on Opal</);
+  // Queue is offered only where the shared card says a durable target exists;
+  // a bare legacy flag no longer adds a second, drifting action policy.
+  assert.equal((html.match(/class="queue-btn"/g) || []).length, 1);
+  assert.match(html, /data-i="2"[^>]*>Open</);
+});
+
+test('Shared identity: grouping keys come from the canonical identity, never guessed', () => {
+  const f = fixture('catalog.js');
+  assert.equal(f.run(`mediaIdentityKey({identity:{key:'series:imdb:tt0944947:s1e2'}})`), 'series:imdb:tt0944947:s1e2');
+  assert.equal(f.run(`mediaIdentityKey({identity:{key:'film:tmdb:550'}})`), 'film:tmdb:550');
+  for (const bad of ['tmdb:movie:550', 'film:imdb:550', 'series:tmdb:1;evil', '', 'other:local:XYZ'])
+    assert.equal(f.run(`mediaIdentityKey({identity:{key:${JSON.stringify(bad)}}})`), '', bad);
+  // TMDB movie 12 and TMDB TV 12 are different titles (family-namespaced keys).
+  f.run(`globalThis.split = groupSearchRows([
+    {title:'Arrival', source:'tmdb', key:'a', identity:{key:'film:tmdb:12'}},
+    {title:'Arrival', source:'tmdb', key:'b', identity:{key:'series:tmdb:12'}}]);`);
+  assert.equal(f.run('split.length'), 2);
+});
+
+test('Shared identity: downloads offer explicit Play here and Play on Opal targets', () => {
+  const f = fixture('catalog.js');
+  const both = f.run(`downloadPlayButtons({identity:{actions:[{id:'play_here',label:'Play here'},{id:'play_on_opal',label:'Play on Opal'}]}}, 'Show S01E01.mp4')`);
+  assert.match(both, /data-file-play="play_here"[^>]*>Play here</);
+  assert.match(both, /data-file-play="play_on_opal"[^>]*>Play on Opal</);
+  assert.match(both, /data-n="Show%20S01E01\.mp4"/);
+  // An .iso the browser cannot play: only the desktop target, never a dead "Play here".
+  const host = f.run(`downloadPlayButtons({identity:{actions:[{id:'play_on_opal',label:'Play on Opal'}]}}, 'disc.iso')`);
+  assert.doesNotMatch(host, /play_here/);
+  assert.match(host, />Play on Opal</);
+  assert.equal(f.run(`downloadPlayButtons({identity:{actions:[{id:'rm -rf',label:'x'}]}}, 'a')`), '');
+});
+
+test('Shared identity: selection tokens match media_identity_pure.Selection', () => {
+  const f = fixture('catalog.js');
+  f.run(`globalThis.sel = createSelection(); globalThis.a = sel.select('series:tmdb:1399');`);
+  assert.equal(f.run('sel.isCurrent(a)'), true);
+  f.run(`globalThis.b = sel.select('film:tmdb:550');`);
+  assert.equal(f.run('sel.isCurrent(a)'), false);
+  assert.equal(f.run('sel.isSameTitle(a)'), false);
+  assert.equal(f.run('sel.isCurrent(b)'), true);
+  f.run(`sel.select('series:tmdb:1399');`);
+  assert.equal(f.run('sel.isCurrent(a)'), false);
+  assert.equal(f.run('sel.isSameTitle(a)'), true);
+  f.run('sel.clear()');
+  assert.equal(f.run('sel.isSameTitle(a)'), false);
+});
+
+test('Shared identity: a late drama episode list never lands on a newly opened title', async () => {
+  const f = fixture('media.js');
+  const target = f.$('source-details-overview');
+  target.dataset.base = 'A overview';
+  f.run(`globalThis.sel = createSelection(); globalThis.tok = sel.select('Drama:1');
+    globalThis.pending = showDramaEpisodes(1, $('source-details-overview'), () => sel.isCurrent(tok));`);
+  // The user opens title B in the shared dialog before A's list arrives.
+  f.run(`sel.select('Drama:2'); $('source-details-overview').textContent = 'B overview';`);
+  f.take('/drama/episodes?idx=1').resolve({state:'ready', results:[{season:1, number:1, name:'Pilot'}]});
+  await f.run('pending');
+  assert.equal(target.textContent, 'B overview');
+  // Control: while A is still selected, the list does land.
+  f.run(`globalThis.tok2 = sel.select('Drama:3'); globalThis.pending2 = showDramaEpisodes(3, $('source-details-overview'), () => sel.isCurrent(tok2));`);
+  f.take('/drama/episodes?idx=3').resolve({state:'ready', results:[{season:1, number:1, name:'Pilot'}]});
+  await f.run('pending2');
+  assert.match(target.textContent, /S1 E01  Pilot/);
 });

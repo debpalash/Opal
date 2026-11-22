@@ -181,22 +181,30 @@ function streamUrl(rel){
 }
 function dispatchPlay(url, title, fallback, classifyName){
   if (!PLAY_HERE) return fallback ? fallback() : undefined;
+  if (playInBrowser(url, title, classifyName)) return;
+  if (fallback) fallback();
+}
+
+/// Play in this browser now, regardless of the destination toggle — the
+/// explicit "Play here" action. Returns false (after saying why) when this
+/// browser cannot play it.
+function playInBrowser(url, title, classifyName){
   // Classify the MEDIA NAME, not the URL that wraps it. A /stream URL carries
   // the real filename in a query param, and the parser strips at '?' — so
   // classifying the URL saw "/stream" with no extension, fell through to the
   // "bare http URL" rule, and happily handed <video> an MKV.
   const cls = classifyPlayable(classifyName || url);
-  if (cls === 'direct') return openStreamUrl(url, title);
-  if (cls === 'hls' && (NATIVE_HLS || window.Hls)) return openHls(url, title);
+  if (cls === 'direct') { openStreamUrl(url, title); return true; }
+  if (cls === 'hls' && (NATIVE_HLS || window.Hls)) { openHls(url, title); return true; }
   if (cls === 'transcode') {
     // The transcoder reads a file from the library by relative path, so it can
     // only help when this play came from a /stream URL — a remote http URL is
     // not something the server has on disk.
     const rel = relFromStreamUrl(url);
-    if (TRANSCODE_OK && rel) return openTranscode(rel, title);
+    if (TRANSCODE_OK && rel) { openTranscode(rel, title); return true; }
   }
   toast(playabilityReason(cls));
-  if (fallback) fallback();
+  return false;
 }
 
 /// The library-relative path inside a /stream URL, or '' for anything else.

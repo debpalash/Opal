@@ -114,6 +114,8 @@ from features import (  # noqa: F401
     test_headless_auth,
     test_remote_stubs,
     test_headless_slim,
+    test_headless_deploy,
+    test_media_identity,
     test_aur_publish,
     test_web_parity2,
     test_windows_portability,

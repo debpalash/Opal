@@ -622,7 +622,8 @@ def test_tmdb_setup_body_only():
 def test_unified_details_model():
     ui = _web_app()
     lib = _src("src/services/remote_library_api.zig") + _src("src/services/remote_details_api.zig")
-    rm = _src("src/services/remote.zig")
+    # Search-row catalog fields moved with the identity projection.
+    rm = _src("src/services/remote.zig") + _src("src/services/remote_identity.zig")
     resolver = _src("src/services/resolver.zig")
     tmdb_api = _src("src/services/tmdb_api.zig")
     checks = {

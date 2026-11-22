@@ -1351,6 +1351,16 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_playback_target_pure).step);
 
+    // One canonical media/action identity shared by native and the remote API.
+    const test_media_identity_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/media_identity_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_media_identity_pure).step);
+
     // Failed-login throttling for the web auth routes.
     const test_login_rate_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{

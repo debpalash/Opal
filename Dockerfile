@@ -11,7 +11,11 @@
 # ---------------------------------------------------------------------------
 # Builder stage
 # ---------------------------------------------------------------------------
-FROM debian:12-slim AS builder
+# Base images are pinned to reviewed multi-arch index digests (tag kept for
+# readability; the digest is what Docker resolves). Reviewed 2026-11-23.
+# Bump deliberately: update the digest, rebuild, rerun
+# scripts/validate-headless-deploy.py --image, then commit both.
+FROM debian:12-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS builder
 
 # Pin a 0.17.x Zig (project requires 0.17.x). Adjust ZIG_VERSION as 0.17.x
 # point releases land.
@@ -89,7 +93,7 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------
 # Runtime stage — runtime libs ONLY. No SDL2, no libX11, no mesa/xorg.
 # ---------------------------------------------------------------------------
-FROM debian:12-slim AS runtime
+FROM debian:12-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libmpv2 \
@@ -123,10 +127,14 @@ RUN ldconfig
 # Mountable data dirs.
 RUN mkdir -p /config /cache /media
 
-# XDG dirs map config to ~/.config/opal, cache to ~/.cache/opal.
+# XDG dirs map config to /config/opal, cache to /cache/opal. Downloads, the
+# /stream root and the default local library are the /media mount: without
+# OPAL_DOWNLOAD_DIR they fell back to $HOME/Downloads/opal, i.e. onto the
+# /config volume, and /media was never read.
 ENV XDG_CONFIG_HOME=/config \
     XDG_CACHE_HOME=/cache \
     HOME=/config \
+    OPAL_DOWNLOAD_DIR=/media \
     OPAL_HEADLESS=1 \
     OPAL_WEB_BIND=lan
 

@@ -119,8 +119,8 @@ def test_search_v2_native_view():
         "progress cancellation and retry": '@import("resolver.zig").cancel()' in controls and '"Retry search"' in sources
             and "resolver.resolve(view_cache.query" in sources,
         "real torrent row metadata": "meta_pure.metaLine(" in row and all(field in row for field in (".quality = item.quality", ".size_bytes = item.size_bytes", ".seeds = item.seeds", ".leech = item.leech")),
-        "reader/details actions retained": all(label in row for label in ('"read"', '"details"', '"open audio"', '"play"')),
-        "native queue follows shared action policy": "const queueable = item.source == .torrent and resolver.isRemoteQueueable(item)" in search and "if (!resolver.isRemoteQueueable(item))" in renderer,
+        "reader/details actions retained": "card.primary.label()" in row and all(verb in row for verb in (".open =>", ".read =>", ".details, .open_audio =>")),
+        "native queue follows shared action policy": "const queueable = card.targets.queue" in search and "resolver.identityCard(item)" in search and "if (!resolver.isRemoteQueueable(item))" in renderer,
         "source settings are disclosed": "if (sources_open) renderSearchSources()" in filters and "renderSourceStatusCluster()" in sources,
         "filtered empty state": '"No matches for these filters"' in renderer,
         "themed popup": "fn searchSelect(" in search and "theme.colors.bg_surface" in search and "theme.colors.text_primary" in search,

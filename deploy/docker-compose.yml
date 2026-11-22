@@ -21,14 +21,33 @@ services:
       # Explicit container binding; host publication stays loopback.
       OPAL_HEADLESS: "1"
       OPAL_WEB_BIND: "lan"
+      # Downloads, /stream and the default library live on the /media mount.
+      OPAL_DOWNLOAD_DIR: "/media"
     ports:
       # Host-loopback by default. Put Caddy/Tailscale in front for remote use.
       - "127.0.0.1:41595:41595" # web UI + JSON API (single port)
+    # Paths are relative to this file; ../ keeps runtime data at the repo root.
+    # Long syntax with create_host_path: false — a missing host directory is a
+    # startup error, not a silently created root-owned directory that the
+    # image's uid 10001 cannot write (the first-boot failure mode of the short
+    # `../data/config:/config` form). Prepare them with the install/chown above.
     volumes:
-      # Mount config.json, api.token and the one-time setup.token under
-      # /config/opal/ (XDG_CONFIG_HOME=/config). Host dirs must be writable by
-      # the image's non-root uid 10001; setup.token itself is mode 0600.
-      # Paths are relative to this file; ../ keeps runtime data at the repo root.
-      - ../data/config:/config
-      - ../data/cache:/cache
-      - ../data/media:/media
+      # config.json, opal.db, api.token and the one-time setup.token land
+      # under /config/opal/ (XDG_CONFIG_HOME=/config); setup.token is 0600.
+      - type: bind
+        source: ../data/config
+        target: /config
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../data/cache
+        target: /cache
+        bind:
+          create_host_path: false
+      # Downloads + library. Extra read-only libraries can be mounted beneath
+      # it, e.g. `- /srv/films:/media/films:ro`.
+      - type: bind
+        source: ../data/media
+        target: /media
+        bind:
+          create_host_path: false

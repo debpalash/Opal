@@ -108,8 +108,24 @@ pub fn musicSavePath(buf: []u8) []const u8 {
     return std.fmt.bufPrint(buf, "{s}/Music/Opal", .{home}) catch "/tmp/opal_music";
 }
 
-/// ~/Downloads/opal (default save path)
+/// `OPAL_DOWNLOAD_DIR`, when it names a usable absolute directory. The headless
+/// image sets it to its `/media` mount: with HOME=/config the fallback below put
+/// downloads (and so /stream and the local library) on the config volume and
+/// left `/media` unused. Relative or `..`-bearing values are ignored, so a typo
+/// cannot point downloads at the working directory.
+pub fn downloadDirOverride(value: ?[]const u8) ?[]const u8 {
+    const raw = value orelse return null;
+    if (raw.len < 2 or raw[0] != '/') return null;
+    var it = std.mem.splitScalar(u8, raw, '/');
+    while (it.next()) |part| if (std.mem.eql(u8, part, "..")) return null;
+    return std.mem.trimEnd(u8, raw, "/");
+}
+
+/// ~/Downloads/opal (default save path), or `OPAL_DOWNLOAD_DIR`.
 pub fn defaultSavePath(buf: []u8) []const u8 {
+    if (!is_windows) if (downloadDirOverride(getenv("OPAL_DOWNLOAD_DIR"))) |dir| {
+        return std.fmt.bufPrint(buf, "{s}", .{dir}) catch "/tmp/opal_downloads";
+    };
     const home = getHome();
     // iOS: the container root is read-only; Documents is writable and shown
     // in the Files app (UIFileSharingEnabled).
@@ -321,6 +337,18 @@ test "defaultSavePath contains Downloads" {
     const path = defaultSavePath(&buf);
     try std.testing.expect(std.mem.indexOf(u8, path, "Downloads") != null or
         std.mem.indexOf(u8, path, "opal") != null);
+}
+
+test "OPAL_DOWNLOAD_DIR: absolute paths win, relative or traversal values are ignored" {
+    // Regression: the headless image mounted /media but downloads landed in
+    // $HOME/Downloads/opal on the /config volume.
+    try std.testing.expectEqualStrings("/media", downloadDirOverride("/media").?);
+    try std.testing.expectEqualStrings("/media/library", downloadDirOverride("/media/library/").?);
+    try std.testing.expect(downloadDirOverride(null) == null);
+    try std.testing.expect(downloadDirOverride("") == null);
+    try std.testing.expect(downloadDirOverride("/") == null);
+    try std.testing.expect(downloadDirOverride("media") == null);
+    try std.testing.expect(downloadDirOverride("/media/../etc") == null);
 }
 
 test "videosSavePath contains Videos" {

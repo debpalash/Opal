@@ -174,6 +174,27 @@ Rules:
 4. The dashboard reports operation coverage by area and level. It never folds
    intentional native-only operations into the denominator.
 
+## Shared media identity
+
+Native and web must agree on what an item is and what can be done with it.
+One pure module, `src/services/media_identity_pure.zig`, owns that answer; the
+native app renders from it directly, and the remote API serializes it as the
+`identity` object on every actionable row. `web/js/identity.js` only validates
+and reads it; the browser no longer keeps its own verb table, grouping key, or
+queue policy.
+
+| id | Native evidence | API read/action | Web control | Persistence/security | E2E flow | Status |
+|---|---|---|---|---|---|---|
+| `identity.key` (kind + provider ids + season/episode or absolute) | `search_content_pure.sameWork` compares through `compareTitle`; IMDb spelling normalised | `/api/unified_search` `results[].identity.key` | `searchWorkIdentity` groups by it | Key regex-validated in the browser; no provider secrets | `Shared identity: grouping keys…` (web), `parseId`/`compare` pure tests | Level 3 |
+| `identity.actions` (primary verb + Queue) | `search.zig` row verb, icon, tooltip, and queue from `resolver.identityCard` | `results[].identity.actions` | Search cards and the source list read labels from it | Unknown action ids dropped | `Shared identity: search verbs…` (web), `actions`/`primaryFor` pure tests | Level 3 |
+| `identity.targets` (Play here / Play on Opal / Queue) | Queue offered for every durable target, not torrents only | `/api/downloads` `files[].identity` (`here` from `playback_target_pure`, `opal` false when headless) | Downloads show separate Play here and Play on Opal buttons | Headless hosts never offer Play on Opal | `Shared identity: downloads…` (web) | Level 3 |
+| `identity.resume` / `watched` | Same ≥95% rule as server progress sync | `results[].identity.resume/duration/watched` | Read through `identityProgress` | n/a | `progressFrom` pure test | Level 2 |
+| Selection tokens (late results never retarget) | TV detail IMDb lookup applies only via `titleResult`; a stranded next show is re-fetched | Unified search actions stay generation-checked (409 on a stale wave) | `createSelection` guards the shared source-details dialog (drama episode lists) | n/a | `titleResult` + `Selection` pure tests, `Shared identity: a late drama episode list…` (web) | Level 3 |
+
+Not yet on the identity card: the movie/TV details panel (`openDetails`), the
+Watching/Home rails, and Plex/Jellyfin item rows still use their own fields.
+Move them onto `identity` before adding new per-surface action logic.
+
 ## Fast execution loop
 
 Work in thin end-to-end slices, in this order:

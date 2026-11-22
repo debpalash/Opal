@@ -131,9 +131,19 @@ fn detailCacheKey(out: []u8, tmdb_id: i32, use_cinemeta: bool, season: ?i32) ?[]
 // that arrive by other routes (Home rails, Watching, Watchlist) carry only the
 // integer id. Resolve locally first, then by an exact-id Cinemeta title search
 // on a worker, so such a show opens instead of retrying forever.
-const ImdbResolution = struct { id: i32, imdb: [16]u8 = std.mem.zeroes([16]u8), len: usize = 0 };
+const media_identity = @import("media_identity_pure.zig");
+const ImdbResolution = struct { id: i32, token: media_identity.Token, imdb: [16]u8 = std.mem.zeroes([16]u8), len: usize = 0 };
 var imdb_resolve_busy: std.atomic.Value(bool) = .init(false);
 var resolved_imdb: ?ImdbResolution = null; // detail_mutex
+/// The open TV detail (UI thread only). Late lookups carry its token, so an
+/// answer for a previous show is never applied to the one now on screen.
+var tv_selection: media_identity.Selection = .{};
+
+fn selectTv(id: i32) void {
+    var key_buf: [64]u8 = undefined;
+    const tmdb: u32 = if (id > 0) @intCast(id) else 0;
+    _ = tv_selection.select(media_identity.key(.{ .kind = .show, .ids = .{ .tmdb = tmdb }, .local = @as(u32, @bitCast(id)) }, &key_buf));
+}
 
 const ImdbState = enum { ready, pending, failed };
 
@@ -152,28 +162,28 @@ fn ensureTvImdb(tmdb_id: i32) ImdbState {
     var name: [128]u8 = undefined;
     const nlen = @min(t.tv_name_len, name.len);
     @memcpy(name[0..nlen], t.tv_name[0..nlen]);
-    @import("../core/workers.zig").spawn(resolveImdbWorker, .{ tmdb_id, name, nlen }) catch {
+    @import("../core/workers.zig").spawn(resolveImdbWorker, .{ tmdb_id, tv_selection.token(), name, nlen }) catch {
         imdb_resolve_busy.store(false, .release);
         return .failed;
     };
     return .pending;
 }
 
-fn resolveImdbWorker(tmdb_id: i32, name: [128]u8, name_len: usize) void {
-    defer {
-        imdb_resolve_busy.store(false, .release);
-        state.wakeUi();
-    }
+fn resolveImdbWorker(tmdb_id: i32, token: media_identity.Token, name: [128]u8, name_len: usize) void {
+    defer state.wakeUi();
     var out: [16]u8 = undefined;
     const found = api.resolveImdb(.series, tmdb_id, name[0..name_len], &out);
     detail_mutex.lock();
     defer detail_mutex.unlock();
-    var r = ImdbResolution{ .id = tmdb_id };
+    var r = ImdbResolution{ .id = tmdb_id, .token = token };
     if (found.len > 0 and found.len <= r.imdb.len) {
         @memcpy(r.imdb[0..found.len], found);
         r.len = found.len;
     }
     resolved_imdb = r;
+    // Free the single-flight slot before the UI can consume this result, so a
+    // stale answer's refetch for the newly opened show can start a worker.
+    imdb_resolve_busy.store(false, .release);
 }
 
 /// UI thread, once per frame (from applyPendingDetail).
@@ -184,6 +194,18 @@ fn applyResolvedImdb() void {
     detail_mutex.unlock();
     const res = r orelse return;
     const t = &state.app.tmdb;
+    const waiting = t.tv_detail_open and t.tv_imdb_id_len == 0 and t.tv_seasons_loading;
+    switch (media_identity.titleResult(tv_selection, res.token, waiting)) {
+        .apply => {},
+        .discard => return,
+        // The single-flight worker was busy with the previous show when this
+        // one opened, so this show's lookup never started. Start it now.
+        .discard_and_refetch => {
+            t.tv_seasons_loading = false;
+            fetchSeasonsInternal(t.tv_id, false);
+            return;
+        },
+    }
     if (!t.tv_detail_open or t.tv_id != res.id or t.tv_imdb_id_len > 0) return;
     if (res.len == 0) {
         t.tv_seasons_loading = false;
@@ -1570,6 +1592,7 @@ fn openTvDetail(item: *state.TmdbItem) void {
     t.tv_detail_open = true;
     resetEpisodeScroll();
     t.tv_id = item.id;
+    selectTv(item.id);
     invalidateDetailUiSnapshot();
     const ilen = @min(item.imdb_id_len, t.tv_imdb_id.len);
     @memcpy(t.tv_imdb_id[0..ilen], item.imdb_id[0..ilen]);
@@ -1644,6 +1667,7 @@ pub fn closeTvDetail() void {
     invalidateDetailUiSnapshot();
     for (0..t.tv_episode_watched.len) |i| t.tv_episode_watched[i] = false;
     _ = tv_gen.fetchAdd(1, .acq_rel);
+    tv_selection.clear();
 }
 
 // ── Seasons fetch (/tv/{id}) ──

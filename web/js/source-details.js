@@ -1,6 +1,10 @@
 // Shared source detail actions. Loaded after media.js and before discovery.js.
 let sourceDetailsReturnFocus = null;
+// Which item the shared dialog shows. Slow per-item work (episode lists)
+// captures a token and stops writing once another item has been opened.
+const sourceDetailsSelection = createSelection();
 function closeSourceDetails(){
+  sourceDetailsSelection.clear();
   const dialog = $('source-details');
   if (dialog.open) dialog.close();
 }
@@ -25,6 +29,7 @@ function sourceArtUrl(value){
 }
 function openSourceDetails(source, item, trigger){
   const dialog = $('source-details'), actions = $('source-details-actions');
+  const selection = sourceDetailsSelection.select(source + ':' + (item.id ?? item.index ?? item.url ?? item.name ?? ''));
   sourceDetailsReturnFocus = trigger || document.activeElement;
   $('source-details-source').textContent = source;
   $('source-details-title').textContent = item.name || item.title || 'Untitled';
@@ -151,7 +156,9 @@ function openSourceDetails(source, item, trigger){
     if (item.episodes) {
       const overview = $('source-details-overview');
       overview.dataset.base = item.overview || '';
-      actions.append(detailAction('Episodes', async () => { await showDramaEpisodes(item.index, overview); }));
+      actions.append(detailAction('Episodes', async () => {
+        await showDramaEpisodes(item.index, overview, () => sourceDetailsSelection.isCurrent(selection));
+      }));
     }
   } else if (source === 'RSS') {
     actions.append(detailAction('Play on Opal', async () => {

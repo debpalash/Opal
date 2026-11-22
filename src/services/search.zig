@@ -1758,11 +1758,12 @@ fn renderUniversalResults() void {
                 return;
             }
             const risk = @import("torrent_risk_pure.zig").assess(item.name[0..item.name_len], @floatFromInt(item.size_bytes));
-            if (risk.risk == .block) {
+            if (item.source == .torrent and risk.risk == .block) {
                 var text: [160]u8 = undefined;
                 state.showToastTyped(std.fmt.bufPrint(&text, "Blocked scam torrent: {s}", .{risk.reason}) catch "Blocked scam torrent", .err);
             } else {
-                @import("queue.zig").addToQueue(item.url[0..item.url_len], item.name[0..item.name_len], "torrent");
+                // Same queue target the web's `identity.targets.queue` offers.
+                @import("queue.zig").addToQueue(item.url[0..item.url_len], item.name[0..item.name_len], @tagName(item.source));
                 state.showToast("Added to queue");
             }
         } else if (action.source > 0) {
@@ -2523,7 +2524,8 @@ fn renderCompactRowMain(idx: usize, item: *const @import("resolver.zig").Resolve
     defer row.deinit();
     if (row.data().borderRectScale().r.contains(dvui.currentWindow().mouse_pt)) row.data().options.color_fill = .{ .color = theme.colors.bg_hover };
     row.drawBackground();
-    const queueable = item.source == .torrent and resolver.isRemoteQueueable(item);
+    const card = resolver.identityCard(item);
+    const queueable = card.targets.queue;
     const actions_width: f32 = (if (queueable) @as(f32, 72) else 36) + (if (sources > 1) @as(f32, 120) else 0);
     const text_width = @max(0, row.data().contentRect().w - actions_width - theme.spacing.sm);
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
@@ -2556,14 +2558,21 @@ fn renderCompactRowMain(idx: usize, item: *const @import("resolver.zig").Resolve
         if (components.iconButton(@src(), icons.tvg.lucide.star, if (preferred) "Clear preferred provider for this title" else "Prefer this provider for this title", preferred))
             @import("resolver.zig").rememberProvider(item, !preferred);
     }
-    const action_icon = if (item.source == .anime or item.source == .podcast) icons.tvg.lucide.@"arrow-up-right" else if (item.source == .novels or item.source == .comics or item.source == .opds) icons.tvg.lucide.book else if (item.source == .vndb or item.source == .tmdb or item.source == .audiobooks) icons.tvg.lucide.info else icons.tvg.lucide.play;
-    const action_name = if (item.source == .anime or item.source == .podcast) "Open" else if (item.source == .novels or item.source == .comics or item.source == .opds) "read" else if (item.source == .audiobooks) "open audio" else if (item.source == .vndb or item.source == .tmdb) "details" else "play";
+    // Verb and label come from the shared identity card, the same one the web
+    // receives as `identity.actions` — native and web cannot drift apart.
+    const action_icon = switch (card.primary) {
+        .open => icons.tvg.lucide.@"arrow-up-right",
+        .read => icons.tvg.lucide.book,
+        .details, .open_audio => icons.tvg.lucide.info,
+        else => icons.tvg.lucide.play,
+    };
+    const action_name = card.primary.label();
     var button_data: dvui.WidgetData = undefined;
     if (dvui.buttonIcon(@src(), action_name, action_icon, .{}, .{}, .{ .id_extra = row_key +% 4, .data_out = &button_data, .color_fill = .{ .color = theme.transparent }, .color_fill_hover = .{ .color = theme.colors.bg_hover }, .color_text = .{ .color = if (risk.risk == .block) theme.colors.text_tertiary else theme.colors.accent }, .border = dvui.Rect.all(0), .padding = dvui.Rect.all(8), .min_size_content = .{ .w = 16, .h = 16 } })) pending.* = .{ .idx = idx };
     components.tip(@src(), button_data, action_name);
     if (queueable) {
         if (dvui.buttonIcon(@src(), "queue", icons.tvg.lucide.plus, .{}, .{}, .{ .id_extra = row_key +% 5, .data_out = &button_data, .color_fill = .{ .color = theme.transparent }, .color_fill_hover = .{ .color = theme.colors.bg_hover }, .color_text = .{ .color = theme.colors.text_secondary }, .border = dvui.Rect.all(0), .padding = dvui.Rect.all(8), .min_size_content = .{ .w = 16, .h = 16 } })) pending.* = .{ .idx = idx, .queue = true };
-        components.tip(@src(), button_data, "Add torrent to queue");
+        components.tip(@src(), button_data, @import("media_identity_pure.zig").Action.queue.label());
     }
     if (dvui.clicked(row.data(), .{})) pending.* = .{ .idx = idx };
     renderSearchResultContext(row_key, row.data().borderRectScale().r, item);

@@ -715,6 +715,24 @@ pub fn searchView(item: *const ResolvedItem) search_view.Item {
 /// catalog/navigation rows, and torrent detail pages are deliberately excluded.
 /// Safe magnets retain the torrent queue workflow.
 /// This keeps the web Queue button honest until those identities become typed.
+/// The shared media/action identity for one row (media_identity_pure). Native
+/// search and the remote JSON API both render actions from this card, so the
+/// two can never offer different verbs or targets for the same result.
+pub fn identityCard(item: *const ResolvedItem) @import("media_identity_pure.zig").Card {
+    const mi = @import("media_identity_pure.zig");
+    var identity = content.mediaIdentity(item);
+    if (!identity.ids.any()) identity.local = actionKey(item);
+    const primary = mi.primaryFor(@tagName(item.source));
+    return .{
+        .identity = identity,
+        .primary = primary,
+        // Search transport is private: the browser never receives a direct URL
+        // for a search row, so `here` stays `none` and the host is the target.
+        .targets = .{ .opal = primary == .play_on_opal, .queue = isRemoteQueueable(item) },
+        .progress = mi.progressFrom(item.resume_position_secs, item.duration_secs, false),
+    };
+}
+
 pub fn isRemoteQueueable(item: *const ResolvedItem) bool {
     const url = item.url[0..item.url_len];
     if (item.transport.header_fields_len > 0 or item.transport.user_agent_len > 0 or url.len > 2047) return false;

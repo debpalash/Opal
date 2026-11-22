@@ -2792,7 +2792,7 @@ fn apiDownloads(stream: std.Io.net.Stream, query: []const u8) void {
         dl_path;
 
     const alloc = @import("../core/alloc.zig").allocator;
-    const out = alloc.alloc(u8, 128 * 1024) catch {
+    const out = alloc.alloc(u8, 256 * 1024) catch {
         sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"downloads unavailable\"}");
         return;
     };
@@ -2862,10 +2862,9 @@ fn apiDownloads(stream: std.Io.net.Stream, query: []const u8) void {
         }
         w.writeAll("{\"name\":\"") catch return;
         escJsonWrite(&w, entry.name);
-        w.print("\",\"is_dir\":{s},\"size\":{d}}}", .{
-            if (is_dir) "true" else "false",
-            size,
-        }) catch return;
+        w.print("\",\"is_dir\":{s},\"size\":{d}", .{ if (is_dir) "true" else "false", size }) catch return;
+        @import("remote_identity.zig").writeFile(&w, entry.name, is_dir) catch return;
+        w.writeAll("}") catch return;
         count += 1;
     }
     w.writeAll("]}") catch return;
@@ -4276,9 +4275,10 @@ fn apiUnifiedResolverSearch(stream: std.Io.net.Stream, query: []const u8) void {
     }
 
     // Each bounded row fits even if every string byte becomes a six-byte JSON
-    // escape (+2048 for up to three 96-byte source labels). Encoding stays off
+    // escape (+2048 for up to three 96-byte source labels, +640 for the
+    // fixed-vocabulary identity object). Encoding stays off
     // the connection stack and never drops rows.
-    const json_buf = allocator.alloc(u8, @as(usize, count) * 18048 + 8192) catch {
+    const json_buf = allocator.alloc(u8, @as(usize, count) * 18688 + 8192) catch {
         sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"search response unavailable\"}");
         return;
     };
@@ -4328,13 +4328,7 @@ fn apiUnifiedResolverSearch(stream: std.Io.net.Stream, query: []const u8) void {
         var release_status_buffer: [256]u8 = undefined;
         if (item.source == .torrent) escJsonWrite(&w, @import("search_meta_pure.zig").releaseStatus(item.seeds, item.leech, item.uploaded_ts, io_g.timestamp(), &release_status_buffer));
         w.print("\",\"preferred\":{s},\"can_prefer\":{s}", .{ if (resolver.isPreferred(item)) "true" else "false", if (item.source == .plugin or item.source == .stremio) "true" else "false" }) catch return;
-        if (item.source == .tmdb and item.catalog_id != 0) {
-            w.writeAll(",\"media\":\"") catch return;
-            escJsonWrite(&w, item.catalog_kind[0..@min(item.catalog_kind_len, item.catalog_kind.len)]);
-            w.print("\",\"id\":{d},\"imdb\":\"", .{item.catalog_id}) catch return;
-            escJsonWrite(&w, item.catalog_imdb[0..@min(item.catalog_imdb_len, item.catalog_imdb.len)]);
-            w.writeAll("\"") catch return;
-        }
+        @import("remote_identity.zig").writeSearchRow(&w, item) catch return;
         // Folded renditions (pushInto) as pickable sources. Labels only — the
         // URLs are private transport; /unified_search/play?source=<index> picks.
         const n_sources = resolver.sourceCount(item);
