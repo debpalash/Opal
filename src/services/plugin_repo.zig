@@ -352,6 +352,7 @@ fn refreshWorker() void {
     // Native HTTP keeps the PAT out of the process table. Passing it through
     // curl's `-H` argv made private-repo credentials visible to every local
     // process that can inspect command lines.
+    @import("../core/rate_limit.zig").acquire("github-api", 1.0);
     const body = @import("../core/http.zig").fetch(url, buf, .{
         .timeout_secs = 15,
         .user_agent = "Opal",
@@ -549,6 +550,7 @@ fn fetchRepoFile(repo_path: []const u8, out: []u8) usize {
     var auth_buf: [320]u8 = undefined;
     const have_token = token_len > 0;
     const auth = if (have_token) (std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{token_buf[0..token_len]}) catch return 0) else "";
+    @import("../core/rate_limit.zig").acquire("github-api", 1.0);
     const body = @import("../core/http.zig").fetch(url, out, .{
         .timeout_secs = 15,
         .user_agent = "Opal",

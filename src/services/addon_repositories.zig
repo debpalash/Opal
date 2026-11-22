@@ -63,6 +63,7 @@ pub fn refresh(id: []const u8) !void {
     defer repo.deinit();
     const buf = try alloc.alloc(u8, pure.MAX_BYTES);
     defer alloc.free(buf);
+    @import("../core/rate_limit.zig").acquireUrl(repo.url, 1.0);
     const bytes = @import("reliable_fetch.zig").fetch(repo.url, buf, .{ .timeout_secs = 15, .follow_redirects = false, .use_dpi_proxy = false }) orelse return error.FetchFailed;
     const verified = try pure.verify(alloc, bytes, repo.key);
     defer verified.deinit();

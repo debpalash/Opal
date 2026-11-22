@@ -289,6 +289,7 @@ fn getMany(urls: []const []const u8, bufs: []const []u8, lens: []usize) void {
     std.debug.assert(urls.len <= MAX_PARALLEL);
     const G = struct {
         fn one(url: []const u8, buf: []u8, len: *usize) void {
+            @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
             const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .keep_head_on_overflow = true, .user_agent = "Opal", .timeout_secs = 12, .impersonate = false }) orelse return;
             len.* = body.len;
         }

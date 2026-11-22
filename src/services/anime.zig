@@ -37,6 +37,7 @@ fn boundedCurl(url: []const u8, output: []u8, opts: reliable_fetch.Opts) ?[]cons
 
 /// Jikan/plain-JSON GET cancelled when a newer search supersedes `generation`.
 fn boundedSearchCurl(url: []const u8, output: []u8, timeout_secs: u32, generation: u32) ?[]const u8 {
+    @import("../core/rate_limit.zig").acquireUrl(url, 1.0);
     return reliable_fetch.fetch(url, output, .{
         .user_agent = agent,
         .timeout_secs = timeout_secs,
@@ -1771,6 +1772,7 @@ fn fetchEpisodeArtwork(job: EpisodeJob) void {
         const query = std.fmt.bufPrint(&qb,
             \\{{"query":"query {{ Media(idMal: {d}, type: ANIME) {{ episodes nextAiringEpisode {{ episode }} streamingEpisodes {{ title thumbnail }} }} }}"}}
         , .{id}) catch return;
+        @import("../core/rate_limit.zig").acquire("anilist", 1.5);
         body = @import("reliable_fetch.zig").fetch("https://graphql.anilist.co", buf, .{
             .post_body = query,
             .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
@@ -1810,6 +1812,7 @@ fn fetchIndexedEpisodeData(job: EpisodeJob) void {
         queueEpisodeDocument(job, hit.bytes);
         if (hit.staleness == .fresh) return;
     }
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const bytes = @import("reliable_fetch.zig").fetch(url, buf, .{ .timeout_secs = 4, .cancel_epoch = .{ .epoch32 = .{ .value = &episode_request.generation, .expected = job.generation } } }) orelse return;
     if (!episode_request.isCurrent(job.generation)) return;
     const doc = std.json.parseFromSlice(std.json.Value, alloc, bytes, .{}) catch return;
@@ -1853,6 +1856,7 @@ fn relationsWorker(job: RelationsJob) void {
     const url = std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/anime/{s}/relations", .{job.mal[0..job.mal_len]}) catch return;
     const buf = alloc.alloc(u8, 128 * 1024) catch return;
     defer alloc.free(buf);
+    @import("../core/rate_limit.zig").acquireUrl(url, 1.0);
     const fetched = reliable_fetch.fetch(url, buf, .{
         .user_agent = agent,
         .timeout_secs = 10,
@@ -2010,6 +2014,7 @@ pub fn jumpToAnime(mal_id: []const u8) void {
                 return;
             };
             defer @import("../core/alloc.zig").allocator.free(buf);
+            @import("../core/rate_limit.zig").acquireUrl(url, 1.0);
             const body = boundedCurl(url, buf, .{ .user_agent = agent, .timeout_secs = 12, .impersonate = false }) orelse return;
             if (body.len < 10) return;
 
@@ -2454,6 +2459,7 @@ pub fn loadScraperPopular() void {
 /// GET a page through the anti-block scrape layer into a fresh heap buffer.
 /// Returns the body length (0 on failure); caller owns/free via the passed buf.
 fn scraperGet(url: []const u8, buf: []u8) usize {
+    @import("../core/rate_limit.zig").acquireUrl(url, 1.0);
     const body = scrape.scrapeFetch(url, buf) orelse return 0;
     return body.len;
 }
@@ -2461,6 +2467,7 @@ fn scraperGet(url: []const u8, buf: []u8) usize {
 /// POST `body` to the DooPlay admin-ajax endpoint with the Referer + AJAX marker
 /// the WordPress handler requires. Returns bytes read into `dst` (0 on failure).
 fn scraperPost(url: []const u8, referer: []const u8, body: []const u8, dst: []u8) usize {
+    @import("../core/rate_limit.zig").acquireUrl(url, 1.0);
     const response = boundedCurl(url, dst, .{
         .user_agent = agent,
         .referer = referer,
@@ -4222,6 +4229,7 @@ pub fn fetchPoster(item: *state.AnimeResult) void {
                 return;
             };
             defer @import("../core/alloc.zig").allocator.free(img_buf);
+            @import("../core/rate_limit.zig").acquireUrl(u, 8.0);
             const body = boundedCurl(u, img_buf, .{ .timeout_secs = 10 }) orelse {
                 markDone(result_idx, u);
                 return;
@@ -4307,6 +4315,7 @@ pub fn fetchContinuePoster(item: *state.ContinueItem) void {
                 return;
             };
             defer @import("../core/alloc.zig").allocator.free(img_buf);
+            @import("../core/rate_limit.zig").acquireUrl(url, 8.0);
             const body = boundedCurl(url, img_buf, .{ .timeout_secs = 10 }) orelse {
                 markDone(idx, url);
                 return;

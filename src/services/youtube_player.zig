@@ -156,6 +156,7 @@ fn resolveWorker(job: Job) void {
         defer alloc.free(watch_buf);
         var attempt: usize = 0;
         while (attempt < 2 and visitor_len == 0) : (attempt += 1) {
+            @import("../core/rate_limit.zig").acquireUrl(watch_url, 5.0);
             if (@import("reliable_fetch.zig").fetch(watch_url, watch_buf, .{
                 .user_agent = @import("../player/playback_load_pure.zig").browser_user_agent,
                 .timeout_secs = 6,
@@ -192,6 +193,7 @@ fn resolveWorker(job: Job) void {
     if (visitor_len > 0) {
         var attempt: usize = 0;
         while (attempt < 2) : (attempt += 1) {
+            @import("../core/rate_limit.zig").acquireUrl(pure.PLAYER_URL, 5.0);
             const payload = @import("reliable_fetch.zig").fetch(pure.PLAYER_URL, response, .{
                 .user_agent = pure.VR_USER_AGENT,
                 .headers = &headers_with_visitor,
@@ -222,6 +224,7 @@ fn resolveWorker(job: Job) void {
         .{ .name = "X-YouTube-Client-Version", .value = pure.CLIENT_VERSION },
         .{ .name = "Origin", .value = "https://www.youtube.com" },
     };
+    @import("../core/rate_limit.zig").acquireUrl(pure.PLAYER_URL, 5.0);
     if (@import("reliable_fetch.zig").fetch(pure.PLAYER_URL, response, .{
         .user_agent = pure.USER_AGENT,
         .headers = &fallback_headers,

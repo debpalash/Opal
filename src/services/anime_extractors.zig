@@ -84,6 +84,7 @@ fn curlGet(url: []const u8, referer: ?[]const u8, xrw: bool, out: []u8) ?[]const
         hbuf[0] = .{ .name = "X-Requested-With", .value = "XMLHttpRequest" };
         hlen = 1;
     }
+    @import("../core/rate_limit.zig").acquireUrl(url, 1.0);
     return rf.fetch(url, out, .{
         .user_agent = UA,
         .referer = referer,
@@ -158,6 +159,7 @@ fn resolvePacked(embed_url: []const u8, referer: []const u8, html_buf: []u8, ext
 }
 
 fn resolveStreamTape(embed_url: []const u8, referer: []const u8, html_buf: []u8) ?Resolved {
+    @import("../core/rate_limit.zig").acquireUrl(embed_url, 1.0);
     const html = scrape.scrapeFetch(embed_url, html_buf) orelse return null;
     var url_buf: [512]u8 = undefined;
     const su = pure.extractStreamTape(html, &url_buf) orelse {
@@ -172,6 +174,7 @@ fn resolveStreamTape(embed_url: []const u8, referer: []const u8, html_buf: []u8)
 
 fn resolveDood(embed_url: []const u8, referer: []const u8, html_buf: []u8) ?Resolved {
     // Referer for Dood's pass_md5 call must be the embed URL itself.
+    @import("../core/rate_limit.zig").acquireUrl(embed_url, 1.0);
     const html = scrape.scrapeFetch(embed_url, html_buf) orelse return null;
     const path = pure.extractDoodPath(html) orelse {
         logs.pushLog("warn", "anime", "DoodStream: no pass_md5 path", false);

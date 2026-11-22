@@ -191,6 +191,7 @@ fn pinAuthWorker(generation: u32) void {
 }
 
 fn curlGet(url: [:0]const u8, out: []u8) usize {
+    @import("../core/rate_limit.zig").acquire("simkl", 2.0);
     const body = @import("reliable_fetch.zig").fetch(url, out, .{
         .user_agent = USER_AGENT,
         .timeout_secs = 15,
@@ -336,6 +337,7 @@ fn postSync(operation: []const u8, payload: []const u8) Delivery {
     // Token rides curl's stdin config via the seam — never argv.
     var resp: [4096]u8 = undefined;
     var hdrs: [4096]u8 = undefined;
+    @import("../core/rate_limit.zig").acquire("simkl", 2.0);
     const res = @import("reliable_fetch.zig").request(url, &resp, &hdrs, .{
         .user_agent = USER_AGENT,
         .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},

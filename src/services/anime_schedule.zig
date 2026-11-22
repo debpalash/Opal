@@ -75,6 +75,7 @@ fn worker() void {
     const buf = alloc.alloc(u8, 512 * 1024) catch return;
     defer alloc.free(buf);
 
+    @import("../core/rate_limit.zig").acquire("anilist", 1.5);
     const fetched = @import("reliable_fetch.zig").fetch(ANILIST_API, buf, .{
         .keep_head_on_overflow = true, // pre-seam behaviour: parse the head of an oversized body
         .timeout_secs = 15,

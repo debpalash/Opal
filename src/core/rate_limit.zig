@@ -1,6 +1,7 @@
 const std = @import("std");
 const sync = @import("sync.zig");
 const io_g = @import("io_global.zig");
+const pure = @import("rate_limit_pure.zig");
 
 // ══════════════════════════════════════════════════════════
 // Opal v2 — Shared scraper rate limiter
@@ -8,17 +9,20 @@ const io_g = @import("io_global.zig");
 // Multiple search/resolver backends would otherwise hammer the
 // same indexers from one IP and get rate-limited or banned.
 // This module owns a small per-origin token-bucket registry that
-// every outbound scraper should funnel through.
+// every outbound scraper funnels through (enforced by
+// tests/features/test_rate_limit_rollout.py).
 //
 // Usage:
-//     try rate_limit.acquire("1337x", 2.0); // ≤ 2 req/sec
+//     rate_limit.acquire("1337x", 2.0);   // fixed key, <= 2 req/sec
+//     rate_limit.acquireUrl(url, 2.0);    // keyed by the URL's host
 //
 // `acquire` blocks until a token is available, then returns. The
-// limiter is process-wide and thread-safe.
+// limiter is process-wide and thread-safe. Call it from worker
+// threads, never from the UI frame.
 // ══════════════════════════════════════════════════════════
 
-const MAX_BUCKETS: usize = 32;
-const KEY_LEN: usize = 32;
+const MAX_BUCKETS: usize = 128;
+const KEY_LEN: usize = pure.KEY_LEN;
 
 const Bucket = struct {
     in_use: bool = false,
@@ -38,27 +42,41 @@ fn now() i64 {
 }
 
 fn findOrCreate(key: []const u8, rate_per_sec: f64) ?*Bucket {
-    // Caller holds mutex.
+    // Caller holds mutex. Keys are clipped before comparing, so a long key
+    // matches its own bucket instead of minting a new one per call.
+    const k = key[0..@min(key.len, KEY_LEN)];
     var free_slot: ?usize = null;
     for (buckets, 0..) |b, i| {
-        if (b.in_use and b.key_len == key.len and std.mem.eql(u8, b.key[0..b.key_len], key)) {
+        if (b.in_use and b.key_len == k.len and std.mem.eql(u8, b.key[0..b.key_len], k)) {
             return &buckets[i];
         }
         if (!b.in_use and free_slot == null) free_slot = i;
     }
-    if (free_slot == null) return null;
-    const slot = free_slot.?;
+    const slot = free_slot orelse recycleSlot() orelse return null;
     const cap = @max(rate_per_sec, 1.0);
     buckets[slot] = .{
         .in_use = true,
-        .key_len = @min(key.len, KEY_LEN),
+        .key_len = k.len,
         .tokens = cap,
         .capacity = cap,
         .rate_per_sec = rate_per_sec,
         .last_refill_ms = now(),
     };
-    @memcpy(buckets[slot].key[0..buckets[slot].key_len], key[0..buckets[slot].key_len]);
+    @memcpy(buckets[slot].key[0..k.len], k);
     return &buckets[slot];
+}
+
+/// Registry full: reuse a bucket that has refilled to capacity (lossless).
+fn recycleSlot() ?usize {
+    // Caller holds mutex.
+    var full: [MAX_BUCKETS]bool = undefined;
+    var last: [MAX_BUCKETS]i64 = undefined;
+    for (&buckets, 0..) |*b, i| {
+        refill(b);
+        full[i] = b.tokens >= b.capacity;
+        last[i] = b.last_refill_ms;
+    }
+    return pure.pickVictim(&full, &last);
 }
 
 fn refill(b: *Bucket) void {
@@ -66,8 +84,7 @@ fn refill(b: *Bucket) void {
     const t = now();
     const elapsed_ms = t - b.last_refill_ms;
     if (elapsed_ms <= 0) return;
-    const elapsed_s: f64 = @as(f64, @floatFromInt(elapsed_ms)) / 1000.0;
-    b.tokens = @min(b.capacity, b.tokens + elapsed_s * b.rate_per_sec);
+    b.tokens = pure.refilled(b.tokens, b.capacity, b.rate_per_sec, elapsed_ms);
     b.last_refill_ms = t;
 }
 
@@ -80,7 +97,7 @@ pub fn acquire(key: []const u8, rate_per_sec: f64) void {
         const b_opt = findOrCreate(key, rate_per_sec);
         if (b_opt == null) {
             mutex.unlock();
-            // Registry full — fall back to a coarse sleep so we still throttle a bit.
+            // Every bucket is mid-throttle: fall back to a coarse sleep so we still throttle a bit.
             io_g.sleep(@as(u64, @intFromFloat(1_000_000_000.0 / @max(rate_per_sec, 1.0))));
             return;
         }
@@ -98,6 +115,14 @@ pub fn acquire(key: []const u8, rate_per_sec: f64) void {
         mutex.unlock();
         io_g.sleep(wait_ms * std.time.ns_per_ms);
     }
+}
+
+/// `acquire` keyed by the URL's host, for modules whose base URL is user- or
+/// catalog-supplied (many sites behind one module). No host means no wait.
+pub fn acquireUrl(url: []const u8, rate_per_sec: f64) void {
+    var key_buf: [KEY_LEN]u8 = undefined;
+    const key = pure.hostKey(url, &key_buf) orelse return;
+    acquire(key, rate_per_sec);
 }
 
 /// Non-blocking variant: returns true on success, false if no token now.

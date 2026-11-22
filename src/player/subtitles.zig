@@ -194,6 +194,7 @@ fn httpGet(url_str: []const u8, extra_headers: []const std.http.Header, response
     const alloc = @import("../core/alloc.zig").allocator;
     const scratch = try alloc.alloc(u8, @max(response_buf.len, 1024 * 1024));
     defer alloc.free(scratch);
+    @import("../core/rate_limit.zig").acquireUrl(url_str, 2.0);
     const body = @import("../services/reliable_fetch.zig").fetch(url_str, scratch, .{
         .user_agent = ua,
         .timeout_secs = 20,

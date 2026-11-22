@@ -238,9 +238,12 @@ def test_plugin_sandbox_hardened():
     pg = _src("src/services/plugins.zig")
     pgp = _src("src/services/plugins_pure.zig")
     # Prelude closes the debug-library escape + env/package surface.
+    # The prelude lives with the require allow-list in plugin_permissions_pure;
+    # package.path is pinned to the plugin directory, native loaders removed.
+    perms = _src("src/services/plugin_permissions_pure.zig")
     prelude_hardened = all(
-        s in pg for s in ("debug=nil", "os.getenv=nil", 'package.path=""', 'package.cpath=""')
-    )
+        s in perms for s in ("debug=nil", "os.getenv=nil", 'package.path=__dir.."/?.lua"', 'package.cpath=""')
+    ) and "perms.buildPrelude(" in pg
     # allow_unsafe is gated by an app-owned, content-hash approval marker, and
     # untrusted native code is denied rather than merely warned.
     gated = (
@@ -249,7 +252,7 @@ def test_plugin_sandbox_hardened():
         and "pluginDigest(" in pg
         and "runMode(" in pg
         and ".deny =>" in pg
-        and "if (!user_trusted) return .deny" in pgp
+        and "if (!user_trusted or !permissions_ok) return .deny" in pgp
     )
     # Pure decision + regression tests present.
     pure_ok = (

@@ -40,6 +40,7 @@ var busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 /// keyed HTTPS JSON API — the key rides as a query param, so the URL goes via
 /// curl's stdin config (secret_url), never argv.
 fn curlInto(url: []const u8, buf: []u8) usize {
+    @import("../core/rate_limit.zig").acquire("omdb", 2.0);
     const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .keep_head_on_overflow = true, .timeout_secs = 12, .impersonate = false, .secret_url = true }) orelse return 0;
     return body.len;
 }

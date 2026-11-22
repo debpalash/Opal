@@ -141,6 +141,7 @@ fn resolveDetailWorker(request: DetailResolveRequest) void {
     // but its bounded head (keep_head_on_overflow) is still useful when it
     // already contains the magnet link. A newer resolve bumps the generation,
     // which the cancel epoch turns into an immediate curl stop.
+    @import("../core/rate_limit.zig").acquireUrl(url, 1.0);
     const got = @import("reliable_fetch.zig").fetch(url, html_buf, .{
         .user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
         .timeout_secs = 10,
@@ -706,6 +707,7 @@ fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator, my_gen: u64) vo
     const api_url = std.fmt.bufPrint(&url_buf, "{s}?limit=100&page=1", .{api}) catch return;
     const buffer = allocator.alloc(u8, 512 * 1024) catch return;
     defer allocator.free(buffer);
+    @import("../core/rate_limit.zig").acquire("eztv", 1.0);
     const body = @import("../core/http.zig").fetch(api_url, buffer, .{
         .timeout_secs = 5,
         .max_response = buffer.len,

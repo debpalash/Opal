@@ -200,6 +200,7 @@ pub fn authenticate() void {
 
             var resp_buf: [32768]u8 = undefined;
             var response_status: ?std.http.Status = null;
+            @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
             const resp = http.fetch(url, &resp_buf, .{
                 .method = .POST,
                 .payload = body,
@@ -604,6 +605,7 @@ fn loadAudioWorker(job: AudioJob) void {
     const auth = pure.bearerHeader(job.token[0..job.token_len], &auth_buf) orelse return;
     const body_buf = alloc.alloc(u8, 3 * 1024 * 1024) catch return;
     defer alloc.free(body_buf);
+    @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
     const body = http.fetch(url, body_buf, .{ .accept = "application/json", .auth_header = auth, .timeout_secs = 15, .max_response = body_buf.len }) orelse {
         publishAudioFailure(job.generation, "Cannot load audio files — check server access");
         return;
@@ -620,6 +622,7 @@ fn loadAudioWorker(job: AudioJob) void {
         var progress_url_buf: [640]u8 = undefined;
         if (pure.progressUrl(job.server[0..job.server_len], job.id[0..job.id_len], "", &progress_url_buf)) |progress_url| {
             var progress_buf: [16384]u8 = undefined;
+            @import("../core/rate_limit.zig").acquireUrl(progress_url, 20.0);
             if (http.fetch(progress_url, &progress_buf, .{ .accept = "application/json", .auth_header = auth, .timeout_secs = 8 })) |progress_body| {
                 const info = pure.parseProgressValue(alloc, progress_body);
                 const last = staged[page.count - 1];
@@ -784,6 +787,7 @@ fn progressWorker() void {
         var payload: [256]u8 = undefined;
         const body = pure.progressBody(request.position, request.duration, request.finished, &payload) orelse continue;
         var response: [16384]u8 = undefined;
+        @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
         if (http.fetch(url, &response, .{ .method = .PATCH, .payload = body, .content_type = "application/json", .auth_header = auth, .timeout_secs = 8 }) == null)
             logs.pushLog("info", "audiobookshelf", "Playback progress could not sync to the server", false);
         if (request.episode_len == 0) {
@@ -1044,6 +1048,7 @@ fn absGet(url: []const u8) ?[]u8 {
     const resp_buf = alloc.alloc(u8, 512 * 1024) catch return null;
     defer alloc.free(resp_buf);
     var response_status: ?std.http.Status = null;
+    @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
     const resp = http.fetch(url, resp_buf, .{
         .timeout_secs = 15,
         .accept = "application/json",

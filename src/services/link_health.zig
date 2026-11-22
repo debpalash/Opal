@@ -194,6 +194,7 @@ const ProbeRes = struct { code: u32, latency_ms: u32, body: []const u8 };
 /// on spawn failure (a connect/DNS failure still returns code 0).
 fn curlProbe(url: []const u8, body_buf: []u8) ?ProbeRes {
     var headers: [4096]u8 = undefined;
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const result = reliable_fetch.request(url, body_buf, &headers, .{
         .user_agent = agent,
         .range = "0-2047",

@@ -278,25 +278,37 @@ pub fn validResponse(allocator: std.mem.Allocator, input: []const u8, kind: Resp
 /// Non-Lua/native executables cannot be prelude-sandboxed, so they fail closed
 /// until the user approves the exact plugin content through the app-owned trust
 /// store. A manifest flag is never an execution capability.
-pub fn runMode(is_lua: bool, manifest_allow_unsafe: bool, user_trusted: bool) RunMode {
+///
+/// `permissions_ok` is plugin_permissions_pure.permitted(): a plugin whose
+/// manifest declares `require` modules or `allow_unsafe` additionally needs the
+/// user's one-time permission grant, even when its content is approved.
+pub fn runMode(is_lua: bool, manifest_allow_unsafe: bool, user_trusted: bool, permissions_ok: bool) RunMode {
     // Lua preludes are defense in depth, never an execution trust boundary.
-    if (!user_trusted) return .deny;
+    if (!user_trusted or !permissions_ok) return .deny;
     if (is_lua and !manifest_allow_unsafe) return .sandbox_lua;
     return .direct;
 }
 
 test "runMode requires explicit approval for every executable" {
     // Plain Lua must be approved too.
-    try std.testing.expectEqual(RunMode.deny, runMode(true, false, false));
+    try std.testing.expectEqual(RunMode.deny, runMode(true, false, false, true));
     // Self-declared allow_unsafe never authorizes execution.
-    try std.testing.expectEqual(RunMode.deny, runMode(true, true, false));
+    try std.testing.expectEqual(RunMode.deny, runMode(true, true, false, true));
     // User trust alone (no manifest opt-in) still sandboxes.
-    try std.testing.expectEqual(RunMode.sandbox_lua, runMode(true, false, true));
+    try std.testing.expectEqual(RunMode.sandbox_lua, runMode(true, false, true, true));
     // Both → direct (the only escape).
-    try std.testing.expectEqual(RunMode.direct, runMode(true, true, true));
+    try std.testing.expectEqual(RunMode.direct, runMode(true, true, true, true));
     // Native fails closed until the exact plugin content is approved.
-    try std.testing.expectEqual(RunMode.deny, runMode(false, false, false));
-    try std.testing.expectEqual(RunMode.direct, runMode(false, false, true));
+    try std.testing.expectEqual(RunMode.deny, runMode(false, false, false, true));
+    try std.testing.expectEqual(RunMode.direct, runMode(false, false, true, true));
+}
+
+test "runMode denies approved plugins whose permissions were not granted" {
+    // Regression: content approval alone used to unlock allow_unsafe and any
+    // requested module. Both now also need the one-time permission grant.
+    try std.testing.expectEqual(RunMode.deny, runMode(true, true, true, false));
+    try std.testing.expectEqual(RunMode.deny, runMode(true, false, true, false));
+    try std.testing.expectEqual(RunMode.deny, runMode(false, false, true, false));
 }
 
 test "plugin response envelopes reject malformed JSON and wrong roots" {

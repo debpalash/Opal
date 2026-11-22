@@ -148,6 +148,7 @@ pub fn loadIssue(value: []const u8, cancel: ?bounded.CancelEpoch, preferred_issu
     if (provider == .xoxo) {
         // This origin sometimes serves a successful HTML page at image URLs.
         // Fail clearly before scheduling an entire issue of futile downloads.
+        @import("../core/rate_limit.zig").acquireUrl(book.pages[0].get(), 2.0);
         const probe = @import("reliable_fetch.zig").fetch(book.pages[0].get(), buf[0..512], .{
             .range = "bytes=0-127",
             .timeout_secs = 8,

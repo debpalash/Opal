@@ -1900,6 +1900,7 @@ fn resolveAudiobooks(query_buf: [256]u8, qlen: usize) void {
             };
         } }};
         defer alloc.free(headers[0].value);
+        @import("../core/rate_limit.zig").acquireUrl(url, 5.0);
         const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8, .extra_headers = &headers, .status_out = &code }) orelse {
             noteWorkerOutcome(if (code == .unauthorized or code == .forbidden) .unavailable else .transport_failed);
             return;
@@ -3868,6 +3869,7 @@ fn resolveRadio(query_buf: [256]u8, qlen: usize) void {
     };
     defer alloc.free(buf);
     var captured_headers: [4096]u8 = undefined;
+    @import("../core/rate_limit.zig").acquireUrl(url, 1.0);
     const response = @import("reliable_fetch.zig").request(url, buf, &captured_headers, .{
         .timeout_secs = 8,
         .impersonate = false,

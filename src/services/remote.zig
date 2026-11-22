@@ -1974,6 +1974,7 @@ fn handleScrapeBody(stream: std.Io.net.Stream, query: []const u8, post: ?[]const
     defer alloc.free(buf);
 
     const sf = @import("scrape_fetch.zig");
+    @import("../core/rate_limit.zig").acquireUrl(url, 1.0);
     const body = (if (post) |p| sf.scrapeFetchPost(url, p, buf) else sf.scrapeFetch(url, buf)) orelse {
         sendJsonStatus(stream, "502 Bad Gateway", "{\"error\":\"fetch failed\"}");
         return;
@@ -3297,7 +3298,9 @@ fn apiPlugins(stream: std.Io.net.Stream, method: []const u8, query: []const u8, 
             repo.clearDebrid();
             return sendJson(stream, "{\"ok\":true}");
         }
-        if (std.mem.eql(u8, action_name, "approve-exec") or std.mem.eql(u8, action_name, "revoke-exec")) {
+        if (std.mem.eql(u8, action_name, "approve-exec") or std.mem.eql(u8, action_name, "revoke-exec") or
+            std.mem.eql(u8, action_name, "grant-perms") or std.mem.eql(u8, action_name, "revoke-perms"))
+        {
             if (!access_pure.allows(principal, .approve_executable)) return sendForbidden(stream);
             var id_buf: [64]u8 = undefined;
             const id = credParam(body, query, "id", &id_buf) orelse {

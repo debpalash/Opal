@@ -313,6 +313,7 @@ fn opdsGetCancelled(url: []const u8, user: []const u8, pass: []const u8, cap: us
     const buffer = alloc.alloc(u8, cap) catch return null;
     var owned = false;
     defer if (!owned) alloc.free(buffer);
+    @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
     if (@import("../core/http.zig").fetch(url, buffer, .{
         .timeout_secs = seconds,
         .max_response = cap,
@@ -335,6 +336,7 @@ fn opdsGetCancelled(url: []const u8, user: []const u8, pass: []const u8, cap: us
         secret[0] = .{ .name = line[0..colon], .value = std.mem.trim(u8, line[colon + 1 ..], " ") };
         secret_n = 1;
     }
+    @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
     const body = @import("reliable_fetch.zig").fetch(url, buffer, .{
         .keep_head_on_overflow = true, // pre-seam behaviour: parse the head of an oversized body
         .headers = &.{.{ .name = "Accept", .value = "application/atom+xml,application/xml" }},

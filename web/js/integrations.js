@@ -52,14 +52,14 @@ function renderPlugins(){
 function renderExecutablePlugins(){
   $('plug-exec-list').innerHTML = executablePlugins.map(plugin => {
     const capabilities = [plugin.search && 'Search', plugin.resolve && 'Resolve', plugin.trending && 'Trending'].filter(Boolean);
-    const needsApproval = plugin.mode === 'blocked' || (plugin.allow_unsafe && !plugin.trusted);
-    const modeLabel = plugin.mode === 'invalid' ? 'Invalid manifest' : plugin.mode === 'blocked' ? 'Blocked' : plugin.mode === 'full-access' ? 'Full user access' : 'Approved Lua (restricted)';
+    const needsApproval = plugin.mode === 'blocked' || plugin.mode === 'needs-permission' || (plugin.allow_unsafe && !plugin.trusted);
+    const modeLabel = plugin.mode === 'invalid' ? 'Invalid manifest' : plugin.mode === 'blocked' ? 'Blocked' : plugin.mode === 'needs-permission' ? 'Needs permission' : plugin.mode === 'full-access' ? 'Full user access' : 'Approved Lua (restricted)';
     return `<div class="file plugin-row executable-plugin ${plugin.mode === 'blocked' || plugin.mode === 'invalid' ? 'plugin-blocked' : ''}">
       <div class="n">${esc(plugin.name || plugin.id)}
         <div class="file-meta"><span class="src">${esc(modeLabel)}</span>
           ${plugin.version ? `<span>v${esc(plugin.version)}</span>` : ''}<span>${esc(capabilities.join(' · ') || 'No runnable entrypoints')}</span></div>
         ${plugin.description ? `<small>${esc(plugin.description)}</small>` : ''}</div>
-      <small>${needsApproval ? 'Approval required on the host. Browser accounts cannot grant executable access.' : plugin.trusted ? 'Approved on host. Manage executable access on the host.' : ''}</small>
+      <small>${plugin.mode === 'needs-permission' ? `Requests ${esc((plugin.require || []).join(', ') || 'full access')}. Grant it once on the host.` : needsApproval ? 'Approval required on the host. Browser accounts cannot grant executable access.' : plugin.trusted ? 'Approved on host. Manage executable access on the host.' : ''}</small>
     </div>`;
   }).join('') || '<div class="empty">No executable content plugins installed.</div>';
 }

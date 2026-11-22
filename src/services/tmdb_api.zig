@@ -771,6 +771,7 @@ fn curlOwnedPolicy(url: []const u8, auth_header: []const u8, max_bytes: usize, h
         secret[0] = .{ .name = auth_header[0..colon], .value = std.mem.trim(u8, auth_header[colon + 1 ..], " ") };
         secret_n = 1;
     }
+    @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
     const got = @import("reliable_fetch.zig").download(url, path, .{
         .secret_headers = secret[0..secret_n],
         .secret_url = std.mem.indexOf(u8, url, "api_key=") != null,

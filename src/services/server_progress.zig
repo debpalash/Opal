@@ -311,6 +311,7 @@ fn sendPlex(update: *const Update) bool {
     };
     var response_buf: [4096]u8 = undefined;
     var status: ?std.http.Status = null;
+    @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
     _ = http.fetch(url, &response_buf, .{
         .timeout_secs = 8,
         .method = .POST,
@@ -326,6 +327,7 @@ fn sendPlex(update: *const Update) bool {
 fn post(url: []const u8, method: std.http.Method, auth: []const u8, body: []const u8, comptime response_size: usize) bool {
     var response_buf: [response_size]u8 = undefined;
     var status: ?std.http.Status = null;
+    @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
     _ = http.fetch(url, &response_buf, .{
         .timeout_secs = 8,
         .method = method,

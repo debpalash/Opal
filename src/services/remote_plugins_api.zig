@@ -11,8 +11,15 @@ pub const TrustResponse = struct {
     json: []const u8,
 };
 
+/// `approve-exec`/`revoke-exec` change content approval; `grant-perms`/
+/// `revoke-perms` change the one-time grant for the manifest's `require`
+/// allow-list and `allow_unsafe`. Both need the host principal and confirm=1.
 pub fn changeTrust(action: []const u8, id: []const u8) TrustResponse {
-    return switch (plugins.setContentTrust(id, std.mem.eql(u8, action, "approve-exec"))) {
+    const change = if (std.mem.endsWith(u8, action, "-perms"))
+        plugins.setPermissionGrant(id, std.mem.eql(u8, action, "grant-perms"))
+    else
+        plugins.setContentTrust(id, std.mem.eql(u8, action, "approve-exec"));
+    return switch (change) {
         .applied => .{ .json = "{\"ok\":true,\"result\":\"applied\"}" },
         .unchanged => .{ .json = "{\"ok\":true,\"result\":\"unchanged\"}" },
         .not_found => .{ .status = "404 Not Found", .json = "{\"error\":\"installed executable plugin not found\"}" },
@@ -104,7 +111,9 @@ pub fn writeExecutables(writer: anytype) !void {
         const native = plugins.hasNativeEntrypoint(plugin);
         const trusted = plugin.user_trusted;
         const runnable = plugin.has_search or plugin.has_resolve or plugin.has_trending;
-        const mode = if (!runnable) "invalid" else if (!trusted) "blocked" else if (trusted and (native or plugin.allow_unsafe)) "full-access" else "lua-sandbox";
+        const perms = @import("plugin_permissions_pure.zig");
+        const needs_grant = perms.needsGrant(&plugin.requires, plugin.allow_unsafe);
+        const mode = if (!runnable) "invalid" else if (!trusted) "blocked" else if (!plugin.enabled) "needs-permission" else if (native or plugin.allow_unsafe) "full-access" else "lua-sandbox";
         try writer.writeAll("{\"id\":\"");
         writeJsonString(writer, plugin.id[0..plugin.id_len]);
         try writer.writeAll("\",\"name\":\"");
@@ -113,7 +122,7 @@ pub fn writeExecutables(writer: anytype) !void {
         writeJsonString(writer, plugin.version[0..plugin.version_len]);
         try writer.writeAll("\",\"description\":\"");
         writeJsonString(writer, plugin.description[0..plugin.description_len]);
-        try writer.print("\",\"search\":{s},\"resolve\":{s},\"trending\":{s},\"native\":{s},\"trusted\":{s},\"allow_unsafe\":{s},\"mode\":\"{s}\"}}", .{
+        try writer.print("\",\"search\":{s},\"resolve\":{s},\"trending\":{s},\"native\":{s},\"trusted\":{s},\"allow_unsafe\":{s},\"mode\":\"{s}\"", .{
             if (plugin.has_search) "true" else "false",
             if (plugin.has_resolve) "true" else "false",
             if (plugin.has_trending) "true" else "false",
@@ -122,5 +131,17 @@ pub fn writeExecutables(writer: anytype) !void {
             if (plugin.allow_unsafe) "true" else "false",
             mode,
         });
+        // Permission fields are appended inside the object (drop its closing brace).
+        try writer.print(",\"needs_permission\":{s},\"permission_granted\":{s},\"require\":[", .{
+            if (needs_grant) "true" else "false",
+            if (plugin.permission_granted) "true" else "false",
+        });
+        for (0..plugin.requires.count) |r| {
+            if (r > 0) try writer.writeAll(",");
+            try writer.writeAll("\"");
+            writeJsonString(writer, plugin.requires.name(r));
+            try writer.writeAll("\"");
+        }
+        try writer.writeAll("]}");
     }
 }

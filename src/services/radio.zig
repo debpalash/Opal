@@ -802,6 +802,7 @@ fn fetchBodyForGeneration(url: []const u8, cap: usize, generation: u32) ?[]u8 {
         if (!search_request.isCurrent(generation)) break;
         var ub: [1536]u8 = undefined;
         const endpoint = pure.mirrorUrl(url, attempt, &ub) orelse continue;
+        @import("../core/rate_limit.zig").acquireUrl(endpoint, 2.0);
         const body = reliable_fetch.fetch(endpoint, buf, .{
             .user_agent = @import("../core/app_meta.zig").user_agent,
             .timeout_secs = 8,

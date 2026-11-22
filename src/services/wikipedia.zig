@@ -77,6 +77,7 @@ fn fetchOne(title: []const u8, resp_buf: []u8) ?[]const u8 {
     var url_buf: [560]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "https://en.wikipedia.org/api/rest_v1/page/summary/{s}", .{encoded}) catch return null;
 
+    @import("../core/rate_limit.zig").acquire("wikipedia", 2.0);
     const body = http.fetch(url, resp_buf, .{
         .timeout_secs = 6,
         .max_response = resp_buf.len,

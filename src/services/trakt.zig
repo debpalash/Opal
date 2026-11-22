@@ -403,6 +403,7 @@ fn refreshAccessToken(expected_revision: u32) bool {
 /// sent over curl's stdin config; `public_body` may sit in argv. Returns the
 /// body only on a 2xx/3xx response (old `curl -f` semantics).
 fn postJson(url: []const u8, out: []u8, public_body: ?[]const u8, secret_body: ?[]const u8, secret_headers: []const @import("reliable_fetch.zig").Header) ?[]const u8 {
+    @import("../core/rate_limit.zig").acquire("trakt", 2.0);
     return @import("reliable_fetch.zig").fetch(url, out, .{
         .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
         .secret_headers = secret_headers,
@@ -454,6 +455,7 @@ fn postScrobble(endpoint: []const u8, json_body: []const u8) DeliveryResult {
 
     var resp: [4096]u8 = undefined;
     var hdrs: [4096]u8 = undefined;
+    @import("../core/rate_limit.zig").acquire("trakt", 2.0);
     const res = @import("reliable_fetch.zig").request(url, &resp, &hdrs, .{
         .headers = &.{ .{ .name = "Content-Type", .value = "application/json" }, .{ .name = "trakt-api-version", .value = "2" } },
         .secret_headers = &.{ .{ .name = "trakt-api-key", .value = cid[0..cid_len] }, .{ .name = "Authorization", .value = bearer } },

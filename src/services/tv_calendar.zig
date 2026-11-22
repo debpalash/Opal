@@ -69,6 +69,7 @@ pub fn refreshOnce() void {
 
 fn curlInto(url: []const u8, buf: []u8) usize {
     // reliable-fetch chains the DPI-bypass proxy and enforces HTTP status.
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .timeout_secs = 8, .impersonate = false }) orelse return 0;
     return body.len;
 }

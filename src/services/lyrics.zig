@@ -88,6 +88,7 @@ pub fn requestFor(artist: []const u8, title: []const u8, album: []const u8, dura
             const body_buf = alloc.alloc(u8, RESP_CAP) catch return;
             defer alloc.free(body_buf);
 
+            @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
             var body: ?[]const u8 = rf.fetch(url, body_buf, .{
                 .user_agent = agent,
                 .timeout_secs = 12,
@@ -113,6 +114,7 @@ pub fn requestFor(artist: []const u8, title: []const u8, album: []const u8, dura
                 const q = std.fmt.bufPrint(&qbuf, "{s} {s}", .{ a, t }) catch "";
                 if (q.len > 0) {
                     if (pure.buildLrclibSearchUrl(q, &url_buf)) |surl| {
+                        @import("../core/rate_limit.zig").acquireUrl(surl, 2.0);
                         body = rf.fetch(surl, body_buf, .{
                             .user_agent = agent,
                             .timeout_secs = 12,

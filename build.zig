@@ -1179,6 +1179,26 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_plugins_pure).step);
 
+    // Plugin `require` allow-list, one-time permission grant, Lua prelude.
+    const test_plugin_permissions_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/plugin_permissions_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_plugin_permissions_pure).step);
+
+    // Shared scraper limiter: per-host keys, refill math, full-registry recycling.
+    const test_rate_limit_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/rate_limit_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_rate_limit_pure).step);
+
     // Untrusted plugin process lifecycle: process-tree containment, output
     // cap, deadline, exit status, and watchdog failure cleanup.
     const test_bounded_process = addBoundTest(b, .{

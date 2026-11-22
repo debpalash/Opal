@@ -1371,6 +1371,7 @@ fn thumbWorker(job: ThumbJob) void {
 
     const buffer = alloc.alloc(u8, 2 * 1024 * 1024) catch return;
     defer alloc.free(buffer);
+    @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
     const body = @import("../core/http.zig").fetch(url, buffer, .{
         .timeout_secs = 8,
         .max_response = buffer.len,

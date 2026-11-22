@@ -121,6 +121,8 @@ from features import (  # noqa: F401
     test_source_layer,
     test_engine_health,
     test_parity,
+    test_plugin_permissions,
+    test_rate_limit_rollout,
 )
 
 if __name__ == "__main__":
