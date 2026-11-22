@@ -3316,6 +3316,29 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_torrent_stall_pure).step);
+
+    // Seek-aware piece deadlines: byte offset -> piece (multi-file offsets,
+    // short last piece, piece-size boundaries), window clamping, header/tail
+    // pins, and slide-vs-jump stale-deadline release.
+    const test_torrent_deadline_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/torrent_deadline_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_torrent_deadline_pure).step);
+
+    // Transfer policy: typed state transitions, restart rehydration, disk
+    // guard, path containment, queue cap and seeding goals.
+    const test_transfer_policy_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/transfer_policy_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_transfer_policy_pure).step);
 }
 
 /// Resolve a build-time default API key: the first matching build environment

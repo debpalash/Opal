@@ -702,6 +702,15 @@ pub const AppState = struct {
     http_dl_segments: u32 = 4,
     /// Simultaneous HTTP downloads; the rest queue FIFO. Clamped 1..8.
     http_dl_max_concurrent: u32 = 3,
+    // ── Torrent transfer policy (services/transfer_policy_pure.zig) ──
+    /// Concurrent background torrent downloads; the rest queue. 0 = unlimited.
+    torrent_max_active: u32 = 0,
+    /// Free space (MiB) to keep on the download volume; below it downloads pause.
+    torrent_reserve_mb: u32 = 256,
+    /// Stop seeding at this share ratio x100 (150 = 1.5). 0 = off.
+    torrent_seed_ratio_x100: u32 = 0,
+    /// Stop seeding after this many minutes. 0 = off.
+    torrent_seed_minutes: u32 = 0,
     save_path_buf: [256]u8 = std.mem.zeroes([256]u8),
     save_path_len: usize = 0,
 

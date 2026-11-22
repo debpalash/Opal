@@ -227,6 +227,12 @@ fn createTables() void {
     // Forward-compatible with the brief development build that introduced the
     // table before paused intent was added; duplicate-column errors are benign.
     exec("ALTER TABLE active_torrent_intents ADD COLUMN paused INTEGER NOT NULL DEFAULT 0");
+    // Typed transfer state (services/transfer_policy_pure.zig) and seeding
+    // progress, so queue/seed-goal outcomes and seeding time survive restart.
+    exec("ALTER TABLE active_torrent_intents ADD COLUMN state TEXT NOT NULL DEFAULT ''");
+    exec("ALTER TABLE active_torrent_intents ADD COLUMN seed_seconds INTEGER NOT NULL DEFAULT 0");
+    exec("ALTER TABLE active_torrent_intents ADD COLUMN uploaded INTEGER NOT NULL DEFAULT 0");
+    exec("ALTER TABLE active_torrent_intents ADD COLUMN goal_waived INTEGER NOT NULL DEFAULT 0");
 
     // Durable third-party sync outbox. Playback commits locally first, then
     // providers acknowledge these rows; network/auth failures never discard a

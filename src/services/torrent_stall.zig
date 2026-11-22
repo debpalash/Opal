@@ -140,6 +140,9 @@ pub fn tick() void {
     // Same thread, same cadence: stop and blocklist torrents whose file list
     // holds an executable, and mark finished files as downloaded.
     @import("torrent_guard.zig").tick(ses, &queueToast);
+    // Typed transfer policy: queue cap, disk guard, path containment, seeding
+    // goal, persisted state (transfer_policy_pure.zig).
+    @import("transfer_policy.zig").tick(ses, &queueToast);
 
     // Retire slots whose torrent has been removed (ids are never reused, so a
     // dead id can be dropped for good).

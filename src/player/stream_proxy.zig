@@ -233,6 +233,7 @@ pub fn stopProxy(h: Handle) void {
     // Wake a handler that is currently waiting for a missing torrent piece.
     // The C++ reader observes the generation change within its 25 ms poll.
     c.mpv.torrent_cancel_reads(state.torrentSession(), torrent_id);
+    @import("torrent_deadlines.zig").forget(torrent_id);
 
     // Kick accept() awake by making one local connection.
     if (port > 0) {
@@ -262,6 +263,17 @@ pub fn stopAll() void {
         streams_mutex.unlock();
         if (in_use) stopProxy(h);
     }
+}
+
+/// True while a live proxy stream serves this torrent (any thread).
+pub fn isServingTorrent(torrent_id: i32) bool {
+    if (torrent_id < 0) return false;
+    streams_mutex.lock();
+    defer streams_mutex.unlock();
+    for (streams) |s| {
+        if (s.in_use and !s.stop and s.torrent_id == torrent_id) return true;
+    }
+    return false;
 }
 
 pub fn getStreamUrl(h: Handle, buf: []u8) ?[]const u8 {
@@ -417,12 +429,7 @@ fn handleConnection(args: ConnArgs) !void {
     // remote-control seeks. Move libtorrent's urgent window before blocking on
     // the requested bytes so old play-head deadlines cannot delay the jump.
     if (has_range) {
-        c.mpv.torrent_set_seek_hint(
-            state.torrentSession(),
-            torrent_id,
-            file_idx,
-            range_start,
-        );
+        @import("torrent_deadlines.zig").seekToByte(state.torrentSession(), torrent_id, file_idx, range_start);
     }
 
     const content_length = range_end - range_start + 1;

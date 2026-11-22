@@ -94,6 +94,37 @@ void torrent_seek_prioritize(TorrentSession session, int torrent_id, int file_id
 // initiated by mpv, keyboard shortcuts, chapters and remote clients, not only
 // drags on Opal's native seekbar.
 void torrent_set_seek_hint(TorrentSession session, int torrent_id, int file_idx, long long byte_offset);
+// Seek-aware deadlines. The window/pin/stale-set maths lives in
+// player/torrent_deadline_pure.zig; these only expose geometry and execute it.
+// Geometry of one file in piece space. Returns 0, or -1 before metadata.
+int torrent_get_piece_geometry(TorrentSession session, int torrent_id, int file_idx,
+                               long long* out_file_offset, long long* out_file_size,
+                               int* out_piece_size, int* out_num_pieces);
+// clear_all != 0 drops every deadline first (backward seek / far jump);
+// otherwise only `reset_pieces` lose their deadline and return to normal
+// priority (forward slide). Then `pieces[i]` get `deadlines_ms[i]` at top
+// priority. Out-of-range pieces are skipped. Returns the number of deadlines
+// set, or -1 (bad id, no metadata, or a RAM stream, which must use
+// torrent_set_seek_hint instead).
+int torrent_apply_piece_deadlines(TorrentSession session, int torrent_id, int clear_all,
+                                  const int* reset_pieces, int reset_count,
+                                  const int* pieces, const int* deadlines_ms, int count,
+                                  int target_piece);
+
+// One status() snapshot for the transfer policy (services/transfer_policy.zig).
+typedef struct {
+    long long total_wanted;
+    long long total_wanted_done;
+    long long all_time_upload;
+    int has_metadata;
+    int paused;
+    int has_error;
+    int is_memory;
+} TorrentTransferFacts;
+int torrent_get_transfer_facts(TorrentSession session, int torrent_id, TorrentTransferFacts* out);
+// Bytes available to this user on the volume holding `path`, or -1.
+long long torrent_disk_free_bytes(const char* path);
+
 // Torrent management
 void torrent_pause(TorrentSession session, int torrent_id);
 void torrent_resume(TorrentSession session, int torrent_id);

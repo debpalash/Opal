@@ -1192,7 +1192,7 @@ fn renderScrubber(
             } else |_| {}
 
             if (active_p.current_torrent_id >= 0 and footer_pure.shouldPrioritize(now_ms, S.last_seek_ms)) {
-                c.mpv.torrent_seek_prioritize(state.torrentSession(), active_p.current_torrent_id, active_p.selected_file_idx, seek_pct);
+                @import("../player/torrent_deadlines.zig").seekToPercent(state.torrentSession(), active_p.current_torrent_id, active_p.selected_file_idx, seek_pct);
             }
 
             S.last_seek_ms = now_ms;
