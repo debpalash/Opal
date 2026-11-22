@@ -14,6 +14,8 @@ const alloc = @import("../core/alloc.zig").allocator;
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
 const workers = @import("../core/workers.zig");
 const pure = @import("comics_pure.zig");
+const reader_pure = @import("reader_pure.zig");
+const cbz_pure = @import("cbz_pure.zig");
 const expanded = @import("expanded_reading_pure.zig");
 const comicfury = @import("comicfury_pure.zig");
 const western = @import("western_comics.zig");
@@ -238,32 +240,64 @@ const RESUME_DEBOUNCE_MS: i64 = 1500;
 var resume_saved_page: usize = std.math.maxInt(usize);
 var resume_last_write_ms: i64 = 0;
 
-/// The current issue's stable identity: the source URL when there is one (it
-/// survives a restart and names the exact issue), else the title (OPDS-PSE).
+/// OPDS-PSE resume key (server identity + book id), set by loadPseBook. A PSE
+/// book has no scraper URL, and its display title is not an identity.
+var pse_resume_key: [600]u8 = undefined;
+var pse_resume_key_len: usize = 0;
+
+/// The current issue's stable identity (reader_pure): server identity + path
+/// for a URL, the pseudo route for MangaDex & co, server + book id for
+/// OPDS-PSE. Never the display title.
 fn resumeKeyNow(out: []u8) []const u8 {
-    return pure.resumeKey(
-        state.app.comic.url_buf[0..state.app.comic.url_len],
-        state.app.comic.title[0..state.app.comic.title_len],
-        out,
-    );
+    const url = state.app.comic.url_buf[0..state.app.comic.url_len];
+    if (url.len > 0) return reader_pure.urlResumeKey(url, out);
+    const n = @min(pse_resume_key_len, out.len);
+    @memcpy(out[0..n], pse_resume_key[0..n]);
+    return out[0..n];
 }
 
 /// Look up the persisted last-read page for `key` and arm it as the jump target
 /// for the load that's starting. Applied by applyPendingResume once pages stage.
-fn armPendingResume(key: []const u8) void {
-    if (key.len == 0) return;
+/// `legacy` is the pre-v2 key (raw URL, or the title for OPDS-PSE): consulted
+/// once when the new key has no row, so existing positions survive the change.
+fn armPendingResume(key: []const u8, legacy: []const u8) void {
     var val_buf: [24]u8 = undefined;
-    const val = db.libraryGetStatus(RESUME_KIND, key, &val_buf);
-    state.app.comic.pending_resume_page = pure.parseResumePage(val);
+    var page: usize = 0;
+    if (key.len > 0) page = pure.parseResumePage(db.libraryGetStatus(RESUME_KIND, key, &val_buf));
+    legacy_resume_key_len = 0;
+    if (page == 0 and legacy.len > 0 and !std.mem.eql(u8, key, legacy)) {
+        page = pure.parseResumePage(db.libraryGetStatus(RESUME_KIND, legacy, &val_buf));
+        // Remember it so the first save under the new key retires the old
+        // Continue row instead of leaving a duplicate.
+        if (page > 0 and legacy.len <= legacy_resume_key.len) {
+            @memcpy(legacy_resume_key[0..legacy.len], legacy);
+            legacy_resume_key_len = legacy.len;
+        }
+    }
+    state.app.comic.pending_resume_page = page;
+}
+var legacy_resume_key: [512]u8 = undefined;
+var legacy_resume_key_len: usize = 0;
+
+fn armResumeForCurrent() void {
+    var key_buf: [600]u8 = undefined;
+    var legacy_buf: [512]u8 = undefined;
+    const key = resumeKeyNow(&key_buf);
+    const legacy = pure.resumeKey(state.app.comic.url_buf[0..state.app.comic.url_len], state.app.comic.title[0..state.app.comic.title_len], &legacy_buf);
+    armPendingResume(key, legacy);
 }
 
 /// Persist the last-read page and mirror it into the unified read-model.
 fn saveResume(page: usize) void {
-    var key_buf: [512]u8 = undefined;
+    var key_buf: [600]u8 = undefined;
     const key = resumeKeyNow(&key_buf);
     if (key.len == 0) return;
     var val_buf: [24]u8 = undefined;
     db.librarySetStatus(RESUME_KIND, key, pure.formatResumePage(&val_buf, page));
+    if (legacy_resume_key_len > 0) {
+        @import("library_store.zig").removeItem("comics", legacy_resume_key[0..legacy_resume_key_len]);
+        legacy_resume_key_len = 0;
+    }
 
     // Mirror into library_items so home's Continue rail spans comics too.
     // library_status above stays authoritative; this is the denormalized cache.
@@ -369,7 +403,8 @@ fn loadComicIssue(url: []const u8, issue: ?f64) void {
     // so it works for a fresh open and for a home deep link alike). Reset the
     // debounce bookkeeping first — the previous issue's page must not carry.
     resume_saved_page = std.math.maxInt(usize);
-    armPendingResume(state.app.comic.url_buf[0..state.app.comic.url_len]);
+    pse_resume_key_len = 0;
+    armResumeForCurrent();
 
     freeComicPages();
 
@@ -429,9 +464,12 @@ pub fn loadPseBook(title: []const u8, template: []const u8, count: u32, auth: []
     @memcpy(state.app.comic.title[0..tl], title[0..tl]);
     state.app.comic.title_len = tl;
 
-    // A PSE book has no scraper URL, so its resume key is the title (just set).
+    // A PSE book has no scraper URL: key it on server identity + book id from
+    // the page template (reader_pure), with the old title key as a fallback.
     resume_saved_page = std.math.maxInt(usize);
-    armPendingResume(state.app.comic.title[0..tl]);
+    const pk = reader_pure.pseResumeKey(template, &pse_resume_key);
+    pse_resume_key_len = pk.len;
+    armResumeForCurrent();
 
     // Stage page URLs 0-indexed, bounded by the page_urls array (128).
     const max_pages = state.app.comic.page_urls.len;
@@ -584,11 +622,101 @@ pub fn closeComic() void {
     state.app.comic.dl_progress.store(0, .release);
 }
 
+/// Open a local CBZ archive in the reader (`cbz:<abs path>` route, so resume
+/// and the Continue rail reopen it). UI-THREAD ONLY, like loadComic.
+pub fn loadCbzFile(path: []const u8) void {
+    var route_buf: [512]u8 = undefined;
+    const route = std.fmt.bufPrint(&route_buf, "cbz:{s}", .{path}) catch return;
+    if (reader_pure.localArchivePath(route) == null) return;
+    loadComic(route);
+}
+
+/// Stage a local CBZ's pages straight into page_pixels (no download pass).
+/// The archive is untrusted: cbz_pure bounds every offset and size, entry
+/// names go through reader_pure.sanitizeEntryPath (no `..`, no absolute
+/// paths), pages follow natural order, and a corrupt entry becomes a
+/// placeholder page instead of an error. Worker thread (fetchComicThread).
+fn loadCbzPages(path_in: []const u8, gen: u32) void {
+    var path_buf: [512]u8 = undefined;
+    const path = path_buf[0..@min(path_in.len, path_buf.len)];
+    @memcpy(path, path_in[0..path.len]);
+    defer if (state.app.comic.dl_gen.load(.acquire) == gen) state.app.comic.is_loading.store(false, .release);
+
+    const file = io_global.openFileAbsolute(path, .{}) catch {
+        logs.pushLog("error", "comics", "Could not open the comic archive", true);
+        state.showToastTyped("Could not open this comic archive", .warning);
+        return;
+    };
+    const data = io_global.readToEndAlloc(file, alloc, cbz_pure.MAX_ARCHIVE_BYTES) catch {
+        io_global.closeFile(file);
+        logs.pushLog("error", "comics", "Comic archive could not be read", true);
+        return;
+    };
+    io_global.closeFile(file);
+    defer alloc.free(data);
+
+    const archive = cbz_pure.Archive.open(data) catch |err| {
+        var msg_buf: [96]u8 = undefined;
+        logs.pushLog("error", "comics", std.fmt.bufPrint(&msg_buf, "Not a readable CBZ ({s})", .{@errorName(err)}) catch "Not a readable CBZ", true);
+        state.showToastTyped("This file is not a readable comic archive", .warning);
+        return;
+    };
+    const entries = alloc.alloc(cbz_pure.PageEntry, cbz_pure.MAX_ENTRIES) catch return;
+    defer alloc.free(entries);
+    const got = cbz_pure.collectPages(&archive, entries);
+    if (got.skipped_unsafe > 0) logs.pushLog("warn", "comics", "Skipped unsafe entries in a comic archive", false);
+    const n = @min(got.count, state.app.comic.page_urls.len);
+    if (n == 0) {
+        state.showToastTyped("This archive has no readable pages", .warning);
+        return;
+    }
+
+    // Title: the file name without its extension.
+    const base = std.fs.path.basename(path);
+    const stem = base[0 .. std.mem.lastIndexOfScalar(u8, base, '.') orelse base.len];
+    const tl = @min(stem.len, state.app.comic.title.len);
+    @memcpy(state.app.comic.title[0..tl], stem[0..tl]);
+    state.app.comic.title_len = tl;
+
+    // Hold dl_in_flight while publishing so freeComicPages waits for us.
+    _ = state.app.comic.dl_in_flight.fetchAdd(1, .acq_rel);
+    defer _ = state.app.comic.dl_in_flight.fetchSub(1, .acq_rel);
+    if (state.app.comic.dl_gen.load(.acquire) != gen) return;
+    state.app.comic.page_count = n;
+    state.app.comic.is_loading.store(false, .release);
+    state.wakeUi();
+
+    var staged: u64 = 0;
+    for (entries[0..n], 0..) |pe, i| {
+        if (state.app.comic.dl_gen.load(.acquire) != gen or workers.isQuitting()) return;
+        const bytes = archive.extract(alloc, pe.entry, cbz_pure.MAX_ENTRY_BYTES) catch {
+            markPageFailed(i, gen);
+            continue;
+        };
+        if (staged + bytes.len > cbz_pure.MAX_TOTAL_BYTES or !pure.acceptsPageBody(bytes)) {
+            alloc.free(bytes);
+            markPageFailed(i, gen);
+            continue;
+        }
+        staged += bytes.len;
+        pages_mutex.lock();
+        state.app.comic.page_pixels[i] = bytes;
+        pages_mutex.unlock();
+        _ = state.app.comic.dl_progress.fetchAdd(1, .acq_rel);
+        state.wakeUi();
+    }
+}
+
 fn fetchComicThread(gen: u32) void {
     workers.enter();
     defer workers.leave();
     defer if (!workers.isQuitting() and state.app.comic.dl_gen.load(.acquire) == gen) state.wakeUi();
     const url = state.app.comic.url_buf[0..state.app.comic.url_len];
+
+    if (reader_pure.localArchivePath(url)) |path| {
+        loadCbzPages(path, gen);
+        return;
+    }
 
     inline for (.{ @import("webcomic_sources.zig").Provider.xkcd, @import("webcomic_sources.zig").Provider.smbc, @import("webcomic_sources.zig").Provider.poorlydrawnlines }) |provider| {
         const scheme = @tagName(provider) ++ ":";
@@ -1530,19 +1658,29 @@ fn parsePluginJson(json: []const u8) bool {
     }
 
     // Next URL
+    // Plugin output is untrusted: next/prev/page links must be plain http(s)
+    // (reader_pure.isSafeLink), never cbz:/file:/javascript: routes.
     if (findJsonString(json, "\"next_url\":\"")) |nxt| {
-        const len = @min(nxt.len, 511);
-        @memcpy(state.app.comic.next_url[0..len], nxt[0..len]);
-        state.app.comic.next_url_len = len;
+        if (!reader_pure.isSafeLink(nxt)) {
+            state.app.comic.next_url_len = 0;
+        } else {
+            const len = @min(nxt.len, 511);
+            @memcpy(state.app.comic.next_url[0..len], nxt[0..len]);
+            state.app.comic.next_url_len = len;
+        }
     } else {
         state.app.comic.next_url_len = 0;
     }
 
     // Prev URL
     if (findJsonString(json, "\"prev_url\":\"")) |prv| {
-        const len = @min(prv.len, 511);
-        @memcpy(state.app.comic.prev_url[0..len], prv[0..len]);
-        state.app.comic.prev_url_len = len;
+        if (!reader_pure.isSafeLink(prv)) {
+            state.app.comic.prev_url_len = 0;
+        } else {
+            const len = @min(prv.len, 511);
+            @memcpy(state.app.comic.prev_url[0..len], prv[0..len]);
+            state.app.comic.prev_url_len = len;
+        }
     } else {
         state.app.comic.prev_url_len = 0;
     }
@@ -1560,7 +1698,7 @@ fn parsePluginJson(json: []const u8) bool {
         const q2 = std.mem.indexOfScalar(u8, json[abs_q1..], '"') orelse break;
         const page_url = json[abs_q1 .. abs_q1 + q2];
 
-        if (page_url.len > 10 and page_url.len < 512) {
+        if (page_url.len > 10 and page_url.len < 512 and reader_pure.isSafeLink(page_url)) {
             @memcpy(state.app.comic.page_urls[count][0..page_url.len], page_url);
             state.app.comic.page_url_lens[count] = page_url.len;
             count += 1;
@@ -1623,7 +1761,7 @@ fn parseImageUrls(html: []const u8) void {
         // Skip tiny icons/thumbnails
         if (src_end < 30) continue;
 
-        if (img_url.len < 512) {
+        if (img_url.len < 512 and reader_pure.isSafeLink(img_url)) {
             @memcpy(state.app.comic.page_urls[count][0..img_url.len], img_url);
             state.app.comic.page_url_lens[count] = img_url.len;
             count += 1;
@@ -1638,16 +1776,21 @@ fn parseNavLinks(html: []const u8) void {
     state.app.comic.prev_url_len = 0;
 
     // Look for: href="...">...Next...
+    // Scraped hrefs are untrusted: only plain http(s) links become nav targets.
     if (findLinkWithText(html, "Next")) |next_url| {
-        const len = @min(next_url.len, 511);
-        @memcpy(state.app.comic.next_url[0..len], next_url[0..len]);
-        state.app.comic.next_url_len = len;
+        if (reader_pure.isSafeLink(next_url)) {
+            const len = @min(next_url.len, 511);
+            @memcpy(state.app.comic.next_url[0..len], next_url[0..len]);
+            state.app.comic.next_url_len = len;
+        }
     }
 
     if (findLinkWithText(html, "Prev")) |prev_url| {
-        const len = @min(prev_url.len, 511);
-        @memcpy(state.app.comic.prev_url[0..len], prev_url[0..len]);
-        state.app.comic.prev_url_len = len;
+        if (reader_pure.isSafeLink(prev_url)) {
+            const len = @min(prev_url.len, 511);
+            @memcpy(state.app.comic.prev_url[0..len], prev_url[0..len]);
+            state.app.comic.prev_url_len = len;
+        }
     }
 }
 
@@ -1681,6 +1824,7 @@ fn downloadPages(gen: u32) void {
             threads[t] = null;
         }
     }
+    markMissingPages(gen);
 }
 
 fn downloadSinglePage(i: usize, gen: u32) void {
@@ -2313,7 +2457,7 @@ fn loadWesternComic(value: []const u8, gen: u32) bool {
     if (western.pure.route(&selected_route, identity.provider, base, identity.work, book.chapters[book.selected].url.get())) |route| {
         @memcpy(state.app.comic.url_buf[0..route.len], route);
         state.app.comic.url_len = route.len;
-        armPendingResume(route);
+        armResumeForCurrent();
     }
     const title = book.chapters[book.selected].title.get();
     @memcpy(state.app.comic.title[0..title.len], title);
@@ -3973,6 +4117,9 @@ pub const ReaderToolbarLayout = struct {
     title: dvui.Rect.Physical = .{},
     info: dvui.Rect.Physical = .{},
     mode: dvui.Rect.Physical = .{},
+    rtl: dvui.Rect.Physical = .{},
+    zoom_out: dvui.Rect.Physical = .{},
+    zoom_in: dvui.Rect.Physical = .{},
     previous: dvui.Rect.Physical = .{},
     next: dvui.Rect.Physical = .{},
     ocr: dvui.Rect.Physical = .{},
@@ -4095,10 +4242,11 @@ pub fn renderReaderToolbar() void {
     const compact = available < 480;
     const chapters = western.pure.splitRoute(comic.url_buf[0..comic.url_len]) != null or pure.mangaIdFromRoute(comic.url_buf[0..comic.url_len]) != null;
     var info_buffer: [64]u8 = undefined;
-    const first = if (comic.view_mode == .single_page) comic.current_page + 1 else comic.dl_progress.load(.acquire);
-    const info = std.fmt.bufPrint(&info_buffer, "{d}/{d}{s}", .{ first, comic.page_count, if (compact or comic.view_mode == .single_page) "" else " loaded" }) catch "";
+    const paged = comic.view_mode != .scroll;
+    const first = if (paged) comic.current_page + 1 else comic.dl_progress.load(.acquire);
+    const info = std.fmt.bufPrint(&info_buffer, "{d}/{d}{s}", .{ first, comic.page_count, if (compact or paged) "" else " loaded" }) catch "";
     const info_font = dvui.themeGet().font_body.withSize(theme.font_size.small);
-    const button_count: usize = 4 + @as(usize, @intFromBool(chapters)) + (if (compact) @as(usize, 1) else 2 + @as(usize, @intFromBool(comic.prev_url_len > 0)) + @as(usize, @intFromBool(comic.next_url_len > 0)));
+    const button_count: usize = 4 + @as(usize, @intFromBool(chapters)) + (if (compact) @as(usize, 1) else 5 + @as(usize, @intFromBool(comic.prev_url_len > 0)) + @as(usize, @intFromBool(comic.next_url_len > 0)));
     const title_width = @max(0, available - @as(f32, @floatFromInt(button_count)) * 26 - info_font.textSize(info).w - 16);
     var spare: dvui.Rect.Physical = .{};
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .background = true, .color_fill = .{ .color = theme.colors.bg_surface }, .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 } });
@@ -4113,15 +4261,32 @@ pub fn renderReaderToolbar() void {
     var info_data: dvui.WidgetData = undefined;
     _ = dvui.label(@src(), "{s}", .{info}, .{ .data_out = &info_data, .font = dvui.themeGet().font_body.withSize(theme.font_size.small), .color_text = .{ .color = theme.colors.text_secondary }, .gravity_y = 0.5, .padding = .{ .x = 4, .w = 4 } });
     layout.info = info_data.borderRectScale().r;
-    if (readerButton(@src(), if (comic.view_mode == .scroll) icons.tvg.lucide.@"scroll-text" else icons.tvg.lucide.@"book-open", "Switch reading mode", true, false, false, &layout.mode)) comic.view_mode = if (comic.view_mode == .scroll) .single_page else .scroll;
-    if (readerButton(@src(), icons.tvg.lucide.@"chevron-left", "Previous page", comic.current_page > 0, false, false, &layout.previous)) {
-        comic.current_page -= 1;
+    const mode_icon = switch (comic.view_mode) {
+        .scroll => icons.tvg.lucide.@"scroll-text",
+        .single_page => icons.tvg.lucide.@"rectangle-vertical",
+        .spread => icons.tvg.lucide.@"columns-2",
+    };
+    const mode_label = switch (comic.view_mode) {
+        .scroll => "Reading mode: scroll (switch to single page)",
+        .single_page => "Reading mode: single page (switch to two-page spread)",
+        .spread => "Reading mode: two-page spread (switch to scroll)",
+    };
+    if (readerButton(@src(), mode_icon, mode_label, true, false, false, &layout.mode)) {
+        comic.view_mode = reader_pure.nextMode(comic.view_mode);
         comic.scroll_to_page = true;
     }
-    if (readerButton(@src(), icons.tvg.lucide.@"chevron-right", "Next page", comic.current_page + 1 < comic.page_count, false, false, &layout.next)) {
-        comic.current_page += 1;
-        comic.scroll_to_page = true;
+    if (!compact) {
+        if (readerButton(@src(), icons.tvg.lucide.@"arrow-right-left", if (comic.rtl) "Right-to-left reading (switch to left-to-right)" else "Left-to-right reading (switch to right-to-left)", true, comic.rtl, false, &layout.rtl)) comic.rtl = !comic.rtl;
+        if (readerButton(@src(), icons.tvg.lucide.@"zoom-out", "Zoom out", comic.zoom > reader_pure.ZOOM_MIN, false, false, &layout.zoom_out)) comic.zoom = reader_pure.zoomOut(comic.zoom);
+        if (readerButton(@src(), icons.tvg.lucide.@"zoom-in", "Zoom in", comic.zoom < reader_pure.ZOOM_MAX, false, false, &layout.zoom_in)) comic.zoom = reader_pure.zoomIn(comic.zoom);
     }
+    // The left / right chevrons follow the page layout, like the arrow keys.
+    const left_dir = reader_pure.keyDirection(.left, comic.rtl);
+    const right_dir = reader_pure.keyDirection(.right, comic.rtl);
+    const left_target = reader_pure.stepPage(comic.view_mode, comic.current_page, comic.page_count, left_dir);
+    const right_target = reader_pure.stepPage(comic.view_mode, comic.current_page, comic.page_count, right_dir);
+    if (readerButton(@src(), icons.tvg.lucide.@"chevron-left", if (left_dir == .previous) "Previous page" else "Next page", left_target != null, false, false, &layout.previous)) _ = turnPage(left_dir);
+    if (readerButton(@src(), icons.tvg.lucide.@"chevron-right", if (right_dir == .next) "Next page" else "Previous page", right_target != null, false, false, &layout.next)) _ = turnPage(right_dir);
     if (!compact) {
         if (comic.next_url_len > 0 and readerButton(@src(), icons.tvg.lucide.@"chevrons-right", "Next issue", true, false, false, &spare)) loadComic(comic.next_url[0..comic.next_url_len]);
         if (readerButton(@src(), icons.tvg.lucide.@"scan-text", "Read text from page", true, comic.show_ocr_overlay, false, &layout.ocr)) ocrCurrentPage();
@@ -4136,6 +4301,10 @@ pub fn renderReaderToolbar() void {
             defer items.deinit();
             if (comic.prev_url_len > 0 and readerMenuItem(@src(), "Previous issue")) loadComic(comic.prev_url[0..comic.prev_url_len]);
             if (comic.next_url_len > 0 and readerMenuItem(@src(), "Next issue")) loadComic(comic.next_url[0..comic.next_url_len]);
+            if (readerMenuItem(@src(), if (comic.rtl) "Read left to right" else "Read right to left")) comic.rtl = !comic.rtl;
+            if (readerMenuItem(@src(), "Zoom in")) comic.zoom = reader_pure.zoomIn(comic.zoom);
+            if (readerMenuItem(@src(), "Zoom out")) comic.zoom = reader_pure.zoomOut(comic.zoom);
+            if (readerMenuItem(@src(), "Reset zoom")) comic.zoom = 1.0;
             if (readerMenuItem(@src(), "Read text from page")) ocrCurrentPage();
             if (readerMenuItem(@src(), if (comic.narrating) "Stop narration" else "Start narration")) toggleNarration();
         }
@@ -4189,34 +4358,31 @@ pub fn renderPaneContent(pane_idx: usize) void {
         }
     }
     // ── Reader keyboard navigation (handled in-scope; input.zig untouched) ──
-    // Left / J → previous page · Right / K → next page. Works in both view
-    // modes, preserving continuous reading while revealing the target page. Issue nav
-    // stays on the «/» buttons.
+    // Arrows follow the page layout (reader_pure.keyDirection: in a
+    // right-to-left book the left arrow turns forward); J / K are always
+    // previous / next. Spread mode steps a whole spread (reader_pure.stepPage).
     for (dvui.events()) |*e| {
         if (e.handled or e.evt != .key) continue;
         const ke = e.evt.key;
         if (ke.action != .down and ke.action != .repeat) continue;
         if (ke.mod.control() or ke.mod.command() or ke.mod.alt()) continue;
-        const prev = ke.code == .left or ke.code == .j;
-        const next = ke.code == .right or ke.code == .k;
-        if (!prev and !next) continue;
-        if (prev and state.app.comic.current_page > 0) {
-            state.app.comic.current_page -= 1;
-            state.app.comic.scroll_to_page = true;
-            e.handled = true;
-        } else if (next and state.app.comic.current_page + 1 < state.app.comic.page_count) {
-            state.app.comic.current_page += 1;
-            state.app.comic.scroll_to_page = true;
-            e.handled = true;
-        }
+        const key: reader_pure.NavKey = switch (ke.code) {
+            .left => .left,
+            .right => .right,
+            .j => .j,
+            .k => .k,
+            else => continue,
+        };
+        if (turnPage(reader_pure.keyDirection(key, state.app.comic.rtl))) e.handled = true;
     }
 
     const jump_to_page = state.app.comic.scroll_to_page;
     state.app.comic.scroll_to_page = false;
+    const zoom = reader_pure.clampZoom(state.app.comic.zoom);
 
-    if (state.app.comic.view_mode == .single_page) {
-        // Single page mode
-        var sp_scroll = dvui.scrollArea(@src(), .{}, .{
+    if (state.app.comic.view_mode != .scroll) {
+        // Single page / two-page spread. Zoomed pages scroll both ways.
+        var sp_scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto }, .{
             .expand = .both,
             .background = true,
             .color_fill = .{ .color = theme.colors.bg_surface },
@@ -4225,32 +4391,28 @@ pub fn renderPaneContent(pane_idx: usize) void {
 
         if (jump_to_page) sp_scroll.si.scrollToOffset(.vertical, 0);
 
-        // Get available width from scroll area for proper image scaling
-        const avail_w = sp_scroll.data().contentRect().w;
-
-        const pg = state.app.comic.current_page;
-        if (pg < state.app.comic.page_count) {
-            decodePageTexture(pg);
-            if (state.app.comic.page_textures[pg]) |tex| {
-                const tw = state.app.comic.page_widths[pg];
-                const th = state.app.comic.page_heights[pg];
-                // Fit-to-width: scale image to fill available width, maintain aspect ratio
-                const display_w = if (avail_w > 10) avail_w - 4 else @as(f32, @floatFromInt(tw));
-                const scale = display_w / @as(f32, @floatFromInt(tw));
-                const display_h = @as(f32, @floatFromInt(th)) * scale;
-                _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
-                    .id_extra = pg + 10000,
-                    .min_size_content = .{ .w = display_w, .h = display_h },
-                    .gravity_x = 0.5,
-                    .gravity_y = 0.0,
-                });
-            } else {
-                renderPagePlaceholder(pg, avail_w);
+        const view = sp_scroll.data().contentRect();
+        const count = state.app.comic.page_count;
+        const spread_mode = state.app.comic.view_mode == .spread;
+        const s: reader_pure.Spread = if (spread_mode) reader_pure.spreadAt(state.app.comic.current_page, count) else .{ .first = state.app.comic.current_page };
+        if (count > 0 and s.first < count) {
+            const order = reader_pure.displayOrder(s, state.app.comic.rtl);
+            const slot_w = if (s.second != null) @max((view.w - 8) / 2, 10) else @max(view.w - 4, 10);
+            const fit: reader_pure.Fit = if (spread_mode) .page else .width;
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 0.5 });
+            for (order) |maybe| {
+                const pg = maybe orelse continue;
+                renderPageImage(pg, slot_w, view.h - 4, fit, zoom);
             }
+            row.deinit();
+            const lo = s.first;
+            const hi = s.second orelse s.first;
+            enforcePageCache(lo, hi, reader_pure.NEIGHBOUR_RADIUS);
+            prefetchNeighbours(lo, hi);
         }
     } else {
         // Scroll mode — all pages stacked vertically
-        var scroll = dvui.scrollArea(@src(), .{}, .{
+        var scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto }, .{
             .expand = .both,
             .background = true,
             .color_fill = .{ .color = theme.colors.bg_surface },
@@ -4265,8 +4427,10 @@ pub fn renderPaneContent(pane_idx: usize) void {
         // remains reachable and the scrollbar does not collapse behind us.
         var page_top: f32 = 0;
         const selected_page = state.app.comic.current_page;
+        var on_screen_lo: usize = std.math.maxInt(usize);
+        var on_screen_hi: usize = 0;
         for (0..state.app.comic.page_count) |pg| {
-            const width = @max(avail_w - 4, 10);
+            const width = @max(avail_w - 4, 10) * zoom;
             const source_width = state.app.comic.page_widths[pg];
             const source_height = state.app.comic.page_heights[pg];
             const height = if (source_width > 0 and source_height > 0) width * @as(f32, @floatFromInt(source_height)) / @as(f32, @floatFromInt(source_width)) else width * 1.5;
@@ -4274,6 +4438,10 @@ pub fn renderPaneContent(pane_idx: usize) void {
             page_top += height + 2;
             if (jump_to_page and pg == selected_page) jump_offset = top;
             if (!jump_to_page and scroll.si.viewport.y >= top and scroll.si.viewport.y < page_top) state.app.comic.current_page = pg;
+            if (top + height >= scroll.si.viewport.y and top <= scroll.si.viewport.y + scroll.si.viewport.h) {
+                on_screen_lo = @min(on_screen_lo, pg);
+                on_screen_hi = @max(on_screen_hi, pg);
+            }
             var page_box = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = pg,
                 .gravity_x = 0.5,
@@ -4290,28 +4458,15 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 continue;
             }
 
-            decodePageTexture(pg);
-
-            if (state.app.comic.page_textures[pg]) |tex| {
-                const tw = state.app.comic.page_widths[pg];
-                const th = state.app.comic.page_heights[pg];
-                // Fit-to-width: scale image to fill available width, maintain aspect ratio
-                const display_w = if (avail_w > 10) avail_w - 4 else @as(f32, @floatFromInt(tw));
-                const scale_s = display_w / @as(f32, @floatFromInt(tw));
-                const display_h = @as(f32, @floatFromInt(th)) * scale_s;
-                _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
-                    .id_extra = pg + 10000,
-                    .min_size_content = .{ .w = display_w, .h = display_h },
-                    .gravity_x = 0.5,
-                });
-            } else {
-                renderPagePlaceholder(pg, avail_w);
-            }
+            renderPageImage(pg, width, 0, .width, 1.0);
         }
         // Scroll bounds are only final after layout is committed.
         const scroll_info = scroll.si;
         scroll.deinit();
         if (jump_offset) |offset| scroll_info.scrollToOffset(.vertical, offset);
+        // Offscreen pages already freed above; the byte budget still caps a
+        // tall viewport full of huge strips (never evicting what is on screen).
+        if (on_screen_lo <= on_screen_hi) enforcePageCache(on_screen_lo, on_screen_hi, state.app.comic.page_count);
     }
 
     // ═══════════════════════════════════════════════════════
@@ -4390,6 +4545,8 @@ var page_decode_mutex: @import("../core/sync.zig").Mutex = .{};
 var page_decode_ready: [128]?DecodedPage = @as([128]?DecodedPage, @splat(null));
 var page_decode_busy: [128]bool = @as([128]bool, @splat(false));
 var page_decode_failed: [128]bool = @as([128]bool, @splat(false));
+/// Pages whose download finished without bytes (404, non-image, timeout).
+var page_missing: [128]bool = @as([128]bool, @splat(false));
 var page_decode_outstanding: usize = 0;
 
 fn releaseDecodeReservation(pg: usize, generation: u32) void {
@@ -4413,6 +4570,7 @@ fn decodePageWorker(pg: usize, generation: u32, raw: []u8) void {
     var decoded: ?page_image_decode.DecodedRgba = null;
     defer if (decoded) |image| image.deinit();
     if (generation == state.app.comic.dl_gen.load(.acquire) and !workers.isQuitting()) decoded = page_image_decode.comicPage(raw);
+    if (decoded) |*image| downscaleHugePage(image);
 
     page_decode_mutex.lock();
     defer page_decode_mutex.unlock();
@@ -4476,13 +4634,110 @@ fn resetPageDecodes() void {
     }
     @memset(&page_decode_busy, false);
     @memset(&page_decode_failed, false);
+    @memset(&page_missing, false);
+}
+
+/// Shrink a page past the texture edge / byte caps in place (integer box
+/// filter, reader_pure) before it is published for upload. Runs on the decode
+/// worker, so a 30000 px webtoon strip never reaches the GPU at full size.
+fn downscaleHugePage(image: *page_image_decode.DecodedRgba) void {
+    if (image.width <= 0 or image.height <= 0) return;
+    const w: u32 = @intCast(image.width);
+    const h: u32 = @intCast(image.height);
+    const factor = reader_pure.downscaleFactor(w, h, reader_pure.MAX_TEXTURE_EDGE, reader_pure.MAX_TEXTURE_BYTES);
+    if (factor <= 1) return;
+    const d = reader_pure.boxDownscaleInPlace(image.pixels[0..image.rgba_len], w, h, factor);
+    image.width = @intCast(d.w);
+    image.height = @intCast(d.h);
+    image.rgba_len = @as(usize, d.w) * d.h * 4;
+}
+
+/// A page that can never decode (corrupt archive entry): placeholder, no retry.
+fn markPageFailed(pg: usize, generation: u32) void {
+    if (pg >= page_decode_failed.len) return;
+    page_decode_mutex.lock();
+    defer page_decode_mutex.unlock();
+    if (generation == state.app.comic.dl_gen.load(.acquire)) page_decode_failed[pg] = true;
+}
+
+/// After a download pass, flag staged pages that never arrived so the reader
+/// says "missing" instead of "downloading..." forever.
+fn markMissingPages(generation: u32) void {
+    const n = @min(state.app.comic.page_count, page_missing.len);
+    for (0..n) |pg| {
+        if (state.app.comic.page_url_lens[pg] == 0 or pageReady(pg)) continue;
+        page_decode_mutex.lock();
+        if (generation == state.app.comic.dl_gen.load(.acquire)) page_missing[pg] = true;
+        page_decode_mutex.unlock();
+    }
+}
+
+/// Step one page (or spread) in reading order. True when the page changed.
+pub fn turnPage(dir: reader_pure.Direction) bool {
+    const cm = &state.app.comic;
+    const target = reader_pure.stepPage(cm.view_mode, cm.current_page, cm.page_count, dir) orelse return false;
+    cm.current_page = target;
+    cm.scroll_to_page = true;
+    return true;
+}
+
+/// Draw one page (decoded texture or a placeholder) sized by reader_pure.
+fn renderPageImage(pg: usize, box_w: f32, box_h: f32, fit: reader_pure.Fit, zoom: f32) void {
+    decodePageTexture(pg);
+    if (state.app.comic.page_textures[pg]) |tex| {
+        const size = reader_pure.displaySize(state.app.comic.page_widths[pg], state.app.comic.page_heights[pg], box_w, box_h, fit, zoom);
+        _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
+            .id_extra = pg + 10000,
+            .min_size_content = .{ .w = size.w, .h = size.h },
+            .gravity_x = 0.5,
+            .gravity_y = 0.0,
+        });
+    } else {
+        renderPagePlaceholder(pg, box_w);
+    }
+}
+
+fn residentBytes(out: *[128]u64) u64 {
+    var total: u64 = 0;
+    for (out, 0..) |*b, i| {
+        b.* = if (state.app.comic.page_textures[i] != null) reader_pure.textureBytes(state.app.comic.page_widths[i], state.app.comic.page_heights[i]) else 0;
+        total +|= b.*;
+    }
+    return total;
+}
+
+/// Free decoded pages outside the neighbour window / over the byte budget
+/// (reader_pure.pickEviction). On-screen pages are never evicted. Sizes stay
+/// in page_widths/heights so layout does not jump; bytes stay for re-decode.
+fn enforcePageCache(visible_lo: usize, visible_hi: usize, radius: usize) void {
+    var resident: [128]u64 = undefined;
+    _ = residentBytes(&resident);
+    while (reader_pure.pickEviction(&resident, visible_lo, visible_hi, radius, reader_pure.TEXTURE_BUDGET_BYTES)) |victim| {
+        if (state.app.comic.page_textures[victim]) |texture| dvui.textureDestroyLater(texture);
+        state.app.comic.page_textures[victim] = null;
+        resident[victim] = 0;
+    }
+}
+
+/// Decode the next / previous pages ahead of a page turn while the budget
+/// has room. The decode worker limit still bounds concurrent work.
+fn prefetchNeighbours(lo: usize, hi: usize) void {
+    var resident: [128]u64 = undefined;
+    const total = residentBytes(&resident);
+    const count = @min(state.app.comic.page_count, resident.len);
+    var d: usize = 1;
+    while (d <= reader_pure.NEIGHBOUR_RADIUS) : (d += 1) {
+        if (hi + d < count and reader_pure.prefetchAllowed(hi + d, lo, hi, reader_pure.NEIGHBOUR_RADIUS, total, reader_pure.TEXTURE_BUDGET_BYTES)) decodePageTexture(hi + d);
+        if (lo >= d and reader_pure.prefetchAllowed(lo - d, lo, hi, reader_pure.NEIGHBOUR_RADIUS, total, reader_pure.TEXTURE_BUDGET_BYTES)) decodePageTexture(lo - d);
+    }
 }
 
 fn renderPagePlaceholder(pg: usize, available_width: f32) void {
     page_decode_mutex.lock();
     const failed = page_decode_failed[pg];
+    const missing = page_missing[pg];
     page_decode_mutex.unlock();
-    const status = if (failed) "could not be decoded" else if (pageReady(pg)) "preparing..." else "downloading...";
+    const status = reader_pure.pageStatusLabel(reader_pure.pageStatus(pageReady(pg), failed, missing));
     var label_buf: [80]u8 = undefined;
     const label = @import("opal-fmt").bufPrintZ(&label_buf, "Page {d} {s}", .{ pg + 1, status }) catch "Preparing page…";
     const width = @max(available_width - 4, 10);

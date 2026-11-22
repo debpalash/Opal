@@ -262,6 +262,14 @@
     <button id="cx-more" class="browse-more" style="display:none">Load more</button>
     <div id="cx-reader" style="display:none">
       <div class="search-row"><button id="cx-close">‹ Close reader</button></div>
+      <div class="search-row cx-view-controls">
+        <select id="cx-mode" aria-label="Reading mode"><option value="scroll">Scroll</option><option value="single">Single page</option><option value="spread">Two-page spread</option></select>
+        <button id="cx-rtl" aria-pressed="false">Right to left</button>
+        <button id="cx-zoom-out">Zoom out</button>
+        <button id="cx-zoom-in">Zoom in</button>
+        <button id="cx-page-left" aria-label="Previous page">Previous page</button>
+        <button id="cx-page-right" aria-label="Next page">Next page</button>
+      </div>
       <div class="hint" id="cx-progress"></div>
       <div id="cx-pages"></div>
     </div>

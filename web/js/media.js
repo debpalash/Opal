@@ -348,6 +348,7 @@ async function openComic(url){
   clearInterval(cxPages);
   $('cx-pages').innerHTML = '';
   comicPageSlots.clear();
+  comicView.synced = false;
   if ($('cx-chapter-controls')) { $('cx-chapter-controls').innerHTML = ''; delete $('cx-chapter-controls').dataset.signature; }
   try { await api('/comics/load?url=' + encodeURIComponent(url)); }
   catch { if (generation === comicGeneration) $('cx-progress').textContent = 'Could not open comic. Try again.'; return; }
@@ -369,6 +370,8 @@ async function openComic(url){
         ? `${d.title || 'Reading'} — ${d.downloaded}/${d.pages} pages`
         : 'Loading…';
       if (!d.loading) renderComicChapters(d);
+      // Open on the page the desktop reader resumed to (server-side resume key).
+      if (!d.loading && d.pages && !comicView.synced) { comicView.page = Math.max(0, Number(d.current) || 0); comicView.synced = true; }
       if (d.pages && !d.loading) {
         // Preserve already loaded image nodes while later pages arrive.
         const pages = $('cx-pages');
@@ -382,6 +385,7 @@ async function openComic(url){
           pages.appendChild(slot);
           comicPageSlots.set(i, slot);
         }
+        applyComicView();
         const ready = d.ready_pages || Array.from({length:d.downloaded}, (_, i) => i);
         for (const i of ready) {
           const slot = comicPageSlots.get(i);
@@ -444,6 +448,67 @@ async function openComic(url){
     }
   }, 1200);
 }
+// Reader layout: same rules as services/reader_pure.zig (cover alone, then
+// pairs; RTL puts the later page left and the left arrow turns forward).
+// tests/features/test_reader_quality.py checks parity with the Zig tests.
+const comicView = {mode:'scroll', rtl:false, zoom:1, page:0, synced:false};
+const COMIC_ZOOM_MIN = 0.5, COMIC_ZOOM_MAX = 4, COMIC_ZOOM_STEP = 1.25;
+function comicSpreadAt(page, count){
+  if (count <= 0) return [0, null];
+  const p = Math.min(Math.max(0, page), count - 1), first = p === 0 ? 0 : (p % 2 === 1 ? p : p - 1);
+  return [first, first > 0 && first + 1 < count ? first + 1 : null];
+}
+const comicDisplayOrder = ([first, second], rtl) => second === null ? [first] : rtl ? [second, first] : [first, second];
+function comicStep(mode, page, count, dir){
+  if (count <= 0) return null;
+  const p = Math.min(Math.max(0, page), count - 1);
+  if (mode !== 'spread') return dir === 'next' ? (p + 1 < count ? p + 1 : null) : (p > 0 ? p - 1 : null);
+  const [first, second] = comicSpreadAt(p, count), last = second === null ? first : second;
+  if (dir === 'next') return last + 1 < count ? last + 1 : null;
+  return first === 0 ? null : comicSpreadAt(first - 1, count)[0];
+}
+const comicKeyDirection = (key, rtl) => ({ArrowLeft:rtl ? 'next' : 'previous', ArrowRight:rtl ? 'previous' : 'next', j:'previous', k:'next'})[key] || null;
+const comicClampZoom = z => Number.isFinite(z) ? Math.min(COMIC_ZOOM_MAX, Math.max(COMIC_ZOOM_MIN, z)) : 1;
+function applyComicView(){
+  const pages = $('cx-pages'), count = comicPageSlots.size, v = comicView;
+  pages.classList.toggle('cx-paged', v.mode !== 'scroll');
+  pages.classList.toggle('cx-spread', v.mode === 'spread');
+  pages.style.setProperty('--cx-zoom', String(comicClampZoom(v.zoom)));
+  const shown = v.mode === 'scroll' ? null : v.mode === 'spread' ? comicDisplayOrder(comicSpreadAt(v.page, count), v.rtl) : [Math.min(v.page, Math.max(0, count - 1))];
+  for (const [i, slot] of comicPageSlots) {
+    const at = shown ? shown.indexOf(i) : 0;
+    slot.hidden = at < 0;
+    slot.style.order = shown && at >= 0 ? String(at) : '';
+  }
+  $('cx-mode').value = v.mode;
+  $('cx-rtl').setAttribute('aria-pressed', String(v.rtl));
+  for (const [id, key] of [['cx-page-left', 'ArrowLeft'], ['cx-page-right', 'ArrowRight']]) {
+    const dir = comicKeyDirection(key, v.rtl);
+    $(id).textContent = dir === 'next' ? 'Next page' : 'Previous page';
+    $(id).disabled = v.mode === 'scroll' || comicStep(v.mode, v.page, count, dir) === null;
+  }
+}
+function turnComicPage(dir){
+  const target = comicStep(comicView.mode, comicView.page, comicPageSlots.size, dir);
+  if (target === null) return false;
+  comicView.page = target;
+  applyComicView();
+  (comicView.mode === 'scroll' ? comicPageSlots.get(target) : $('cx-pages'))?.scrollIntoView({block:'start'});
+  return true;
+}
+$('cx-mode').onchange = () => { comicView.mode = $('cx-mode').value; if (comicView.mode === 'spread') comicView.page = comicSpreadAt(comicView.page, comicPageSlots.size)[0]; applyComicView(); };
+$('cx-rtl').onclick = () => { comicView.rtl = !comicView.rtl; applyComicView(); };
+$('cx-zoom-in').onclick = () => { comicView.zoom = comicClampZoom(comicView.zoom * COMIC_ZOOM_STEP); applyComicView(); };
+$('cx-zoom-out').onclick = () => { comicView.zoom = comicClampZoom(comicView.zoom / COMIC_ZOOM_STEP); applyComicView(); };
+$('cx-page-left').onclick = () => turnComicPage(comicKeyDirection('ArrowLeft', comicView.rtl));
+$('cx-page-right').onclick = () => turnComicPage(comicKeyDirection('ArrowRight', comicView.rtl));
+document.addEventListener('keydown', event => {
+  if ($('cx-reader').style.display === 'none' || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.target instanceof HTMLElement && event.target.closest('input,select,textarea,[contenteditable="true"]')) return;
+  const dir = comicKeyDirection(event.key, comicView.rtl);
+  if (dir && turnComicPage(dir)) event.preventDefault();
+});
+
 function closeComic(){
   ++comicGeneration;
   clearInterval(cxPages);

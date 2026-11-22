@@ -904,6 +904,9 @@ pub fn openCatalogEntry(row: pure.OpdsEntry, connection_identity: u64) void {
                 state.navigateToTab(.Comics);
                 state.showToast("Streaming pages…");
             } else if (std.mem.startsWith(u8, e.contentTypeSlice(), "image/")) {
+                // Catalog hrefs are untrusted: only plain http(s) reaches the
+                // reader (never a cbz:/file: route that opens a host file).
+                if (!@import("reader_pure.zig").isSafeLink(href)) return;
                 @import("comics.zig").requestLoad(href);
                 state.navigateToTab(.Comics);
                 state.showToast("Opening in reader");

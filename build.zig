@@ -1979,6 +1979,26 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_comics_pure).step);
 
+    // Reader quality: page-cache budget, huge-page downscale, spread/RTL order,
+    // zoom, resume keys, archive-path + link safety (reader_pure), and the
+    // bounded CBZ reader over generated fixture archives (cbz_pure).
+    const test_reader_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/reader_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_reader_pure).step);
+    const test_cbz_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/cbz_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_cbz_pure).step);
+
     inline for (.{ "expanded_reading_pure", "reading_provider_pure", "music_audius_pure", "audio_sources_pure", "source_request_pure", "anime_hianime_pure", "stremio_pure", "stream_source_pure", "comicfury_pure", "webcomic_sources_pure", "western_comics_pure", "western_publishers_pure", "wallpapers_pure", "wallpaper_desktop_pure", "native_browser_pure", "browser_privacy_pure", "embedded_tabs_pure" }) |module| {
         const source_test = addBoundTest(b, .{ .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/" ++ module ++ ".zig"),

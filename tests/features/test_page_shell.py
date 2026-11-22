@@ -575,7 +575,7 @@ def test_comic_page_decode_workers():
             and "dvui.textureCreate(" in drain and "drainDecodedPages();" in svc,
         "reset frees completed RGBA": "page.image.deinit();" in reset
             and "resetPageDecodes();" in svc,
-        "decoding placeholders retain layout": "renderPagePlaceholder(pg, avail_w)" in svc
+        "decoding placeholders retain layout": "renderPagePlaceholder(pg, box_w)" in svc  # renderPageImage, every mode
             and "width * 1.5" in svc,
     }
     missing = [name for name, ok in checks.items() if not ok]
