@@ -3244,8 +3244,34 @@ fn eventFlag(pc: *const c.mpv.mpv_event_property) bool {
     return @as(*const c_int, @ptrCast(@alignCast(pc.data))).* != 0;
 }
 
+/// One scrobble-bus sample per frame for the active player. The bus owns the
+/// tracker rules (core/scrobble_pure.zig: debounce, 80% mark, dedupe) and the
+/// fan-out; player code never calls Trakt, SIMKL or AniList itself.
+fn scrobbleTick() void {
+    const bus = @import("../core/scrobble_bus.zig");
+    if (state.app.active_player_idx >= state.app.players.items.len) return bus.end();
+    const p = state.app.players.items[state.app.active_player_idx];
+    var media: ?bus.Media = null;
+    var played: f64 = 0;
+    const pe = &state.app.playing_episode;
+    if (pe.tmdb_id != 0 and pe.matches(p.current_url[0..p.current_url_len])) {
+        media = .tvEpisode(pe.tmdb_id, pe.season, pe.episode);
+        played = pe.played_seconds;
+    } else if (p.catalog_tmdb_id > 0 and p.loading_kind == @import("../core/loading_pure.zig").MediaKind.movie.toInt()) {
+        media = .movie(p.catalog_tmdb_id);
+        played = p.catalog_played_seconds;
+    }
+    bus.tick(@intFromPtr(p), media, .{
+        .position = p.last_seen_pos,
+        .duration = p.cached_duration,
+        .paused = p.cached_paused or p.cached_paused_for_cache or p.is_loading,
+        .played_seconds = played,
+    });
+}
+
 pub fn updateTorrentBackgroundTasks() void {
     const now_ms = @import("../core/io_global.zig").monotonicMilliTimestamp();
+    scrobbleTick();
 
     // Republish the "a torrent is waiting to start playing" flag every frame.
     // The stall watchdog wakes the UI while it is set, which is what keeps the
@@ -3672,10 +3698,8 @@ pub fn updateTorrentBackgroundTasks() void {
                                     else
                                         p.current_url[0..p.current_url_len];
                                     @import("watch_history.zig").bindCatalogMovie(history_identity, p.catalog_tmdb_id);
-                                    var movie_imdb_buf: [16]u8 = undefined;
-                                    const movie_imdb = @import("../core/db.zig").movieImdbId(p.catalog_tmdb_id, &movie_imdb_buf);
-                                    @import("../services/trakt.zig").markWatchedMovie(p.catalog_tmdb_id, movie_imdb);
-                                    @import("../services/simkl.zig").markWatchedMovie(p.catalog_tmdb_id, movie_imdb);
+                                    // Trackers got the (earlier) 80% mark from the
+                                    // scrobble bus tick in updateTorrentBackgroundTasks.
                                 }
                             }
                         }

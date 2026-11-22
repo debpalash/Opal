@@ -257,84 +257,64 @@ fn drainOutbox() void {
     }
 }
 
-/// Called when playback starts — POST /scrobble/start
-pub fn scrobbleStart(title: []const u8, progress: f64) void {
-    if (!enabled.load(.acquire)) return;
+pub const LiveAction = enum { start, pause, stop };
+
+// Live scrobbles (now-watching status + saved progress) are ephemeral, so they
+// skip the durable outbox: one pending slot, newest state wins, drained by a
+// single worker. Watched history still goes through the outbox above.
+var live_mutex: sync.Mutex = .{};
+var live_body: [320]u8 = undefined;
+var live_body_len: usize = 0;
+var live_action: LiveAction = .start;
+var live_pending: bool = false;
+
+/// POST /scrobble/{start,pause,stop} for an id-based body built by
+/// keyless_tv_pure.liveScrobblePayload. Non-blocking; called by the scrobble
+/// bus sink (services/scrobble_sinks.zig), never by player code.
+pub fn scrobbleLive(action: LiveAction, body: []const u8) void {
+    if (!isConnected() or body.len > live_body.len) return;
+    live_mutex.lock();
+    @memcpy(live_body[0..body.len], body);
+    live_body_len = body.len;
+    live_action = action;
+    live_pending = true;
+    live_mutex.unlock();
+    if (workers.isQuitting()) return;
     if (is_scrobbling.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
-    defer is_scrobbling.store(false, .release);
-
-    var json_buf: [1024]u8 = undefined;
-    // Escape title for JSON
-    var esc: [256]u8 = undefined;
-    var ei: usize = 0;
-    for (title) |ch| {
-        if (ei + 2 >= esc.len) break;
-        if (ch == '"') {
-            esc[ei] = '\\';
-            ei += 1;
-            esc[ei] = '"';
-            ei += 1;
-        } else {
-            esc[ei] = ch;
-            ei += 1;
-        }
-    }
-    const json = @import("opal-fmt").bufPrintZ(&json_buf,
-        \\{{"movie":{{"title":"{s}"}},"progress":{d:.1}}}
-    , .{ esc[0..ei], progress }) catch return;
-
-    const result = postScrobble("/scrobble/start", json);
-    if (result.status == .revoked) revokeAuthorization(result.revision);
+    workers.spawn(drainLive, .{}) catch is_scrobbling.store(false, .release);
 }
 
-/// Called when playback pauses — POST /scrobble/pause
-pub fn scrobblePause(title: []const u8, progress: f64) void {
-    if (!enabled.load(.acquire)) return;
-    var json_buf: [1024]u8 = undefined;
-    var esc: [256]u8 = undefined;
-    var ei: usize = 0;
-    for (title) |ch| {
-        if (ei + 2 >= esc.len) break;
-        if (ch == '"') {
-            esc[ei] = '\\';
-            ei += 1;
-            esc[ei] = '"';
-            ei += 1;
-        } else {
-            esc[ei] = ch;
-            ei += 1;
+fn drainLive() void {
+    while (true) {
+        while (!workers.isQuitting()) {
+            var body: [320]u8 = undefined;
+            live_mutex.lock();
+            if (!live_pending) {
+                live_mutex.unlock();
+                break;
+            }
+            const len = live_body_len;
+            const action = live_action;
+            @memcpy(body[0..len], live_body[0..len]);
+            live_pending = false;
+            live_mutex.unlock();
+            const endpoint = switch (action) {
+                .start => "/scrobble/start",
+                .pause => "/scrobble/pause",
+                .stop => "/scrobble/stop",
+            };
+            const result = postScrobble(endpoint, body[0..len]);
+            if (result.status == .revoked and !refreshAccessToken(result.revision)) revokeAuthorization(result.revision);
         }
+        is_scrobbling.store(false, .release);
+        // A state queued between the last check and the release above would
+        // otherwise wait for the next scrobble; reclaim the drain for it.
+        live_mutex.lock();
+        const more = live_pending;
+        live_mutex.unlock();
+        if (!more or workers.isQuitting()) return;
+        if (is_scrobbling.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
     }
-    const json = @import("opal-fmt").bufPrintZ(&json_buf,
-        \\{{"movie":{{"title":"{s}"}},"progress":{d:.1}}}
-    , .{ esc[0..ei], progress }) catch return;
-    const result = postScrobble("/scrobble/pause", json);
-    if (result.status == .revoked) revokeAuthorization(result.revision);
-}
-
-/// Called when playback stops — POST /scrobble/stop
-pub fn scrobbleStop(title: []const u8, progress: f64) void {
-    if (!enabled.load(.acquire)) return;
-    var json_buf: [1024]u8 = undefined;
-    var esc: [256]u8 = undefined;
-    var ei: usize = 0;
-    for (title) |ch| {
-        if (ei + 2 >= esc.len) break;
-        if (ch == '"') {
-            esc[ei] = '\\';
-            ei += 1;
-            esc[ei] = '"';
-            ei += 1;
-        } else {
-            esc[ei] = ch;
-            ei += 1;
-        }
-    }
-    const json = @import("opal-fmt").bufPrintZ(&json_buf,
-        \\{{"movie":{{"title":"{s}"}},"progress":{d:.1}}}
-    , .{ esc[0..ei], progress }) catch return;
-    const result = postScrobble("/scrobble/stop", json);
-    if (result.status == .revoked) revokeAuthorization(result.revision);
 }
 
 const Delivery = enum { success, retry, revoked };

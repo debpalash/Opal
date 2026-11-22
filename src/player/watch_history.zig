@@ -492,12 +492,7 @@ pub fn remove(idx: usize) void {
     db.bindText(stmt, 1, name);
     _ = db.step(stmt);
 
-    if (catalog_tmdb_id > 0) {
-        var movie_imdb_buf: [16]u8 = undefined;
-        const movie_imdb = db.movieImdbId(catalog_tmdb_id, &movie_imdb_buf);
-        @import("../services/trakt.zig").markUnwatchedMovie(catalog_tmdb_id, movie_imdb);
-        @import("../services/simkl.zig").markUnwatchedMovie(catalog_tmdb_id, movie_imdb);
-    }
+    if (catalog_tmdb_id > 0) @import("../core/scrobble_bus.zig").mark(.movie(catalog_tmdb_id), false);
 
     // Remove from cache
     var i: usize = idx;

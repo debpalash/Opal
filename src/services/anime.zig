@@ -2219,7 +2219,7 @@ fn recordEpisodeStarted(job: PlaybackJob) void {
             const db = @import("../core/db.zig");
             db.animeMarkWatched(mal_id, ep_num, true);
             db.animeUpsertContinue(mal_id, r.name[0..r.name_len], r.poster_url[0..r.poster_url_len], ep_num, r.episodes);
-            if (r.anilist_id > 0) anilist.updateProgress(r.anilist_id, ep_num);
+            if (r.anilist_id > 0) @import("../core/scrobble_bus.zig").mark(.anime(r.anilist_id, @intCast(ep_num)), true);
             // Mirror into the unified read-model so the home Continue rail shows
             // anime alongside the other verticals. anime_continue (above) stays
             // authoritative; progress is measured in EPISODES, and the deep link

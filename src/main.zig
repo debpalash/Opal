@@ -539,6 +539,7 @@ pub fn coreInit() !void {
             @import("services/trakt.zig").init(); // load saved Trakt credentials/token
             @import("services/anilist.zig").init(); // load encrypted AniList token + retry queued progress
             @import("services/simkl.zig").init(); // load encrypted SIMKL token + retry queued history
+            @import("services/scrobble_sinks.zig").install(); // scrobble bus -> Trakt / SIMKL / AniList
             @import("services/plex.zig").init(); // load saved Plex token/server
             if (workers.isQuitting()) return;
             // DPI-bypass proxy sidecar: config.load() above restored the flag +

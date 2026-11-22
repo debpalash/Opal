@@ -103,7 +103,39 @@ fn environmentSnapshot() [:null]const ?[*:0]u8 {
     return entries[0..count :null];
 }
 
+// ────────── Test seam (MockIo) ──────────
+// Test builds may route the clock, sleep and cwd file wrappers through a
+// core/mock_io.zig MockIo. Every branch is `comptime builtin.is_test`, so the
+// production binary carries none of it.
+const MockIo = if (builtin.is_test) @import("mock_io.zig").MockIo else void;
+var mock_backend: if (builtin.is_test) std.atomic.Value(?*MockIo) else void =
+    if (builtin.is_test) .init(null) else {};
+
+pub fn installMock(m: *MockIo) void {
+    if (comptime !builtin.is_test) @compileError("io_global.installMock is test-only");
+    if (mock_backend.cmpxchgStrong(null, m, .acq_rel, .acquire) != null)
+        @panic("io_global: a MockIo is already installed");
+}
+
+pub fn uninstallMock(m: *MockIo) void {
+    if (comptime !builtin.is_test) @compileError("io_global.uninstallMock is test-only");
+    _ = mock_backend.cmpxchgStrong(m, null, .acq_rel, .acquire);
+}
+
+inline fn activeMock() ?*MockIo {
+    if (comptime !builtin.is_test) return null;
+    return mock_backend.load(.acquire);
+}
+
+/// The directory the cwd* wrappers resolve against: the real CWD, or the
+/// MockIo sandbox in a test that installed one.
+fn cwdDir() std.Io.Dir {
+    if (comptime builtin.is_test) if (activeMock()) |m| return m.dir();
+    return std.Io.Dir.cwd();
+}
+
 pub fn io() std.Io {
+    if (comptime builtin.is_test) if (activeMock() != null) return std.testing.io;
     if (!ready.load(.acquire)) {
         if (constructing.cmpxchgStrong(false, true, .acq_rel, .acquire) == null) {
             // We won the race — construct, then publish readiness.
@@ -343,6 +375,7 @@ pub fn killByName(name: []const u8) void {
 
 /// Replacement for removed std.time.timestamp (seconds since epoch).
 pub fn timestamp() i64 {
+    if (comptime builtin.is_test) if (activeMock()) |m| return @divTrunc(m.wallMs(), 1000);
     var tv: std.c.timeval = undefined;
     _ = std.c.gettimeofday(&tv, null);
     return @intCast(tv.sec);
@@ -350,6 +383,7 @@ pub fn timestamp() i64 {
 
 /// Replacement for removed std.time.milliTimestamp (ms since epoch).
 pub fn milliTimestamp() i64 {
+    if (comptime builtin.is_test) if (activeMock()) |m| return m.wallMs();
     var tv: std.c.timeval = undefined;
     _ = std.c.gettimeofday(&tv, null);
     return @as(i64, @intCast(tv.sec)) * 1000 + @divTrunc(@as(i64, @intCast(tv.usec)), 1000);
@@ -358,12 +392,14 @@ pub fn milliTimestamp() i64 {
 /// Milliseconds from a monotonic clock. Use for security/resource deadlines:
 /// unlike wall time, this cannot jump backwards after an NTP or clock change.
 pub fn monotonicMilliTimestamp() i64 {
+    if (comptime builtin.is_test) if (activeMock()) |m| return m.monoMs();
     return std.Io.Clock.awake.now(io()).toMilliseconds();
 }
 
 /// Replacement for removed std.Thread.sleep (ns to nanosleep; kernel32
 /// Sleep on Windows, where neither std.c.timespec nor nanosleep exist).
 pub fn sleep(ns: u64) void {
+    if (comptime builtin.is_test) if (activeMock()) |m| return m.sleep(ns);
     if (is_windows) {
         const ms = @divTrunc(ns + 999_999, 1_000_000); // round up: never busy-spin a 1ms poll loop
         win.Sleep(@intCast(@min(ms, std.math.maxInt(u32))));
@@ -380,27 +416,27 @@ pub fn sleep(ns: u64) void {
 // Use global io to preserve zero-arg call sites from pre-0.16 code.
 
 pub fn cwdMakePath(path: []const u8) !void {
-    return std.Io.Dir.cwd().createDirPath(io(), path);
+    return cwdDir().createDirPath(io(), path);
 }
 
 pub fn cwdOpenFile(path: []const u8, opts: std.Io.Dir.OpenFileOptions) !std.Io.File {
-    return std.Io.Dir.cwd().openFile(io(), path, opts);
+    return cwdDir().openFile(io(), path, opts);
 }
 
 pub fn cwdOpenDir(path: []const u8, opts: std.Io.Dir.OpenOptions) !std.Io.Dir {
-    return std.Io.Dir.cwd().openDir(io(), path, opts);
+    return cwdDir().openDir(io(), path, opts);
 }
 
 pub fn cwdCreateFile(path: []const u8, opts: std.Io.Dir.CreateFileOptions) !std.Io.File {
-    return std.Io.Dir.cwd().createFile(io(), path, opts);
+    return cwdDir().createFile(io(), path, opts);
 }
 
 pub fn cwdAccess(path: []const u8, opts: std.Io.Dir.AccessOptions) !void {
-    return std.Io.Dir.cwd().access(io(), path, opts);
+    return cwdDir().access(io(), path, opts);
 }
 
 pub fn cwdWriteFile(options: std.Io.Dir.WriteFileOptions) !void {
-    return std.Io.Dir.cwd().writeFile(io(), options);
+    return cwdDir().writeFile(io(), options);
 }
 
 pub fn cwdReadFileAlloc(
@@ -408,7 +444,7 @@ pub fn cwdReadFileAlloc(
     gpa: std.mem.Allocator,
     max_bytes: usize,
 ) ![]u8 {
-    return std.Io.Dir.cwd().readFileAlloc(io(), sub_path, gpa, .limited(max_bytes));
+    return cwdDir().readFileAlloc(io(), sub_path, gpa, .limited(max_bytes));
 }
 
 pub fn openFileAbsolute(path: []const u8, opts: std.Io.Dir.OpenFileOptions) !std.Io.File {
@@ -437,21 +473,21 @@ pub fn selfExeDirPath(buf: []u8) ![]const u8 {
 }
 
 pub fn cwdDeleteFile(path: []const u8) !void {
-    return std.Io.Dir.cwd().deleteFile(io(), path);
+    return cwdDir().deleteFile(io(), path);
 }
 
 pub fn cwdDeleteTree(path: []const u8) !void {
-    return std.Io.Dir.cwd().deleteTree(io(), path);
+    return cwdDir().deleteTree(io(), path);
 }
 
 pub fn cwdStatFile(path: []const u8) !std.Io.File.Stat {
-    return std.Io.Dir.cwd().statFile(io(), path, .{});
+    return cwdDir().statFile(io(), path, .{});
 }
 
 /// Resolve `sub_path` (relative to cwd) to an absolute, symlink-free path.
 /// Returns the slice of `buf` holding the result.
 pub fn cwdRealPathFile(sub_path: []const u8, buf: []u8) ![]const u8 {
-    const n = try std.Io.Dir.cwd().realPathFile(io(), sub_path, buf);
+    const n = try cwdDir().realPathFile(io(), sub_path, buf);
     return buf[0..n];
 }
 

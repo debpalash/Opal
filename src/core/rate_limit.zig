@@ -124,3 +124,22 @@ test "token bucket steady state" {
     // Bucket should now be empty.
     try std.testing.expect(!tryAcquire("test_key_a", 3.0));
 }
+
+test "acquire waits for a refill on the fake clock" {
+    var mock = @import("mock_io.zig").MockIo.init();
+    mock.install();
+    defer mock.deinit();
+
+    // Capacity 2 at 2 tokens/s: two immediate, the third must wait ~500ms.
+    try std.testing.expect(tryAcquire("mock_clock_key", 2.0));
+    try std.testing.expect(tryAcquire("mock_clock_key", 2.0));
+    try std.testing.expect(!tryAcquire("mock_clock_key", 2.0));
+    const before = mock.wallMs();
+    acquire("mock_clock_key", 2.0);
+    const waited = mock.wallMs() - before;
+    try std.testing.expect(mock.sleep_calls.load(.acquire) >= 1);
+    try std.testing.expect(waited >= 499 and waited <= 600);
+    // A fake-clock advance refills without any sleep.
+    mock.advanceMs(1000);
+    try std.testing.expect(tryAcquire("mock_clock_key", 2.0));
+}

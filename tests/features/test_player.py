@@ -1926,8 +1926,11 @@ def movie_completion_sync():
             and "playedDelta(" in player and "watchCommitDue(" in player,
         "one completion per load": "catalog_movie_committed" in player
             and "p.catalog_movie_committed = true" in player,
-        "both account providers": '@import("../services/trakt.zig").markWatchedMovie(p.catalog_tmdb_id, movie_imdb)' in player
-            and '@import("../services/simkl.zig").markWatchedMovie(p.catalog_tmdb_id, movie_imdb)' in player
+        # Trackers are fed by the scrobble bus (80% mark), not player code.
+        "both account providers": "fn scrobbleTick()" in player
+            and "media = .movie(p.catalog_tmdb_id)" in player
+            and "simkl.markWatchedMovie(m.tmdb_id, imdb)" in _src("src/services/scrobble_sinks.zig")
+            and "trakt.markWatchedMovie(m.tmdb_id, imdb)" in _src("src/services/scrobble_sinks.zig")
             and 'outbox.enqueueState("trakt", operation' in trakt
             and 'outbox.enqueueState("simkl", operation' in simkl,
         "pure seek guard": "played >= duration * 0.9" in pure,

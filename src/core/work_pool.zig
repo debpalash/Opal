@@ -163,10 +163,13 @@ pub const WorkPool = struct {
 // Tests
 // ══════════════════════════════════════════════════════════
 
-// TODO: cross-boundary test, run manually until MockIo lands.
-// Uses io_global.sleep transitively via workerLoop, which initializes
-// the threaded Io; safe in a test binary but not pure.
+// Runs under `zig build test` via src/io_seam_tests.zig: a MockIo backs
+// io_global, so the worker/submit backoff sleeps are virtual (no wall time).
 test "WorkPool: 100 submissions hit shared atomic" {
+    var mock = @import("mock_io.zig").MockIo.init();
+    mock.install();
+    defer mock.deinit();
+
     const TestCtx = struct {
         var counter: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
         fn bump(_: *anyopaque) void {
@@ -200,4 +203,19 @@ test "WorkPool: 100 submissions hit shared atomic" {
 
     pool.shutdown();
     try std.testing.expectEqual(@as(u32, 100), TestCtx.counter.load(.seq_cst));
+}
+
+test "WorkPool: idle workers back off through the io_global sleep seam" {
+    var mock = @import("mock_io.zig").MockIo.init();
+    mock.install();
+    defer mock.deinit();
+
+    const start_mono = io_global.monotonicMilliTimestamp();
+    var pool = try WorkPool.init(std.testing.allocator, 2, 4);
+    // With an empty queue each worker parks in WORKER_BACKOFF_NS sleeps.
+    // Under MockIo those advance the fake clock instead of the wall clock.
+    while (mock.sleep_calls.load(.acquire) < 4) std.Thread.yield() catch {};
+    pool.shutdown();
+    const advanced = io_global.monotonicMilliTimestamp() - start_mono;
+    try std.testing.expect(advanced >= 4 * @divTrunc(WORKER_BACKOFF_NS, std.time.ns_per_ms));
 }
