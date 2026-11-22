@@ -12,7 +12,7 @@
 //! and policy surface unit-tests standalone. The stdio shim lives in
 //! `src/mcp_main.zig`.
 //!
-//! Safety stance (docs/next-level-research.md): never expose raw mpv commands,
+//! Safety stance: never expose raw mpv commands,
 //! arbitrary shell options, provider secrets or unrestricted host paths. The
 //! registry therefore only names routes whose server-side handlers already
 //! validate their input, accepts only typed/bounded arguments, and refuses

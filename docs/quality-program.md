@@ -86,7 +86,6 @@ route is not a completed row.
 
 | Work item | Status / evidence |
 | --- | --- |
-| Competitor/integration first-pass research | Complete; primary references and gaps in next-level-research.md |
 | Legacy worker admission after shutdown drain | Fixed; deterministic barrier regression red before / green after |
 | TV/movie/season stale responses and wrong-show watched actions | Implementation + deterministic web tests in review |
 | SSE/fallback polling on reconnect/sign-out | Implementation + deterministic web tests in review |

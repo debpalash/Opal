@@ -361,3 +361,30 @@ def test_mobile_reattach_ref():
         if "ref: ${{ inputs.ref || inputs.tag || github.ref }}" not in text or "      ref:\n" not in text:
             return "fail", wf + " has no optional ref input for re-attach builds"
     return "pass", "iOS and Android dispatches build inputs.ref, else the tag"
+
+
+@test("Every referenced docs/ file exists and no stale plan docs return", "Docs")
+def test_docs_references_resolve():
+    import re
+    root = Path(PROJECT_DIR)
+    tracked = subprocess.run(["git", "ls-files"], cwd=PROJECT_DIR, capture_output=True,
+                             text=True, check=True).stdout.split()
+    scan = [p for p in tracked if p.endswith((".zig", ".md", ".py", ".yml", ".sh", ".ts", ".tsx", ".astro"))
+            and not p.startswith(("zig-pkg/", "site/node_modules/"))
+            and p not in ("CHANGELOG.md", "tests/features/test_workflow_maturity.py")]
+    ref = re.compile(r"(?<![\w/.-])docs/([A-Za-z0-9_./-]+\.(?:md|json))")
+    missing = set()
+    for rel in scan:
+        try:
+            text = (root / rel).read_text(errors="ignore")
+        except OSError:
+            continue
+        for m in ref.finditer(text):
+            if "X.Y.Z" not in m.group(1) and not (root / "docs" / m.group(1)).exists():
+                missing.add(f"{rel} -> docs/{m.group(1)}")
+    stale = [p for p in ("docs/V2-ROADMAP.md", "docs/V2-PANEL.md", "docs/superpowers",
+                         "docs/next-level-research.md", "docs/CHANGELOG.md") if (root / p).exists()]
+    if missing or stale:
+        return "fail", f"missing={sorted(missing)[:8]} stale={stale}"
+    assert "## 🚀 v2 — active plan" in _src("ROADMAP.md")
+    return "pass", f"{len(scan)} files scanned; docs/ references resolve; v2 plan lives in ROADMAP.md"

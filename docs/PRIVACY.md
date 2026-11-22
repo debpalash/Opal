@@ -8,8 +8,8 @@ analytics SDK, no third-party JS, no `metrics.opal.com`, no anonymized "ping". E
 outbound network call below is one the user opted into by using a feature.
 
 This document enumerates **every** endpoint the binary may contact, sorted by category.
-Entries marked **[v2]** describe hardening that has shipped or is shipping on this branch
-(see `docs/V2-PANEL.md` and `docs/V2-ROADMAP.md`).
+Entries marked **[v2]** describe hardening that has shipped or is tracked in the
+v2 section of `ROADMAP.md`.
 
 If you find an outbound call that is not in this list, please file a bug.
 
@@ -19,7 +19,7 @@ If you find an outbound call that is not in this list, please file a bug.
 
 These run during `appInit()` / first frame, before the user opts into anything specific.
 They are listed first so they get scrutiny. Each is a **priority item to make opt-in** in
-the next sprint (tracked in `V2-ROADMAP.md` Wave 1).
+the next sprint (tracked in the `ROADMAP.md` v2 section).
 
 | Endpoint | Trigger | Request payload | PII | Toggle |
 |---|---|---|---|---|
@@ -235,7 +235,7 @@ user yt-dlp configuration, or disable TLS verification.
 > `scrobbleStart`, `simkl.checkin`, `anilist.updateProgress` against the rest of
 > `src/`). They are dormant — no traffic leaves the machine until/unless a future
 > commit wires them into the playback events. Listed here so you know what they
-> *will* send when enabled, per V2-ROADMAP Wave 3 (unified scrobble bus).
+> *will* send when enabled, per the `ROADMAP.md` v2 unified scrobble bus item.
 
 ### Trakt
 - **Host:** `https://api.trakt.tv` (`src/services/trakt.zig:11`).
@@ -292,7 +292,7 @@ as a subprocess (`src/services/search.zig:214-224`).
 
 **Throttling [v2]:** Calls are gated by a shared per-origin token bucket in
 `src/core/rate_limit.zig` (proof-of-life integration on 1337x; rollout to every
-backend is V2-ROADMAP Wave 1 item 3).
+backend is `ROADMAP.md` v2 rate-limit rollout).
 
 ---
 
@@ -372,8 +372,7 @@ These all bind to loopback unless noted.
 - **Auth status [v2]:** A per-launch bearer token is generated on first launch and
   persisted to `~/.config/zigzag/api.token` (mode `0600`); the server requires
   `Authorization: Bearer <hex>` and uses constant-time compare to avoid timing
-  oracles (`remote.zig:20-128, 132-176`). This is V2-PANEL directive 7 and is
-  landing in a parallel task ("Wave 1 #1" in `docs/V2-ROADMAP.md`).
+  oracles (`remote.zig:20-128, 132-176`). This is tracked in the `ROADMAP.md` v2 section.
 - **Flag:** Because the bind is still `0.0.0.0`, any device on the same LAN that
   obtains the token (e.g. by reading it from a shared filesystem, or because the
   user pasted it into a web UI on another machine) can drive playback. Consider
@@ -412,8 +411,7 @@ methodology was:
 If you find an outbound call that is **not** in this list — or one that fires under
 conditions different from what's documented — **please file a bug**. We treat the
 "no telemetry" promise as a load-bearing claim and want this doc to be the only
-place where outbound endpoints are enumerated. See `docs/V2-PANEL.md` directive 14
-for the v2 rationale.
+place where outbound endpoints are enumerated.
 
 ---
 

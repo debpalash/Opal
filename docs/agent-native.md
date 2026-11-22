@@ -24,7 +24,7 @@ Gaps:
 - Permissions exist only per principal, not per operation.
 - No MCP, no JSON-RPC, no terminal embed, no pty.
 
-The safety principle already written in `docs/next-level-research.md` stays binding: never expose raw mpv commands, arbitrary shell options, provider secrets or unrestricted host paths.
+This safety principle stays binding: never expose raw mpv commands, arbitrary shell options, provider secrets or unrestricted host paths.
 
 ## Architecture
 
