@@ -118,6 +118,7 @@ from features import (  # noqa: F401
     test_web_parity2,
     test_windows_portability,
     test_trackers,
+    test_transfers,
     test_source_layer,
     test_engine_health,
     test_parity,

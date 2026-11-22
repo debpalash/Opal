@@ -5,6 +5,7 @@ const db = @import("db.zig");
 const theme = @import("../ui/theme.zig");
 const watch_history_pure = @import("../player/watch_history_pure.zig");
 const skip_policy = @import("../services/skip_policy_pure.zig");
+const transfer_policy_pure = @import("../services/transfer_policy_pure.zig");
 const secret_store = @import("secret_store.zig");
 const key_writer = @import("sqlite_key_writer.zig");
 threadlocal var key_batch: ?key_writer.Writer = null;
@@ -145,6 +146,10 @@ fn saveChecked() !void {
     setKey("download_rate_limit", fmtInt(&fb, @as(usize, @intCast(state.app.download_rate_limit))));
     setKey("http_dl_segments", fmtInt(&fb, @as(usize, state.app.http_dl_segments)));
     setKey("http_dl_max_concurrent", fmtInt(&fb, @as(usize, state.app.http_dl_max_concurrent)));
+    setKey("torrent_max_active", fmtInt(&fb, @as(usize, state.app.torrent_max_active)));
+    setKey("torrent_reserve_mb", fmtInt(&fb, @as(usize, state.app.torrent_reserve_mb)));
+    setKey("torrent_seed_ratio_x100", fmtInt(&fb, @as(usize, state.app.torrent_seed_ratio_x100)));
+    setKey("torrent_seed_minutes", fmtInt(&fb, @as(usize, state.app.torrent_seed_minutes)));
     setSecretKey("proxy_url", state.app.proxy_url[0..state.app.proxy_url_len]);
     setKey("dpi_bypass_enabled", if (state.app.dpi_bypass_enabled) "1" else "0");
     setKey("dpi_bypass_mode", if (state.app.dpi_bypass_mode_len > 0) state.app.dpi_bypass_mode[0..state.app.dpi_bypass_mode_len] else "sni");
@@ -788,6 +793,14 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.http_dl_segments = std.math.clamp(std.fmt.parseInt(u32, val, 10) catch 4, 1, 8);
     } else if (std.mem.eql(u8, key, "http_dl_max_concurrent")) {
         state.app.http_dl_max_concurrent = std.math.clamp(std.fmt.parseInt(u32, val, 10) catch 3, 1, 8);
+    } else if (std.mem.eql(u8, key, "torrent_max_active")) {
+        state.app.torrent_max_active = transfer_policy_pure.clampMaxActive(std.fmt.parseInt(i64, val, 10) catch 0);
+    } else if (std.mem.eql(u8, key, "torrent_reserve_mb")) {
+        state.app.torrent_reserve_mb = transfer_policy_pure.clampReserveMb(std.fmt.parseInt(i64, val, 10) catch 256);
+    } else if (std.mem.eql(u8, key, "torrent_seed_ratio_x100")) {
+        state.app.torrent_seed_ratio_x100 = transfer_policy_pure.clampRatioX100(std.fmt.parseInt(i64, val, 10) catch 0);
+    } else if (std.mem.eql(u8, key, "torrent_seed_minutes")) {
+        state.app.torrent_seed_minutes = transfer_policy_pure.clampSeedMinutes(std.fmt.parseInt(i64, val, 10) catch 0);
     } else if (std.mem.eql(u8, key, "proxy_url")) {
         var restored_len: usize = 0;
         if (val.len > 0 and loadSecretValue(key, val, state.app.proxy_url[0 .. state.app.proxy_url.len - 1], &restored_len) and restored_len > 0) {

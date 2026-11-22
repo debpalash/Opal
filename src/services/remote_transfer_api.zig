@@ -134,12 +134,14 @@ fn snapshot(stream: std.Io.net.Stream, query: []const u8) void {
         if (emitted > 0) w.writeAll(",") catch return;
         w.writeAll("{\"name\":\"") catch return;
         wire.writeJsonString(&w, name_buf[0..name_len]);
-        w.print("\",\"id\":{d},\"pct\":{d:.1},\"rate\":{d},\"seeds\":{d},\"paused\":{s}}}", .{
+        const policy_state = @import("transfer_policy.zig").stateOf(id);
+        w.print("\",\"id\":{d},\"pct\":{d:.1},\"rate\":{d},\"seeds\":{d},\"paused\":{s},\"state\":\"{s}\"}}", .{
             id,
             if (std.math.isFinite(progress)) std.math.clamp(progress * 100.0, 0.0, 100.0) else @as(f32, 0),
             rate,
             seeds,
             if (c.mpv.torrent_is_paused(state.torrentSession(), id) != 0) "true" else "false",
+            if (policy_state) |ps| @import("transfer_policy_pure.zig").stateTag(ps) else "unmanaged",
         }) catch return;
         emitted += 1;
     }

@@ -28,6 +28,8 @@
 #include <mutex>
 #include <atomic>
 #include <map>
+#include <filesystem>
+#include <system_error>
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -1303,6 +1305,108 @@ extern "C" void torrent_set_seek_hint(TorrentSession session, int torrent_id, in
         apply_node_window(node, target_piece, first_piece, last_piece, 30);
         node->last_deadline_piece = target_piece;
     } catch (...) {}
+}
+
+// ─── Seek-aware deadline primitives (planned in Zig) ───
+// The offset → piece window, header/tail pins and stale-deadline set are
+// computed by player/torrent_deadline_pure.zig. These two calls only expose the
+// geometry it needs and execute its plan.
+
+extern "C" int torrent_get_piece_geometry(TorrentSession session, int torrent_id, int file_idx,
+                                          long long* out_file_offset, long long* out_file_size,
+                                          int* out_piece_size, int* out_num_pieces) {
+    if (!session || torrent_id < 0 || file_idx < 0) return -1;
+    if (!out_file_offset || !out_file_size || !out_piece_size || !out_num_pieces) return -1;
+    auto node = get_node(static_cast<SessionContext*>(session), torrent_id);
+    if (!node) return -1;
+    try {
+        if (!node->alive || !node->handle.is_valid()) return -1;
+        auto ti = node->handle.torrent_file();
+        if (!ti) return -1;
+        const lt::file_storage& files = file_layout(*ti);
+        if (file_idx >= files.num_files()) return -1;
+        *out_file_offset = files.file_offset(lt::file_index_t(file_idx));
+        *out_file_size = files.file_size(lt::file_index_t(file_idx));
+        *out_piece_size = ti->piece_length();
+        *out_num_pieces = ti->num_pieces();
+        return 0;
+    } catch (...) {}
+    return -1;
+}
+
+extern "C" int torrent_apply_piece_deadlines(TorrentSession session, int torrent_id, int clear_all,
+                                             const int* reset_pieces, int reset_count,
+                                             const int* pieces, const int* deadlines_ms, int count,
+                                             int target_piece) {
+    if (!session || torrent_id < 0 || count < 0 || reset_count < 0) return -1;
+    if ((count > 0 && (!pieces || !deadlines_ms)) || (reset_count > 0 && !reset_pieces)) return -1;
+    auto node = get_node(static_cast<SessionContext*>(session), torrent_id);
+    if (!node) return -1;
+    // RAM streams own a byte-budgeted window (apply_node_window); the caller
+    // falls back to torrent_set_seek_hint for them.
+    if (node->memory) return -1;
+    try {
+        if (!node->alive || !node->handle.is_valid()) return -1;
+        auto ti = node->handle.torrent_file();
+        if (!ti) return -1;
+        const int n = ti->num_pieces();
+        if (clear_all) {
+            node->handle.clear_piece_deadlines();
+        } else {
+            // Stale cursor pieces go back to normal priority so the background
+            // download continues without competing with the new window.
+            for (int i = 0; i < reset_count; ++i) {
+                const int p = reset_pieces[i];
+                if (p < 0 || p >= n) continue;
+                node->handle.reset_piece_deadline(lt::piece_index_t(p));
+                node->handle.piece_priority(lt::piece_index_t(p), lt::default_priority);
+            }
+        }
+        int applied = 0;
+        for (int i = 0; i < count; ++i) {
+            const int p = pieces[i];
+            if (p < 0 || p >= n) continue;
+            node->handle.set_piece_deadline(lt::piece_index_t(p), std::max(0, deadlines_ms[i]));
+            node->handle.piece_priority(lt::piece_index_t(p), lt::top_priority);
+            ++applied;
+        }
+        if (target_piece >= 0 && target_piece < n) node->last_deadline_piece = target_piece;
+        return applied;
+    } catch (...) {}
+    return -1;
+}
+
+// ─── Transfer policy inputs ───
+
+extern "C" int torrent_get_transfer_facts(TorrentSession session, int torrent_id, TorrentTransferFacts* out) {
+    if (!session || torrent_id < 0 || !out) return -1;
+    std::memset(out, 0, sizeof(*out));
+    auto node = get_node(static_cast<SessionContext*>(session), torrent_id);
+    if (!node) return -1;
+    try {
+        if (!node->alive || !node->handle.is_valid()) return -1;
+        const auto st = node->handle.status();
+        out->total_wanted = st.total_wanted;
+        out->total_wanted_done = st.total_wanted_done;
+        out->all_time_upload = st.all_time_upload;
+        out->has_metadata = st.has_metadata ? 1 : 0;
+        out->paused = (st.flags & lt::torrent_flags::paused) ? 1 : 0;
+        out->has_error = st.errc ? 1 : 0;
+        out->is_memory = node->memory ? 1 : 0;
+        return 0;
+    } catch (...) {}
+    return -1;
+}
+
+extern "C" long long torrent_disk_free_bytes(const char* path) {
+    if (!path || !*path) return -1;
+    try {
+        std::error_code ec;
+        const auto info = std::filesystem::space(std::filesystem::path(path), ec);
+        if (ec) return -1;
+        return static_cast<long long>(info.available);
+    } catch (...) {}
+    return -1;
 }
 
 // ─── TORRENT MANAGEMENT ───

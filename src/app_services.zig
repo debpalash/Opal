@@ -53,6 +53,7 @@ pub fn tickServices() void {
     // This intentionally does not open a player or change the current route.
     @import("services/torrent_intents.zig").restoreIfReady();
     @import("services/downloads.zig").tick();
+    @import("services/transfer_policy.zig").publishConfig();
     @import("services/wanted.zig").tick();
     @import("services/library_sync.zig").tick();
     @import("services/recall_index.zig").tick();

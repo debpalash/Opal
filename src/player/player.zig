@@ -2352,6 +2352,7 @@ pub const MediaPlayer = struct {
         if (self.current_torrent_id != id) self.releaseMemoryTorrent();
         self.current_torrent_id = id;
         self.requested_file_idx = -1; // a request belongs to one attach; search.zig sets it after
+        @import("../services/transfer_policy.zig").markInteractive(id);
     }
 
     /// Release ephemeral torrent data when its last player closes or replaces it.
