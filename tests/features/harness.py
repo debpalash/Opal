@@ -206,8 +206,20 @@ def get_db():
 _FRAME_PARTS = {"src/main.zig": ("src/main.zig", "src/app_services.zig")}
 
 
+def _settings_parts():
+    """settings.zig is the Settings entry point; each tab's draw code lives in
+    src/ui/settings/<tab>.zig. Source checks on "settings.zig" see all of it."""
+    d = os.path.join(PROJECT_DIR, "src", "ui", "settings")
+    tabs = sorted(n for n in os.listdir(d) if n.endswith(".zig")) if os.path.isdir(d) else []
+    return ("src/ui/settings.zig",) + tuple(f"src/ui/settings/{n}" for n in tabs)
+
+
 def _src(rel):
-    parts = _FRAME_PARTS.get(rel.replace("\\", "/"), (rel,))
+    rel = rel.replace("\\", "/")
+    if rel == "src/ui/settings.zig":
+        parts = _settings_parts()
+    else:
+        parts = _FRAME_PARTS.get(rel, (rel,))
     out = []
     for part in parts:
         p = os.path.join(PROJECT_DIR, part)
