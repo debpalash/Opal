@@ -192,7 +192,7 @@ pub fn renderGeneralTab() void {
             "Advanced, optional. Only adds richer metadata (cast, extra artwork, trailers). Everything works without it."}, .{
             .id_extra = 143,
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary),
-            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
+            .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
         });
     }
 
@@ -229,7 +229,7 @@ pub fn renderGeneralTab() void {
             "Free key (1,000/day) from omdbapi.com/apikey.aspx — leave blank to disable."}, .{
             .id_extra = 153,
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary),
-            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
+            .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
         });
     }
     sectionHeader("Plugins", "Manage sources and content plugins", 9, @src());

@@ -37,8 +37,8 @@ pub fn renderAIContentBody() void {
                     .data_out = &wd,
                     .color_fill = @import("../color_compat.zig").wrap(if (kind == vb.active_kind) theme.colors.bg_elevated else theme.transparent),
                     .color_text = @import("../color_compat.zig").wrap(if (kind == vb.active_kind) theme.colors.accent else theme.colors.text_secondary),
-                    .padding = dvui.Rect.all(8),
-                    .margin = dvui.Rect.all(2),
+                    .padding = dvui.Rect.all(theme.spacing.sm),
+                    .margin = dvui.Rect.all(theme.spacing.xxs),
                     .corners = theme.dims.rad_sm,
                 })) {
                     vb.active_kind = kind;
@@ -207,7 +207,7 @@ pub fn renderAIContentBody() void {
         .color_fill = @import("../color_compat.zig").wrap(theme.colors.bg_elevated),
         .color_text = @import("../color_compat.zig").wrap(theme.colors.text_secondary),
         .corners = theme.dims.rad_sm,
-        .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 },
+        .padding = .{ .x = theme.spacing.md, .y = 7, .w = theme.spacing.md, .h = 7 },
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
     })) {
         state.app.deps_modal_open = true;

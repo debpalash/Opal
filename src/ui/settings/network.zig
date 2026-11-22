@@ -247,7 +247,7 @@ pub fn renderNetworkTab() void {
                 .color_text = @import("../color_compat.zig").wrap(theme.colors.text_primary),
                 .border = dvui.Rect.all(1),
                 .corners = theme.dims.rad_sm,
-                .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+                .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
             });
             const pchanged = pte.text_changed;
             pte.deinit();
@@ -263,7 +263,7 @@ pub fn renderNetworkTab() void {
                 .color_fill = @import("../color_compat.zig").wrap(theme.colors.accent),
                 .color_text = @import("../color_compat.zig").wrap(theme.colors.text_on_accent),
                 .corners = theme.dims.rad_sm,
-                .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+                .padding = .{ .x = theme.spacing.md, .y = 5, .w = theme.spacing.md, .h = 5 },
             }) and !busy) {
                 state.markConfigDirty();
                 opds.testConnection();
@@ -361,8 +361,8 @@ fn renderAudiobookshelfSection() void {
         .color_fill = @import("../color_compat.zig").wrap(theme.colors.accent),
         .color_text = @import("../color_compat.zig").wrap(theme.colors.text_on_accent),
         .corners = theme.dims.rad_sm,
-        .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
-        .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
+        .padding = .{ .x = theme.spacing.md, .y = 5, .w = theme.spacing.md, .h = 5 },
+        .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
     })) {
         abs.authenticate();
     }

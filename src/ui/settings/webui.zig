@@ -55,7 +55,7 @@ fn webuiAccountField(label: []const u8, buf: []u8, password: bool, id: usize) bo
     _ = dvui.label(@src(), "{s}", .{label}, .{
         .id_extra = id,
         .color_text = @import("../color_compat.zig").wrap(theme.colors.text_secondary),
-        .padding = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
+        .padding = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xxs },
     });
     var te = dvui.textEntry(@src(), .{
         .text = .{ .buffer = buf },
@@ -93,7 +93,7 @@ fn renderPhoneQr() void {
     const qr = @import("../../core/qr_pure.zig");
     const note_opts = dvui.Options{
         .color_text = @import("../color_compat.zig").wrap(theme.colors.text_secondary),
-        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+        .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = 6 },
     };
 
     if (remote.bind_mode != .lan) {
@@ -136,7 +136,7 @@ fn renderPhoneQr() void {
         _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
             .min_size_content = .{ .w = 184, .h = 184 },
             .max_size_content = .{ .w = 184, .h = 184 },
-            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
+            .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.sm },
         });
     }
     var plain_buf: [96]u8 = undefined;
@@ -161,7 +161,7 @@ fn renderAgentAccess() void {
 
     _ = dvui.label(@src(), "Let coding agents search, play and manage downloads through Opal. Agents connect with the opal-mcp program; it only talks to this machine unless the Web UI is shared on your network.", .{}, .{
         .color_text = @import("../color_compat.zig").wrap(theme.colors.text_secondary),
-        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+        .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = 6 },
     });
 
     const before = state.app.web_remote_enabled;
@@ -251,7 +251,7 @@ fn renderAgentAccess() void {
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
-        .margin = .{ .x = 0, .y = 4, .w = 0, .h = 6 },
+        .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 6 },
     });
     defer row.deinit();
     var text_buf: [768]u8 = undefined;
@@ -277,11 +277,11 @@ fn renderAgentAccess() void {
     if (builtin_os_linux) {
         _ = dvui.label(@src(), "Open an agent in your terminal, already connected to Opal:", .{}, .{
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_secondary),
-            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
+            .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xxs },
         });
         var launch_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+            .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = 6 },
         });
         defer launch_row.deinit();
         const launcher = @import("../../services/agent_launch.zig");
@@ -299,7 +299,7 @@ fn renderAgentAccess() void {
     if (setup.auditLogPath(&audit_buf, paths.configDir(&cfg_buf))) |audit| {
         _ = dvui.label(@src(), "Every agent call is logged to {s}", .{audit}, .{
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_secondary),
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+            .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = 6 },
         });
         if (components.actionButton(@src(), "Copy log path", .secondary, 9304)) {
             dvui.clipboardTextSet(audit);
@@ -326,7 +326,7 @@ fn renderBrowserLink() void {
     components.sectionHeader("Browser");
     _ = dvui.label(@src(), "Pair your own browser with the Opal Connect extension. It finds the real stream behind a page and plays it here with the right Referer. A paired browser can only send streams to Opal; it cannot change settings, downloads or sources.", .{}, .{
         .color_text = @import("../color_compat.zig").wrap(theme.colors.text_secondary),
-        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+        .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = 6 },
     });
     if (!state.app.web_remote_enabled) {
         _ = dvui.label(@src(), "The extension reaches Opal through its local API: turn on \"Allow coding agents\" above first.", .{}, .{
@@ -346,7 +346,7 @@ fn renderBrowserLink() void {
         _ = dvui.label(@src(), "{s}", .{view.code[0..]}, .{
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_primary),
             .font = big,
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+            .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = theme.spacing.xxs },
         });
         _ = dvui.label(@src(), "Enter this code in the extension's setup page. Expires in {d}:{d:0>2}. Five wrong tries cancel it.", .{ @as(u32, @intCast(@divTrunc(view.remaining, 60))), @as(u32, @intCast(@mod(view.remaining, 60))) }, .{
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_secondary),
@@ -357,7 +357,7 @@ fn renderBrowserLink() void {
     {
         var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+            .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = 6 },
         });
         defer prow.deinit();
         if (components.actionButton(@src(), if (view.active) "New code" else "Pair a browser", .primary, 9330)) {
@@ -394,20 +394,20 @@ fn renderBrowserLink() void {
     if (n == 0) {
         _ = dvui.label(@src(), "No paired browsers.", .{}, .{
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary),
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
+            .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = theme.spacing.xs },
         });
         return;
     }
     _ = dvui.label(@src(), "Paired browsers", .{}, .{
         .color_text = @import("../color_compat.zig").wrap(theme.colors.text_secondary),
-        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+        .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = theme.spacing.xxs },
     });
     const now = io_g.timestamp();
     for (rows[0..n], 0..) |*row, i| {
         var line = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i,
             .expand = .horizontal,
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+            .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = theme.spacing.xxs },
         });
         defer line.deinit();
         var seen_buf: [48]u8 = undefined;
@@ -466,7 +466,7 @@ pub fn renderWebUiTab() void {
         if (state.app.web_remote_enabled) {
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .expand = .horizontal,
-                .margin = .{ .x = 0, .y = 4, .w = 0, .h = 6 },
+                .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 6 },
             });
             defer row.deinit();
             if (components.actionButton(@src(), "Open in Browser", .primary, 9001)) {
@@ -506,7 +506,7 @@ pub fn renderWebUiTab() void {
             }) catch "");
         _ = dvui.label(@src(), "{s}", .{status}, .{
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_secondary),
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+            .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = 6 },
         });
 
         // Prefill with the existing account. An empty field made "Set Password"
@@ -523,7 +523,7 @@ pub fn renderWebUiTab() void {
 
         var brow = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .margin = .{ .x = 0, .y = 8, .w = 0, .h = 6 },
+            .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 6 },
         });
         defer brow.deinit();
 
@@ -575,7 +575,7 @@ pub fn renderWebUiTab() void {
             _ = dvui.label(@src(), "{s}", .{webui_account_status[0..webui_account_status_len]}, .{
                 .id_extra = 9104,
                 .color_text = @import("../color_compat.zig").wrap(if (webui_account_status_ok) theme.colors.success else theme.colors.danger),
-                .margin = .{ .x = 0, .y = 2, .w = 0, .h = 8 },
+                .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = theme.spacing.sm },
             });
         }
 
@@ -601,7 +601,7 @@ pub fn renderWebUiTab() void {
     {
         _ = dvui.label(@src(), "For the browser extension and automation. Rotating it breaks anything still using the old token.", .{}, .{
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_secondary),
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+            .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = 6 },
         });
         var mask_buf: [64]u8 = undefined;
         const tok = remote.tokenHex();
@@ -648,7 +648,7 @@ pub fn renderWebUiTab() void {
         else
             "This machine only — 127.0.0.1, not reachable from the network."}, .{
             .color_text = @import("../color_compat.zig").wrap(if (lan) theme.colors.warning else theme.colors.text_secondary),
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+            .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = 6 },
         });
 
         // components.segment, not two hand-rolled buttons: this is a

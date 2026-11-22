@@ -259,7 +259,7 @@ pub fn renderPlaybackTab() void {
         if (ytdlp.versionReady() and ytdlp.versionString().len > 0) {
             var vb: [40]u8 = undefined;
             const v = std.fmt.bufPrint(&vb, "v{s}", .{ytdlp.versionString()}) catch "";
-            _ = dvui.label(@src(), "{s}", .{v}, .{ .id_extra = 2903, .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary), .gravity_y = 0.5, .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 } });
+            _ = dvui.label(@src(), "{s}", .{v}, .{ .id_extra = 2903, .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary), .gravity_y = 0.5, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 } });
         }
 
         {
@@ -296,7 +296,7 @@ pub fn renderPlaybackTab() void {
         _ = dvui.label(@src(), "{s}", .{ytdlp.binary()}, .{
             .id_extra = 2910,
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary),
-            .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
+            .padding = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xs },
         });
     }
     _ = dvui.label(@src(), "Install operation: HTTPS curl to staged file › SHA-256 verification › --version probe › publish.", .{}, .{ .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary) });
@@ -316,7 +316,7 @@ pub fn renderPlaybackTab() void {
         const av_pure = @import("../../player/av_pure.zig");
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
         });
         defer card.deinit();
 
@@ -346,7 +346,7 @@ pub fn renderPlaybackTab() void {
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = f.idx + 3000,
                 .expand = .horizontal,
-                .padding = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+                .padding = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = theme.spacing.xxs },
             });
             defer row.deinit();
 
@@ -365,7 +365,7 @@ pub fn renderPlaybackTab() void {
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
                 .corners = theme.dims.rad_sm,
-                .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 2, .h = 0 },
+                .margin = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xxs, .h = 0 },
             })) {
                 const fld = VF.field(f.idx);
                 fld.* = av_pure.clampVideoFilter(fld.* - 5);
@@ -400,7 +400,7 @@ pub fn renderPlaybackTab() void {
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
                 .corners = theme.dims.rad_sm,
-                .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
+                .margin = .{ .x = theme.spacing.xxs, .y = 0, .w = 0, .h = 0 },
             })) {
                 const fld = VF.field(f.idx);
                 fld.* = av_pure.clampVideoFilter(fld.* + 5);

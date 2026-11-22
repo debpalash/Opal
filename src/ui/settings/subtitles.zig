@@ -52,7 +52,7 @@ pub fn renderSubtitlesTab() void {
         "Add an OpenSubtitles.com key for more results (opensubtitles.com › Profile › API Consumers)."}, .{
         .id_extra = 4200,
         .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary),
-        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 8 },
+        .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = theme.spacing.sm },
     });
 
     // ── Subdl API Key ── (optional, FREE per-user key; ZIP downloads)
@@ -85,7 +85,7 @@ pub fn renderSubtitlesTab() void {
         "Add a free Subdl key for a large legal DB (subdl.com › panel › API)."}, .{
         .id_extra = 4210,
         .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary),
-        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 8 },
+        .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = theme.spacing.sm },
     });
 
     // ── Subtitle Language ── (short codes via segment)
@@ -142,7 +142,7 @@ pub fn renderSubtitlesTab() void {
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_on_accent),
             .border = dvui.Rect.all(0),
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-            .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 2, .h = 0 },
+            .margin = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xxs, .h = 0 },
             .corners = theme.dims.rad_md,
         });
 
@@ -155,7 +155,7 @@ pub fn renderSubtitlesTab() void {
             .color_fill_press = @import("../color_compat.zig").wrap(theme.colors.bg_elevated),
             .border = dvui.Rect.all(0),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-            .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
+            .margin = .{ .x = theme.spacing.xxs, .y = 0, .w = 0, .h = 0 },
             .corners = theme.dims.rad_md,
         })) {
             engine_mod.searchFromActivePlayer(engine);
@@ -189,7 +189,7 @@ pub fn renderSubtitlesTab() void {
             var lrow = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = 4401,
                 .expand = .horizontal,
-                .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
+                .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xs },
             });
             defer lrow.deinit();
             dvui.spinner(@src(), .{
@@ -216,7 +216,7 @@ pub fn renderSubtitlesTab() void {
             _ = dvui.label(@src(), "{s}", .{count_str}, .{
                 .id_extra = 4402,
                 .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary),
-                .margin = .{ .x = 0, .y = 6, .w = 0, .h = 2 },
+                .margin = .{ .x = 0, .y = 6, .w = 0, .h = theme.spacing.xxs },
             });
 
             for (0..engine.result_count) |ri| {
@@ -228,7 +228,7 @@ pub fn renderSubtitlesTab() void {
                     .color_fill = @import("../color_compat.zig").wrap(theme.colors.bg_surface),
                     .corners = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
-                    .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+                    .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = theme.spacing.xxs },
                 });
                 defer res_row.deinit();
 
@@ -249,14 +249,14 @@ pub fn renderSubtitlesTab() void {
                         .id_extra = ri + 4700,
                         .color_text = @import("../color_compat.zig").wrap(theme.colors.text_secondary),
                         .gravity_y = 0.5,
-                        .margin = .{ .x = 6, .y = 0, .w = 4, .h = 0 },
+                        .margin = .{ .x = 6, .y = 0, .w = theme.spacing.xs, .h = 0 },
                     });
                 }
                 _ = dvui.label(@src(), "{s}", .{engine_mod.sourceName(r.source)}, .{
                     .id_extra = ri + 4800,
                     .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary),
                     .gravity_y = 0.5,
-                    .margin = .{ .x = 2, .y = 0, .w = 6, .h = 0 },
+                    .margin = .{ .x = theme.spacing.xxs, .y = 0, .w = 6, .h = 0 },
                 });
 
                 if (engine.loaded_idx == @as(i32, @intCast(ri))) {
@@ -265,7 +265,7 @@ pub fn renderSubtitlesTab() void {
                         .color_text = @import("../color_compat.zig").wrap(theme.colors.success),
                         .min_size_content = theme.iconSize(.xs),
                         .gravity_y = 0.5,
-                        .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+                        .margin = .{ .x = theme.spacing.xxs, .y = 0, .w = theme.spacing.xxs, .h = 0 },
                     });
                     _ = dvui.label(@src(), "Loaded", .{}, .{
                         .id_extra = ri + 4900,
@@ -298,7 +298,7 @@ pub fn renderSubtitlesTab() void {
             _ = dvui.label(@src(), "Nothing surfaced from the open providers — try a shorter title or another language.", .{}, .{
                 .id_extra = 4403,
                 .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary),
-                .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
+                .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xs },
             });
         }
 
@@ -312,7 +312,7 @@ pub fn renderSubtitlesTab() void {
                 _ = dvui.label(@src(), "{s}", .{safe_err}, .{
                     .id_extra = 4400,
                     .color_text = @import("../color_compat.zig").wrap(theme.colors.warning),
-                    .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
+                    .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xs },
                 });
             }
 
@@ -327,7 +327,7 @@ pub fn renderSubtitlesTab() void {
                     .color_fill = @import("../color_compat.zig").wrap(theme.colors.bg_surface),
                     .corners = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
-                    .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+                    .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = theme.spacing.xxs },
                 });
                 defer res_row.deinit();
 
@@ -366,7 +366,7 @@ pub fn renderSubtitlesTab() void {
                         .id_extra = ri + 5800,
                         .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary),
                         .gravity_y = 0.5,
-                        .margin = .{ .x = 6, .y = 0, .w = 4, .h = 0 },
+                        .margin = .{ .x = 6, .y = 0, .w = theme.spacing.xs, .h = 0 },
                     });
                 }
 
@@ -376,7 +376,7 @@ pub fn renderSubtitlesTab() void {
                         .id_extra = ri + 5900,
                         .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary),
                         .gravity_y = 0.5,
-                        .margin = .{ .x = 2, .y = 0, .w = 4, .h = 0 },
+                        .margin = .{ .x = theme.spacing.xxs, .y = 0, .w = theme.spacing.xs, .h = 0 },
                     });
                 }
 
@@ -407,7 +407,7 @@ pub fn renderSubtitlesTab() void {
                 _ = dvui.label(@src(), "{s}", .{safe_err}, .{
                     .id_extra = 7100,
                     .color_text = @import("../color_compat.zig").wrap(theme.colors.warning),
-                    .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
+                    .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xs },
                 });
             }
 
@@ -420,7 +420,7 @@ pub fn renderSubtitlesTab() void {
                     .color_fill = @import("../color_compat.zig").wrap(theme.colors.bg_surface),
                     .corners = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
-                    .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+                    .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = theme.spacing.xxs },
                 });
                 defer res_row.deinit();
 
@@ -489,6 +489,6 @@ pub fn renderSubtitlesTab() void {
     _ = dvui.label(@src(), "Shift+J = Search subs for current video | J = Cycle tracks", .{}, .{
         .id_extra = 4201,
         .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary),
-        .margin = .{ .x = 0, .y = 8, .w = 0, .h = 0 },
+        .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
     });
 }

@@ -16,8 +16,8 @@ fn aboutLink(id: usize, icon: []const u8, label: []const u8, url: []const u8, ic
         .background = true,
         .color_fill = @import("../color_compat.zig").wrap(theme.colors.bg_surface),
         .corners = dvui.CornerRect.all(theme.radius.pill),
-        .padding = .{ .x = theme.spacing.md, .y = 4, .w = theme.spacing.md, .h = 4 },
-        .margin = .{ .x = 0, .y = 2, .w = theme.spacing.sm, .h = 2 },
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+        .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = theme.spacing.sm, .h = theme.spacing.xxs },
         .gravity_y = 0.5,
     });
     defer chip.deinit();
@@ -94,7 +94,7 @@ pub fn renderAboutTab() void {
         _ = dvui.label(@src(), "The evolved media player for the next decades of entertainment.", .{}, .{
             .id_extra = 2505,
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_primary),
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xxs },
         });
         _ = dvui.label(@src(), "Local-first, an mpv heart, and an AI that never leaves your machine.\nNo accounts · no telemetry · no cloud — your history is a SQLite file you own.", .{}, .{
             .id_extra = 2506,
@@ -161,7 +161,7 @@ pub fn renderAboutTab() void {
         {
             var links = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
                 .expand = .horizontal,
-                .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
+                .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
             });
             defer links.deinit();
             aboutLink(2540, brands.icon(.github), "GitHub", "https://github.com/debpalash/Opal", theme.colors.text_secondary);
@@ -174,7 +174,7 @@ pub fn renderAboutTab() void {
         _ = dvui.label(@src(), "Sponsors keep Opal independent — every Ko-fi and PayPal donation funds development directly.", .{}, .{
             .id_extra = 2545,
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary),
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+            .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = 0 },
         });
 
         // Credits — the shoulders this stands on, plus TMDB's required notice.
@@ -186,7 +186,7 @@ pub fn renderAboutTab() void {
         _ = dvui.label(@src(), "Catalog feeds from Cinemeta. Optional metadata from TMDB — this product uses the TMDB API but is not endorsed or certified by TMDB.", .{}, .{
             .id_extra = 2547,
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary),
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.xs },
+            .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = theme.spacing.xs },
         });
 
         const auto_check_before = state.app.auto_check_updates;

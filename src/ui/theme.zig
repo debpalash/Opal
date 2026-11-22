@@ -1,5 +1,6 @@
 const std = @import("std");
 const dvui = @import("dvui");
+const tp = @import("theme_pure.zig");
 const state = @import("../core/state.zig");
 
 // ══════════════════════════════════════════════════════════
@@ -350,7 +351,6 @@ pub fn getThemeColors(preset: ThemePreset) ThemeColors {
 // its WCAG threshold fails the build instead of shipping unreadable text.
 comptime {
     @setEvalBranchQuota(200_000);
-    const tp = @import("theme_pure.zig");
     for (std.enums.values(ThemePreset)) |p| {
         const c = getThemeColors(p);
         const surfaces = [_]dvui.Color{ c.bg_app, c.bg_surface, c.bg_pressed, c.bg_elevated, c.bg_hover, c.bg_selected };
@@ -367,7 +367,7 @@ comptime {
     }
 }
 
-fn rgb(c: dvui.Color) @import("theme_pure.zig").Rgb {
+fn rgb(c: dvui.Color) tp.Rgb {
     return .{ .r = c.r, .g = c.g, .b = c.b };
 }
 
@@ -458,50 +458,11 @@ pub fn fitWindowSize(preferred: dvui.Size, minimum: dvui.Size) dvui.Size {
     };
 }
 
-// ── Spacing tokens — 4px-based scale ──
-
-pub const spacing = struct {
-    pub const xxs: f32 = 2; // hairline gaps: icon-to-badge, stacked meta lines
-    pub const xs: f32 = 4;
-    pub const sm: f32 = 8;
-    pub const md: f32 = 12;
-    pub const lg: f32 = 16;
-    pub const xl: f32 = 24;
-    pub const xxl: f32 = 32;
-    pub const xxxl: f32 = 48; // hero/empty-state breathing room
-};
-
-// ── Radius tokens — corner radii ──
-//
-// Softer scale (was 2/3/6/8/12). Rule of thumb: controls (buttons, inputs,
-// segments, rows) = sm; cards/posters/tooltips = md; floating bars, dialogs,
-// popovers = lg; hero sheets = xl. Nested shapes use one step smaller than
-// their container so inner/outer curves stay concentric.
-pub const radius = struct {
-    pub const xs: f32 = 3;
-    pub const sm: f32 = 5;
-    pub const md: f32 = 7;
-    pub const lg: f32 = 10;
-    pub const xl: f32 = 14;
-    pub const pill: f32 = 999;
-};
-
-// ── Font size tokens — type ramp ──
-//
-// COMPACT ramp in dvui logical units (dvui's own default body is 10; the
-// backend multiplies by the display's content scale). Most of the app used to
-// render at the dvui default 10 while components.zig used 13 — two visibly
-// different "body" sizes side by side. Unified DOWN to the compact end: a
-// media player's chrome should stay quiet at 1× scale.
-pub const font_size = struct {
-    pub const micro: f32 = 9;
-    pub const small: f32 = 10;
-    pub const body: f32 = 11;
-    pub const subtitle: f32 = 13; // card titles, dialog subheads
-    pub const title: f32 = 15; // section/page headings (dvui font_heading)
-    pub const headline: f32 = 18; // detail-page titles
-    pub const display: f32 = 22; // hero titles (dvui font_title)
-};
+// ── Layout tokens — spacing / radius / font_size ──
+// Defined (and unit-tested) in theme_pure.zig; shared by every preset.
+pub const spacing = tp.spacing;
+pub const radius = tp.radius;
+pub const font_size = tp.font_size;
 
 /// Line-height ratios for multi-line text (dvui.Font.line_height_factor).
 pub const line_height = struct {

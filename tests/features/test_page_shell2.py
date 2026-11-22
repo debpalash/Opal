@@ -165,7 +165,7 @@ def test_typography_unified():
         return "fail", "dvui heading/title fonts not routed through tokens"
     if "NotoSans-Regular.ttf" not in th or "NotoSans-Bold.ttf" not in th:
         return "fail", "regular/bold font sources are incomplete"
-    if "body: f32 = 11" not in th:
+    if "pub const font_size = tp.font_size;" not in th or "body: f32 = 11" not in _src("src/ui/theme_pure.zig"):
         return "fail", "type ramp is not the compact one (body should be 11)"
     return "pass", "embedded Noto Sans + compact ramp drive dvui/component fonts"
 

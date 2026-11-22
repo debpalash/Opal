@@ -16,7 +16,7 @@ pub fn renderStorageTab() void {
         const path = state.app.save_path_buf[0..state.app.save_path_len];
         _ = dvui.label(@src(), "{s}", .{path}, .{
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_secondary),
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
+            .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = theme.spacing.xs },
         });
 
         // Path presets (resolved at runtime) — segment.
@@ -126,7 +126,7 @@ fn renderDiskUsageSection() void {
     {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.xs },
+            .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = theme.spacing.xs },
         });
         defer row.deinit();
 
@@ -272,7 +272,7 @@ fn renderCacheSection() void {
         const size_str = std.fmt.bufPrint(&size_buf, "{d:.1} MB cached on disk", .{mb}) catch "?";
         _ = dvui.label(@src(), "{s}", .{size_str}, .{
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_secondary),
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
+            .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = theme.spacing.xs },
         });
     }
 

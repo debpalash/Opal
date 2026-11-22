@@ -58,7 +58,7 @@ pub fn renderLiveTvTab() void {
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_on_accent),
             .border = dvui.Rect.all(0),
             .corners = theme.dims.rad_sm,
-            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            .padding = .{ .x = theme.spacing.md, .y = 5, .w = theme.spacing.md, .h = 5 },
             .gravity_y = 0.5,
         })) {
             iptv.refreshAllSources(true);
@@ -117,7 +117,7 @@ pub fn renderLiveTvTab() void {
             _ = dvui.label(@src(), "{s}", .{meta}, .{
                 .id_extra = id_base + 3,
                 .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary),
-                .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+                .margin = .{ .x = 0, .y = theme.spacing.xxs, .w = 0, .h = 0 },
             });
         }
 
@@ -241,7 +241,7 @@ pub fn renderLiveTvTab() void {
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_on_accent),
             .border = dvui.Rect.all(0),
             .corners = theme.dims.rad_sm,
-            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            .padding = .{ .x = theme.spacing.md, .y = 5, .w = theme.spacing.md, .h = 5 },
         })) {
             const raw = livetv_url_buf[0 .. std.mem.indexOfScalar(u8, &livetv_url_buf, 0) orelse livetv_url_buf.len];
             const trimmed = std.mem.trim(u8, raw, " \t\r\n");
@@ -265,7 +265,7 @@ pub fn renderLiveTvTab() void {
             .color_text = @import("../color_compat.zig").wrap(theme.colors.text_secondary),
             .border = dvui.Rect.all(0),
             .corners = theme.dims.rad_sm,
-            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            .padding = .{ .x = theme.spacing.md, .y = 5, .w = theme.spacing.md, .h = 5 },
             .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
         })) {
             @memset(&livetv_url_buf, 0);

@@ -89,11 +89,8 @@ const TerminalLauncher = struct {
 //   │   ...       ││  Changes saved automatically.      │
 //   └──────────────┴────────────────────────────────────┘
 //
-// Tokens:
-//   spacing:  xs=4  sm=8  md=12  lg=16  xl=24  xxl=32
-//   radius:   sm=4  md=8  lg=12   pill=99
-//   font:     micro=10 small=11 body=13 title=15 display=22
-// TODO: needs theme.spacing / theme.radius / theme.font_size namespaces
+// Each tab body lives in src/ui/settings/<tab>.zig. Spacing, radius and font
+// sizes come from theme.spacing / theme.radius / theme.font_size.
 
 // File-local search query buffer for the left-nav search box.
 var search_buf: [128]u8 = std.mem.zeroes([128]u8);
@@ -474,7 +471,7 @@ pub fn renderAIContent() void {
     // Scrollable content
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
-        .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
         .background = true,
         .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
     });
@@ -680,7 +677,7 @@ pub fn absField(label: []const u8, buf: []u8, password: bool, id: usize) void {
     _ = dvui.label(@src(), "{s}", .{label}, .{
         .id_extra = id,
         .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
-        .padding = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
+        .padding = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xxs },
     });
     var te = dvui.textEntry(@src(), .{
         .text = .{ .buffer = buf },
@@ -786,7 +783,7 @@ pub fn renderCheatSheet() void {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = idx,
             .expand = .horizontal,
-            .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
+            .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xxs, .w = theme.spacing.xs, .h = theme.spacing.xxs },
         });
         defer row.deinit();
 
@@ -806,7 +803,7 @@ pub fn renderCheatSheet() void {
     // ── AI chat keyword shortcuts ──
     _ = dvui.label(@src(), "AI Keywords (type in input)", .{}, .{
         .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
-        .margin = .{ .y = 16 },
+        .margin = .{ .y = theme.spacing.lg },
     });
 
     const kw = [_][2][]const u8{
@@ -831,7 +828,7 @@ pub fn renderCheatSheet() void {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = idx + 5000,
             .expand = .horizontal,
-            .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
+            .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xxs, .w = theme.spacing.xs, .h = theme.spacing.xxs },
         });
         defer row.deinit();
         _ = dvui.label(@src(), "{s}", .{k[0]}, .{
@@ -897,13 +894,13 @@ pub fn renderDepsModal() void {
 
     var pad = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
-        .padding = .{ .x = 16, .y = 12, .w = 16, .h = 12 },
+        .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.md },
     });
     defer pad.deinit();
 
     _ = dvui.label(@src(), "Opal works best with these installed:", .{}, .{
         .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
-        .margin = .{ .y = 4 },
+        .margin = .{ .y = theme.spacing.xs },
     });
 
     const DepRow = struct {
@@ -934,7 +931,7 @@ pub fn renderDepsModal() void {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i,
             .expand = .horizontal,
-            .padding = .{ .x = 4, .y = 6, .w = 4, .h = 6 },
+            .padding = .{ .x = theme.spacing.xs, .y = 6, .w = theme.spacing.xs, .h = 6 },
             .margin = .{ .y = 1 },
         });
         defer row.deinit();
@@ -1080,7 +1077,7 @@ pub fn renderDepsModal() void {
                 var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .id_extra = 9000 + gi,
                     .expand = .horizontal,
-                    .padding = .{ .x = 4, .y = 6, .w = 4, .h = 6 },
+                    .padding = .{ .x = theme.spacing.xs, .y = 6, .w = theme.spacing.xs, .h = 6 },
                     .margin = .{ .y = 1 },
                 });
                 defer row.deinit();
@@ -1144,7 +1141,7 @@ pub fn renderDepsModal() void {
             if (ai_server.llama_server_exists and ai_server.model_exists) {
                 var act_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .expand = .horizontal,
-                    .padding = .{ .x = 4, .y = 8, .w = 4, .h = 4 },
+                    .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.sm, .w = theme.spacing.xs, .h = theme.spacing.xs },
                 });
                 defer act_row.deinit();
                 const running = ai_server.server_running;
@@ -1177,7 +1174,7 @@ pub fn renderDepsModal() void {
             .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
             .corners = theme.dims.rad_md,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
-            .margin = .{ .y = 4 },
+            .margin = .{ .y = theme.spacing.xs },
         });
         defer code_row.deinit();
 
@@ -1194,7 +1191,7 @@ pub fn renderDepsModal() void {
             .border = dvui.Rect.all(0),
             .corners = theme.dims.rad_sm,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-            .margin = .{ .w = 4 },
+            .margin = .{ .w = theme.spacing.xs },
             .gravity_y = 0.5,
         })) {
             // `osascript -e 'tell app "Terminal" to do script "CMD"'`
@@ -1352,7 +1349,7 @@ pub fn renderMediaInfo() void {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = idx,
             .expand = .horizontal,
-            .padding = .{ .x = 4, .y = 1, .w = 4, .h = 1 },
+            .padding = .{ .x = theme.spacing.xs, .y = 1, .w = theme.spacing.xs, .h = 1 },
         });
         defer row.deinit();
 
@@ -1426,7 +1423,7 @@ pub fn renderMusicConnection() void {
                 .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .border = dvui.Rect.all(1),
                 .corners = theme.dims.rad_sm,
-                .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+                .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
             });
             pte.deinit();
         }
@@ -1435,7 +1432,7 @@ pub fn renderMusicConnection() void {
             .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
             .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
             .corners = theme.dims.rad_sm,
-            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            .padding = .{ .x = theme.spacing.md, .y = 5, .w = theme.spacing.md, .h = 5 },
         })) {
             music.saveConfig();
         }
