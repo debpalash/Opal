@@ -1404,6 +1404,34 @@ test('Live TV admits only one load-more request and retains its page on failure'
   assert.equal(f.$('tv-hint').textContent, '2 of 3 channels');
 });
 
+test('Live TV rows show the guide now/next line and flag offline channels', () => {
+  const f = fixture('discovery.js');
+  const now = Math.floor(Date.now() / 1000);
+  const html = f.run(`tvNowNextHtml(${JSON.stringify({now:{title:'Evening News', start:now - 600, stop:now + 1200}, next:{title:'Weather', start:now + 1200, stop:now + 1500}})})`);
+  assert.match(html, /Evening News/);
+  assert.match(html, /Next .*Weather/);
+  assert.match(html, /<progress max="100" value="33"/);
+  assert.equal(f.run(`tvNowNextHtml({now:null,next:null})`), '');
+});
+
+test('Live TV favorites and programme views request their own endpoints', async () => {
+  const f = fixture('discovery.js');
+  f.run('globalThis.appendTv = rows => rendered.push(rows.map(row => row.name).join(","))');
+  f.run("tvView = 'favorites'");
+  const fav = f.run('runTv(true)');
+  f.take('/livetv?q=&offset=0&view=favorites').resolve({total:1, channels:[{name:'Starred'}]});
+  await fav;
+  assert.deepEqual(f.rendered, ['Starred']);
+  f.run("tvView = 'programmes'");
+  f.$('tv-q').value = 'news';
+  const progs = f.run('runTv(true)');
+  f.take('/livetv/programmes?q=news').resolve({items:[{title:'World News', channel_name:'BBC One', start:1, stop:2, on_air:true, url:'https://cdn/bbc.m3u8'}]});
+  await progs;
+  assert.match(f.$('tv-results').innerHTML, /World News/);
+  assert.match(f.$('tv-results').innerHTML, /On now/);
+  assert.equal(f.$('tv-hint').textContent, '1 upcoming programmes');
+});
+
 test('source fallback changes use typed actions and roll back on failure', async () => {
   const f = fixture('now-playing.js');
   const checkbox = f.$('np-source-fallback');

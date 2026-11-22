@@ -66,14 +66,46 @@ function renderAi(d){
 // ?q=&offset= → {total,offset,channels}. Adult channels follow the app's NSFW
 // filter, exactly like the desktop tab. Hosted: play the stream URL in the
 // browser <video> (HLS plays natively on Safari/iOS); companion: hand to mpv.
-let tvOffset = 0, tvTotal = 0, tvQuery = '';
+// Programme guide (opt-in XMLTV): /livetv rows carry now/next + health +
+// favorite; /livetv/programmes searches listings; /livetv/guide* manages the
+// source and channel mappings. Times arrive as UTC epoch seconds and are shown
+// in this browser's own time zone (DST-correct via Date).
+let tvOffset = 0, tvTotal = 0, tvQuery = '', tvView = 'channels';
 let tvGeneration = 0, tvLoading = false;
-function loadTv(){ if (!$('tv-results').children.length) runTv(true); }
+function loadTv(){ loadTvGuide(); if (!$('tv-results').children.length) runTv(true); }
 $('tv-go').onclick = () => runTv(true);
 $('tv-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runTv(true); $('tv-q').blur(); } });
 $('tv-more').onclick = () => runTv(false);
+$('tv-views').querySelectorAll('[data-tv-view]').forEach(button => {
+  button.onclick = () => {
+    tvView = button.dataset.tvView;
+    $('tv-views').querySelectorAll('[data-tv-view]').forEach(b => {
+      b.classList.toggle('on', b === button); b.setAttribute('aria-selected', b === button ? 'true' : 'false');
+    });
+    runTv(true);
+  };
+});
+
+const tvClock = sec => new Date(sec * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+function tvDayClock(sec){
+  const d = new Date(sec * 1000), today = new Date();
+  const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
+  const day = d.toDateString() === today.toDateString() ? 'Today'
+    : d.toDateString() === tomorrow.toDateString() ? 'Tomorrow'
+    : d.toLocaleDateString([], {weekday:'short'});
+  return day + ' ' + tvClock(sec);
+}
+function tvNowNextHtml(c){
+  if (!c.now && !c.next) return '';
+  const nowPct = c.now ? Math.max(0, Math.min(100, Math.round((Date.now() / 1000 - c.now.start) / Math.max(1, c.now.stop - c.now.start) * 100))) : 0;
+  return `<div class="m tv-epg">
+    ${c.now ? `<span class="src">Now</span><span>${esc(tvClock(c.now.start))}-${esc(tvClock(c.now.stop))} ${esc(c.now.title)}</span><progress max="100" value="${nowPct}" aria-label="Programme progress"></progress>` : ''}
+    ${c.next ? `<span>Next ${esc(tvDayClock(c.next.start))} ${esc(c.next.title)}</span>` : ''}
+  </div>`;
+}
 
 async function runTv(reset){
+  if (tvView === 'programmes') return runTvProgrammes();
   if (!reset && tvLoading) return;
   if (reset) { ++tvGeneration; tvOffset = 0; tvQuery = $('tv-q').value.trim(); $('tv-results').innerHTML = ''; }
   const generation = tvGeneration, offset = tvOffset;
@@ -82,7 +114,7 @@ async function runTv(reset){
   $('tv-results').setAttribute('aria-busy', 'true');
   $('tv-hint').innerHTML = '<span class="spin"></span> Loading channels…';
   try {
-    const d = await api('/livetv?q=' + encodeURIComponent(tvQuery) + '&offset=' + offset);
+    const d = await api('/livetv?q=' + encodeURIComponent(tvQuery) + '&offset=' + offset + (tvView === 'favorites' ? '&view=favorites' : ''));
     if (generation !== tvGeneration) return;
     if (d?.error || !Array.isArray(d?.channels)) throw new Error('Invalid channel response');
     tvTotal = d.total || 0;
@@ -105,18 +137,35 @@ async function runTv(reset){
   }
 }
 
+// Hand a channel to the desktop player. /livetv/play re-reads the catalog row,
+// so the channel's own User-Agent / Referer are sent; a channel the catalog no
+// longer has falls back to a bare /load.
+async function sendTvToPlayer(url, button){
+  try {
+    await apiFormMutation('/livetv/play', {url});
+    button.textContent = 'Sent ✓';
+  } catch (e) {
+    if (e?.status === 409) { button.textContent = 'Offline'; toast('This channel is offline. Try another.'); return; }
+    if (e?.status === 404) { apiMutation('/load?url=' + encodeURIComponent(url)).catch(()=>{}); button.textContent = 'Sent ✓'; return; }
+    toast('Could not reach the player');
+  }
+}
+
 function appendTv(chans){
   const html = chans.map(c => `
-    <div class="result">
+    <div class="result${c.health === 'dead' ? ' tv-dead' : ''}">
       <div class="t">${esc(c.name)}</div>
       <div class="m">
+        ${c.health === 'dead' ? '<span class="src">Offline</span>' : ''}
         ${c.country ? `<span class="src">${esc(c.country)}</span>` : ''}
         ${c.quality ? `<span>${esc(c.quality)}</span>` : ''}
         ${c.category ? `<span>${esc(c.category)}</span>` : ''}
+        <button class="tv-fav" aria-pressed="${c.favorite ? 'true' : 'false'}" data-tv-fav="${encodeURIComponent(c.url)}">${c.favorite ? 'Unstar' : 'Star'}</button>
         <button class="tv-details" data-channel="${encodeURIComponent(JSON.stringify(c))}">Details</button>
         <button class="queue-btn" data-tv-queue="${encodeURIComponent(c.url)}" data-name="${esc(c.name)}">Queue</button>
         <button class="play" data-destination-verb="Watch" data-url="${encodeURIComponent(c.url)}" data-name="${esc(c.name)}">${destinationActionLabel('Watch')}</button>
       </div>
+      ${tvNowNextHtml(c)}
     </div>`).join('');
   $('tv-results').insertAdjacentHTML('beforeend', html);
   $('tv-results').querySelectorAll('.play:not([data-wired])').forEach(b => {
@@ -124,9 +173,17 @@ function appendTv(chans){
     b.onclick = () => {
       const url = decodeURIComponent(b.dataset.url);
       if (HOSTED) return openStreamUrl(url, b.dataset.name);
-      dispatchPlay(url, b.dataset.name, () => {
-        apiMutation('/load?url=' + encodeURIComponent(url)).catch(()=>{}); b.textContent = 'Sent ✓';
-      });
+      dispatchPlay(url, b.dataset.name, () => sendTvToPlayer(url, b));
+    };
+  });
+  $('tv-results').querySelectorAll('[data-tv-fav]:not([data-wired])').forEach(button => {
+    button.setAttribute('data-wired', '1');
+    button.onclick = async () => {
+      try {
+        const d = await apiFormMutation('/livetv/favorite', {url:decodeURIComponent(button.dataset.tvFav)});
+        button.setAttribute('aria-pressed', d.favorite ? 'true' : 'false');
+        button.textContent = d.favorite ? 'Unstar' : 'Star';
+      } catch { toast('Could not update favorites'); }
     };
   });
   $('tv-results').querySelectorAll('[data-tv-queue]:not([data-wired])').forEach(button => {
@@ -144,6 +201,92 @@ function appendTv(chans){
     };
   });
 }
+
+async function runTvProgrammes(){
+  const generation = ++tvGeneration;
+  const q = $('tv-q').value.trim();
+  $('tv-more').style.display = 'none';
+  $('tv-results').innerHTML = '';
+  if (q.length < 2) { $('tv-hint').textContent = 'Type a programme title to search the guide.'; return; }
+  $('tv-hint').innerHTML = '<span class="spin"></span> Searching the guide…';
+  try {
+    const d = await api('/livetv/programmes?q=' + encodeURIComponent(q));
+    if (generation !== tvGeneration) return;
+    const items = Array.isArray(d?.items) ? d.items : [];
+    $('tv-hint').textContent = items.length ? items.length + ' upcoming programmes' : 'No upcoming programmes match. Is a guide imported?';
+    $('tv-results').innerHTML = items.map(p => `
+      <div class="result">
+        <div class="t">${esc(p.title)}</div>
+        <div class="m">
+          <span class="src">${p.on_air ? 'On now' : esc(tvDayClock(p.start))}</span>
+          <span>${esc(p.channel_name || p.channel_id)}</span>
+          ${p.url ? `<button class="play" data-destination-verb="Watch" data-url="${encodeURIComponent(p.url)}" data-name="${esc(p.channel_name || p.title)}">${destinationActionLabel('Watch')}</button>` : '<span>No matching channel</span>'}
+        </div>
+        ${p.desc ? `<div class="m">${esc(p.desc)}</div>` : ''}
+      </div>`).join('');
+    $('tv-results').querySelectorAll('.play').forEach(b => {
+      b.onclick = () => {
+        const url = decodeURIComponent(b.dataset.url);
+        if (HOSTED) return openStreamUrl(url, b.dataset.name);
+        dispatchPlay(url, b.dataset.name, () => sendTvToPlayer(url, b));
+      };
+    });
+  } catch {
+    if (generation === tvGeneration) $('tv-hint').textContent = 'Could not search the guide.';
+  }
+}
+
+// ── Programme guide panel ──
+let tvGuidePoll = null;
+async function loadTvGuide(){
+  let d;
+  try { d = await api('/livetv/guide'); } catch { $('tv-guide-status').textContent = 'Guide unavailable'; return; }
+  const parts = [];
+  if (!d.enabled) parts.push('Off. Import an XMLTV guide to see what is on.');
+  else if (d.importing) parts.push('Importing ' + (d.source || 'guide') + '…');
+  else if (d.programmes) parts.push(`${d.channels} channels · ${d.programmes} programmes · ${d.freshness_label}` + (d.fetched_at ? ' · updated ' + tvDayClock(d.fetched_at) : ''));
+  else parts.push('No listings yet.');
+  if (d.enabled && d.source) parts.push('Source: ' + d.source);
+  if (d.error) parts.push(d.error);
+  $('tv-guide-status').textContent = parts.join(' — ');
+  $('tv-guide-status').classList.toggle('warn', d.freshness === 'stale' || d.freshness === 'expired' || !!d.error);
+  $('tv-guide-maps').innerHTML = (d.mappings || []).map(m => `
+    <div class="cfg-row"><span>${esc(m.label || m.key)} → ${esc(m.guide_id)}</span>
+      <button type="button" class="quick-btn" data-tv-unmap="${encodeURIComponent(m.key)}">Remove</button></div>`).join('');
+  $('tv-guide-maps').querySelectorAll('[data-tv-unmap]').forEach(b => {
+    b.onclick = async () => { await apiFormMutation('/livetv/map', {key:decodeURIComponent(b.dataset.tvUnmap)}).catch(()=>{}); loadTvGuide(); };
+  });
+  clearTimeout(tvGuidePoll);
+  if (d.importing) tvGuidePoll = setTimeout(loadTvGuide, 2000);
+}
+$('tv-guide-import').onclick = async () => {
+  const source = $('tv-guide-src').value.trim();
+  if (!source) { toast('Paste an XMLTV URL or file path'); return; }
+  try { await apiFormMutation('/livetv/guide/import', {source}); $('tv-guide-src').value = ''; }
+  catch (e) { toast(e?.status === 403 ? 'Only the host admin can import a guide' : 'Could not import the guide'); }
+  loadTvGuide();
+};
+$('tv-guide-refresh').onclick = async () => { await apiMutation('/livetv/guide/refresh').catch(() => toast('Could not refresh the guide')); loadTvGuide(); };
+$('tv-guide-clear').onclick = async () => {
+  if (!confirm('Remove the programme guide? Channel mappings are kept.')) return;
+  await apiFormMutation('/livetv/guide/clear', {confirm:'1'}).catch(() => toast('Could not remove the guide'));
+  loadTvGuide();
+};
+$('tv-map-guide').addEventListener('input', async () => {
+  const q = $('tv-map-guide').value.trim() || $('tv-map-channel').value.trim();
+  if (q.length < 2) return;
+  try {
+    const d = await api('/livetv/guide/channels?q=' + encodeURIComponent(q));
+    $('tv-map-suggest').innerHTML = (d.items || []).map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+  } catch {}
+});
+$('tv-map-save').onclick = async () => {
+  const channel = $('tv-map-channel').value.trim(), guide_id = $('tv-map-guide').value.trim();
+  if (!channel || !guide_id) { toast('Enter the channel and its guide id'); return; }
+  try { await apiFormMutation('/livetv/map', {channel, guide_id}); $('tv-map-channel').value = ''; $('tv-map-guide').value = ''; }
+  catch { toast('Could not save the mapping'); }
+  loadTvGuide();
+};
 
 // Play an external stream URL straight in the browser (Live TV). Distinct from
 // openPlayer(), which streams a local downloaded file via /stream.

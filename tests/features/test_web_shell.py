@@ -30,6 +30,7 @@ def test_web_remote_module_boundaries():
         "remote_books_api.zig",
         "remote_details_api.zig",
         "remote_identity.zig",
+        "remote_livetv_guide_api.zig",
     )
     checks = {
         "top router stays below 5k lines": len(remote.splitlines()) < 5000,

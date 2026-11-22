@@ -1281,14 +1281,11 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     if (@import("remote_wanted_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_agent_tasks_api.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("remote_operator_api.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("remote_livetv_guide_api.zig").handle(stream, method, api_path, query, body)) return;
     // ── Non-player endpoints checked first ──
     // Search
     if (std.mem.eql(u8, api_path, "/search")) {
         apiSearch(stream, query);
-        return;
-    }
-    if (std.mem.eql(u8, api_path, "/livetv")) {
-        apiLiveTv(stream, query);
         return;
     }
     if (std.mem.startsWith(u8, api_path, "/ai")) {
@@ -2594,71 +2591,6 @@ fn apiAi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) voi
     }
     w.writeAll("]}") catch return;
     sendJson(stream, buf[0..w.end]);
-}
-
-/// Live TV / IPTV: page the SQLite channel catalog.
-/// GET /api/livetv?q=&country=&category=&offset= → {total,offset,channels:[…]}
-/// Adult channels follow the app's NSFW filter, exactly like the desktop tab.
-/// The page is heap-allocated: IptvChannel is ~1.6 KB, so a stack array would
-/// blow the 64 KB spawned-thread budget (see CLAUDE.md thread rules).
-fn apiLiveTv(stream: std.Io.net.Stream, query: []const u8) void {
-    const cat = @import("iptv_catalog.zig");
-    const ipure = @import("iptv_pure.zig");
-    const alloc = @import("../core/alloc.zig").allocator;
-
-    var qbuf: [128]u8 = undefined;
-    var cbuf: [64]u8 = undefined;
-    var gbuf: [64]u8 = undefined;
-    const text = if (getQueryParam(query, "q")) |v| (urlDecode(v, &qbuf) orelse v) else "";
-    const country = if (getQueryParam(query, "country")) |v| (urlDecode(v, &cbuf) orelse v) else "";
-    const category = if (getQueryParam(query, "category")) |v| (urlDecode(v, &gbuf) orelse v) else "";
-    const offset: usize = if (getQueryParam(query, "offset")) |v|
-        (std.fmt.parseInt(usize, v, 10) catch 0)
-    else
-        0;
-
-    const q: cat.Query = .{
-        .text = text,
-        .country = country,
-        .category = category,
-        .nsfw_allowed = !state.app.nsfw_filter_enabled,
-    };
-
-    const PAGE = 50;
-    const rows = alloc.alloc(ipure.IptvChannel, PAGE) catch {
-        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
-        return;
-    };
-    defer alloc.free(rows);
-    const n = cat.queryPage(rows, offset, q);
-    const total = cat.count(q);
-
-    const allocator = @import("../core/alloc.zig").allocator;
-    const json_buf = allocator.alloc(u8, 192 * 1024) catch {
-        sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"channel catalog unavailable\"}");
-        return;
-    };
-    defer allocator.free(json_buf);
-    var w = std.Io.Writer.fixed(json_buf);
-    w.print("{{\"total\":{d},\"offset\":{d},\"channels\":[", .{ total, offset }) catch return;
-    for (rows[0..n], 0..) |ch, i| {
-        if (i > 0) w.writeAll(",") catch return;
-        w.writeAll("{\"name\":\"") catch return;
-        escJsonWrite(&w, ch.name[0..ch.name_len]);
-        w.writeAll("\",\"url\":\"") catch return;
-        escJsonWrite(&w, ch.url[0..ch.url_len]);
-        w.writeAll("\",\"quality\":\"") catch return;
-        escJsonWrite(&w, ch.quality[0..ch.quality_len]);
-        w.writeAll("\",\"logo\":\"") catch return;
-        escJsonWrite(&w, ch.logo[0..ch.logo_len]);
-        w.writeAll("\",\"country\":\"") catch return;
-        escJsonWrite(&w, ch.country[0..ch.country_len]);
-        w.writeAll("\",\"category\":\"") catch return;
-        escJsonWrite(&w, ch.category[0..ch.category_len]);
-        w.writeAll("\"}") catch return;
-    }
-    w.writeAll("]}") catch return;
-    sendJson(stream, json_buf[0..w.end]);
 }
 
 fn apiHistory(stream: std.Io.net.Stream) void {

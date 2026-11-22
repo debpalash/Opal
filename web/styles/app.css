@@ -292,6 +292,11 @@ button:disabled{cursor:not-allowed}
 .result .t{font-size:14px;word-break:break-word}
 .result .m{display:flex;gap:10px;color:var(--text-3);font-size:12px;margin-top:4px;align-items:center}
 .result .src{background:var(--bg-elevated);border-radius:999px;padding:1px 9px;color:var(--text-2)}
+.result .tv-epg{flex-wrap:wrap;color:var(--text-2)}
+.result .tv-epg progress{width:80px;height:6px;accent-color:var(--accent)}
+.result.tv-dead .t{color:var(--text-3)}
+.result.tv-dead .src:first-child{color:var(--danger)}
+.hint.warn{color:var(--warning)}
 .result .actions{display:flex;align-items:center;gap:5px;margin-left:auto}
 .result .play,.result .queue-btn{color:var(--accent);font-weight:600;padding:6px 12px;
   background:var(--bg-elevated);border-radius:var(--rad-sm)}

@@ -30,6 +30,40 @@ fn attr(line: []const u8, key: []const u8, dst: []u8) usize {
     return n;
 }
 
+/// First present attribute among `keys` (aliases for the same header).
+fn firstAttr(line: []const u8, keys: []const []const u8, dst: []u8) usize {
+    for (keys) |k| {
+        const n = attr(line, k, dst);
+        if (n > 0) return n;
+    }
+    return 0;
+}
+
+/// A header value from an `#EXTHTTP:{…}` JSON object, by case-insensitive
+/// name. Plain string values only (escapes are refused, not half-decoded), and
+/// a value carrying control characters is dropped — it becomes an HTTP header.
+fn jsonHeader(obj: []const u8, name: []const u8) []const u8 {
+    var i: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, obj, i, '"')) |q| {
+        const kend = std.mem.indexOfScalarPos(u8, obj, q + 1, '"') orelse return "";
+        const key = obj[q + 1 .. kend];
+        i = kend + 1;
+        var j = kend + 1;
+        while (j < obj.len and (obj[j] == ' ' or obj[j] == '\t')) j += 1;
+        if (j >= obj.len or obj[j] != ':') continue;
+        j += 1;
+        while (j < obj.len and (obj[j] == ' ' or obj[j] == '\t')) j += 1;
+        if (j >= obj.len or obj[j] != '"') continue;
+        const vend = std.mem.indexOfScalarPos(u8, obj, j + 1, '"') orelse return "";
+        const val = obj[j + 1 .. vend];
+        i = vend + 1;
+        if (!std.ascii.eqlIgnoreCase(key, name)) continue;
+        for (val) |ch| if (ch < 0x20 or ch == 0x7f or ch == '\\') return "";
+        return val;
+    }
+    return "";
+}
+
 /// The display name on an `#EXTINF` line — everything after the LAST comma.
 fn displayName(line: []const u8) []const u8 {
     const comma = std.mem.lastIndexOfScalar(u8, line, ',') orelse return "";
@@ -96,6 +130,9 @@ pub fn parseM3u(text: []const u8, out: []p.IptvChannel, nsfw_allowed: bool, quer
     var pending_ua_len: usize = 0;
     var pending_ref: [256]u8 = undefined;
     var pending_ref_len: usize = 0;
+    // tvg-id (or the mjh-style channel-id) — the XMLTV guide join key.
+    var pending_id: [64]u8 = undefined;
+    var pending_id_len: usize = 0;
     var have_inf = false;
 
     var lines = std.mem.splitScalar(u8, text, '\n');
@@ -111,8 +148,12 @@ pub fn parseM3u(text: []const u8, out: []p.IptvChannel, nsfw_allowed: bool, quer
             pending_logo_len = attr(line, "tvg-logo", &pending_logo);
             pending_cat_len = attr(line, "group-title", &pending_cat);
             pending_country_len = attr(line, "tvg-country", &pending_country);
-            pending_ua_len = 0;
-            pending_ref_len = 0;
+            pending_id_len = attr(line, "tvg-id", &pending_id);
+            if (pending_id_len == 0) pending_id_len = attr(line, "channel-id", &pending_id);
+            // Per-channel request headers declared on the EXTINF line itself
+            // (Kodi/TiviMate style). A later #EXTVLCOPT / #EXTHTTP overrides.
+            pending_ua_len = firstAttr(line, &.{ "http-user-agent", "user-agent" }, &pending_ua);
+            pending_ref_len = firstAttr(line, &.{ "http-referrer", "http-referer", "referrer", "referer" }, &pending_ref);
             have_inf = true;
             continue;
         }
@@ -127,6 +168,21 @@ pub fn parseM3u(text: []const u8, out: []p.IptvChannel, nsfw_allowed: bool, quer
                 if (ref.len > 0 and ref.len <= pending_ref.len) {
                     @memcpy(pending_ref[0..ref.len], ref);
                     pending_ref_len = ref.len;
+                }
+                // #EXTHTTP:{"User-Agent":"…","Referer":"…"} (TiviMate/OTT).
+                if (std.mem.startsWith(u8, line, "#EXTHTTP:")) {
+                    const obj = line["#EXTHTTP:".len..];
+                    const hua = jsonHeader(obj, "user-agent");
+                    if (hua.len > 0 and hua.len <= pending_ua.len) {
+                        @memcpy(pending_ua[0..hua.len], hua);
+                        pending_ua_len = hua.len;
+                    }
+                    var href = jsonHeader(obj, "referer");
+                    if (href.len == 0) href = jsonHeader(obj, "referrer");
+                    if (href.len > 0 and href.len <= pending_ref.len) {
+                        @memcpy(pending_ref[0..href.len], href);
+                        pending_ref_len = href.len;
+                    }
                 }
             }
             continue; // other directives (#EXTGRP, #KODIPROP…)
@@ -148,6 +204,8 @@ pub fn parseM3u(text: []const u8, out: []p.IptvChannel, nsfw_allowed: bool, quer
         @memcpy(c.user_agent[0..c.user_agent_len], pending_ua[0..c.user_agent_len]);
         c.referrer_len = @min(pending_ref_len, c.referrer.len);
         @memcpy(c.referrer[0..c.referrer_len], pending_ref[0..c.referrer_len]);
+        c.chan_id_len = @min(pending_id_len, c.chan_id.len);
+        @memcpy(c.chan_id[0..c.chan_id_len], pending_id[0..c.chan_id_len]);
         c.logo_len = @min(pending_logo_len, c.logo.len);
         @memcpy(c.logo[0..c.logo_len], pending_logo[0..c.logo_len]);
         c.category_len = @min(pending_cat_len, c.category.len);
@@ -274,6 +332,44 @@ test "regression: long FAST stream URLs are cut at a parameter boundary, never m
     const got = rows[0].url[0..rows[0].url_len];
     try std.testing.expect(got.len <= rows[0].url.len);
     try std.testing.expect(std.mem.endsWith(u8, got, "ads.caid=FoxNewsNow"));
+}
+
+test "tvg-id (or channel-id) is kept as the guide join key" {
+    const m3u =
+        "#EXTM3U url-tvg=\"https://epg.example/guide.xml.gz\"\n" ++
+        "#EXTINF:-1 tvg-id=\"BBCOne.uk\" group-title=\"News\",BBC One HD\nhttps://cdn/bbc1.m3u8\n" ++
+        "#EXTINF:-1 channel-id=\"mjh-sky-hgtv\",HGTV\nhttps://cdn/hgtv.m3u8\n" ++
+        "#EXTINF:-1,No Id\nhttps://cdn/none.m3u8\n";
+    var rows: [3]p.IptvChannel = undefined;
+    try std.testing.expectEqual(@as(usize, 3), parseM3u(m3u, &rows, false, "", ""));
+    try std.testing.expectEqualStrings("BBCOne.uk", rows[0].chan_id[0..rows[0].chan_id_len]);
+    try std.testing.expectEqualStrings("mjh-sky-hgtv", rows[1].chan_id[0..rows[1].chan_id_len]);
+    try std.testing.expectEqual(@as(usize, 0), rows[2].chan_id_len);
+}
+
+test "per-channel request headers from EXTINF attrs and #EXTHTTP, scoped per entry" {
+    const m3u =
+        "#EXTM3U\n" ++
+        "#EXTINF:-1 http-referrer=\"https://site.example/\" http-user-agent=\"Kodi/20\",Attr\nhttps://cdn/a.m3u8\n" ++
+        "#EXTINF:-1 user-agent=\"OldUA\",Http\n" ++
+        "#EXTHTTP:{\"User-Agent\":\"TiviMate/4.7\", \"Referer\":\"https://ott.example/\"}\n" ++
+        "https://cdn/b.m3u8\n" ++
+        "#EXTINF:-1,Bad\n" ++
+        "#EXTHTTP:{\"user-agent\":\"evil\\r\\nX: y\"}\n" ++
+        "https://cdn/c.m3u8\n" ++
+        "#EXTINF:-1,Plain\nhttps://cdn/d.m3u8\n";
+    var rows: [4]p.IptvChannel = undefined;
+    try std.testing.expectEqual(@as(usize, 4), parseM3u(m3u, &rows, false, "", ""));
+    try std.testing.expectEqualStrings("Kodi/20", rows[0].user_agent[0..rows[0].user_agent_len]);
+    try std.testing.expectEqualStrings("https://site.example/", rows[0].referrer[0..rows[0].referrer_len]);
+    // #EXTHTTP overrides the line's attribute.
+    try std.testing.expectEqualStrings("TiviMate/4.7", rows[1].user_agent[0..rows[1].user_agent_len]);
+    try std.testing.expectEqualStrings("https://ott.example/", rows[1].referrer[0..rows[1].referrer_len]);
+    // An escaped/control-laden value is refused, not passed on as a header.
+    try std.testing.expectEqual(@as(usize, 0), rows[2].user_agent_len);
+    // Hints never leak into the next entry.
+    try std.testing.expectEqual(@as(usize, 0), rows[3].user_agent_len);
+    try std.testing.expectEqual(@as(usize, 0), rows[3].referrer_len);
 }
 
 test "EXTVLCOPT play hints attach to their own channel only" {

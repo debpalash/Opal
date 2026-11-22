@@ -3200,6 +3200,17 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_iptv_playlist_pure).step);
 
+    // Live TV programme guide: XMLTV parsing, +HHMM/DST time maths, channel
+    // matching, now/next, programme search, stale verdict, bounded gunzip.
+    const test_epg_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/epg_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_epg_pure).step);
+
     const test_library_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/library_pure.zig"),

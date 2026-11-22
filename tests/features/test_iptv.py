@@ -322,3 +322,119 @@ def test_iptv_custom_source_crud():
     if missing:
         return "fail", "custom IPTV lifecycle incomplete: " + ", ".join(missing)
     return "pass", "up to eight custom playlists persist and can be added, edited, classified, refreshed, and removed independently"
+
+
+@test("Live TV programme guide (XMLTV): import, match, now/next, search", "Video")
+def test_iptv_programme_guide():
+    """Opt-in XMLTV guide matched to playlist channels (tvg-id, then a
+    normalised name, with user overrides), now/next + programme search,
+    DST-safe time maths, stale/expired flagging, bounded memory, and the same
+    surface on the native Live TV view, the remote API and the web UI."""
+    pure = _src("src/services/epg_pure.zig")
+    svc = _src("src/services/epg.zig")
+    ui = _src("src/ui/live_tv_guide.zig")
+    iptv = _src("src/services/iptv.zig")
+    api = _src("src/services/remote_livetv_guide_api.zig")
+    remote = _remote_api()
+    access = _src("src/services/access_pure.zig")
+    dbz = _src("src/core/db.zig")
+    build = _src("build.zig")
+    playlist = _src("src/services/iptv_playlist_pure.zig")
+    cat = _src("src/services/iptv_catalog.zig")
+    cpure = _src("src/services/iptv_catalog_pure.zig")
+    store = _src("src/services/iptv_store.zig")
+    fwd = _src("src/services/forwarded_open.zig")
+    web = _web_app()
+    main = _src("src/main.zig")
+
+    checks = {
+        # Pure module: registered, tested, and covers the brief's edge cases.
+        "pure registered": 'b.path("src/services/epg_pure.zig")' in build and "test_epg_pure" in build,
+        "pure time maths": "pub fn parseXmltvTime" in pure and "pub fn daysFromCivil" in pure,
+        "DST fixture tests": pure.count('test "DST:') >= 3,
+        "malformed + huge guide tests": 'test "malformed guide' in pure and 'test "huge guide' in pure,
+        "gzip bomb bounded": "pub fn gunzipBounded" in pure and ".limited(cap)" in pure and "StreamTooLong" in pure,
+        "bounded records": all(k in pure for k in ("MAX_PROGRAMMES", "MAX_CHANNELS", "MAX_XML_BYTES", "MAX_FETCH_BYTES")),
+        "matching order": "pub fn matchChannel" in pure and all(k in pure for k in (".mapped", ".tvg_id", ".id_stem", ".name")),
+        "stale verdict": "pub fn freshness" in pure and "expired" in pure and "STALE_COVERAGE_S" in pure,
+        "source redaction": "pub fn redactSource" in pure and "password=hunter2" in pure,
+        # Service routes through the pure functions (tested logic == shipped).
+        "service uses pure": all(f"pure.{fn}(" in svc for fn in (
+            "classifySource", "gunzipBounded", "looksLikeXmltv", "parse", "sortProgrammes",
+            "matchChannel", "channelRange", "nowNext", "searchProgrammes", "freshness", "channelKey")),
+        "opt-in: no source, no fetch": "!isEnabled()" in svc and "pub fn importSource" in svc,
+        "fetch is capped + rate-limited": "pure.MAX_FETCH_BYTES" in svc and 'rate_limit.acquire("epg"' in svc,
+        "per-instant local offset (DST)": "pub fn localOffsetAt" in svc and "'localtime'" in svc,
+        "freed at shutdown": '@import("services/epg.zig").deinit()' in main,
+        # Schema: opt-in source + user mappings; guide join key in the catalog.
+        "epg tables": "CREATE TABLE IF NOT EXISTS iptv_epg_map" in dbz and "CREATE TABLE IF NOT EXISTS iptv_epg_meta" in dbz,
+        "catalog keeps tvg-id": "chan_id" in cpure and "?14" in cat and "chan_id" in store,
+        "playlist tvg-id parsed": 'attr(line, "tvg-id"' in playlist,
+        # Per-channel request headers honoured from every play path.
+        "EXTINF/EXTHTTP headers": "#EXTHTTP:" in playlist and '"http-referrer"' in playlist,
+        "remote play re-reads catalog": "findByUrl(url)" in api and "pushLiveTv(" in api
+            and "findByUrl(url)" in fwd and "playRecord(row)" in fwd,
+        "native play keeps headers": "pub fn playRecord" in iptv and "loadContentDirectMetaHeaders(" in iptv,
+        # Dead streams surfaced, not silently played.
+        "dead stream feedback": "channel is offline" in api and '\\"health\\":\\"{s}\\"' in remote and "tv-dead" in web,
+        # Native Live TV view (not settings.zig).
+        "native Guide view": "GUIDE_VIEW" in iptv and 'live_tv_guide.zig").render' in _src("src/ui/drawer.zig") and "guide_view" in iptv and "epg.tick()" in ui,
+        "native now on cards": 'epg.zig").nowNextFor(ch' in iptv,
+        "native mapping editor": "epg.setMapping(" in ui and "epg.guideChannels(" in ui and "epg.removeMappingKey(" in ui,
+        "native stale banner": "st.freshness.label()" in ui,
+        "themed helpers only": "dvui.button(" not in ui and "components.actionButton(" in ui
+            and "components.confirmDangerButton(" in ui,
+        "settings.zig untouched by guide": "epg" not in _src("src/ui/settings.zig"),
+        # Remote API.
+        "api registered": 'remote_livetv_guide_api.zig").handle(' in remote,
+        "api routes": all(r in api for r in ('"/livetv/guide"', '"/livetv/guide/import"', '"/livetv/programmes"',
+                                             '"/livetv/map"', '"/livetv/favorite"', '"/livetv/play"')),
+        "import is host-admin": '"/livetv/guide/import"' in access and "programme guide import is host-admin" in access,
+        "livetv rows carry now/next": "writeNowNext(&w, epg.nowNextFor(&ch, now))" in remote and "view=favorites" in remote,
+        # Web UI.
+        "web guide panel": all(m in web for m in ('id="tv-guide"', "'/livetv/guide/import'", "'/livetv/map'",
+                                                  "/livetv/programmes?q=")),
+        "web now/next + favorites": "function tvNowNextHtml(" in web and "'/livetv/favorite'" in web
+            and 'data-tv-view="favorites"' in web,
+        "web plays through catalog": "'/livetv/play'" in web,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "programme guide incomplete: " + ", ".join(missing)
+    return "pass", f"XMLTV guide: {len(checks)} checks (pure DST/huge/malformed tests, opt-in import, mapping, now/next, search, API + web + native)"
+
+
+@test("Live TV guide fixtures: generated XMLTV parses with DST offsets", "Video")
+def test_iptv_guide_fixture_shape():
+    """Generate an XMLTV fixture with a London DST fallback programme and a
+    gzip copy, and check that what the Zig tests pin (2h real duration, the
+    gzip header) matches what Python's own XMLTV-style maths and gzip produce,
+    so the embedded fixtures stay representative of real provider output."""
+    import gzip, re, datetime
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n<tv>'
+        '<channel id="BBCOne.uk"><display-name>BBC One HD</display-name></channel>'
+        '<programme start="20261025003000 +0100" stop="20261025013000 +0000" channel="BBCOne.uk">'
+        '<title>Straddle</title></programme></tv>'
+    )
+
+    def parse(stamp):
+        m = re.match(r"(\d{14}) ([+-])(\d{2})(\d{2})", stamp)
+        base = datetime.datetime.strptime(m.group(1), "%Y%m%d%H%M%S").replace(tzinfo=datetime.timezone.utc)
+        off = (int(m.group(3)) * 3600 + int(m.group(4)) * 60) * (1 if m.group(2) == "+" else -1)
+        return base.timestamp() - off
+
+    start, stop = re.findall(r'start="([^"]+)" stop="([^"]+)"', xml)[0]
+    gz = gzip.compress(b'<tv><channel id="a"><display-name>A</display-name></channel></tv>', mtime=0)
+    pure = _src("src/services/epg_pure.zig")
+    gz_literal = "".join("\\x%02x" % b for b in gz)
+    checks = {
+        "fallback show lasts two real hours": parse(stop) - parse(start) == 7200,
+        "zig test pins the same instant pair": '"20261025003000 +0100"' in pure and '"20261025013000 +0000"' in pure,
+        "gzip magic recognised": gz[:2] == b"\x1f\x8b" and "pub fn isGzip" in pure,
+        "zig gzip fixture is python's gzip output": gz_literal in pure,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "guide fixtures drifted: " + ", ".join(missing)
+    return "pass", "generated XMLTV/DST and gzip fixtures agree with the Zig tests"

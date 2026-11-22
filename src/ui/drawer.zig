@@ -421,6 +421,9 @@ pub fn renderDrawer() void {
 pub fn renderTabContent(tab: state.DrawerTab) void {
     // Kid profiles: Settings / sources / AI setup / logs are locked.
     if (@import("profiles_ui.zig").blocksTab(tab)) return;
+    // The Live TV programme-guide view is UI code in src/ui; services may not
+    // import new UI modules, so the tab gets it injected here.
+    if (tab == .Iptv) @import("../services/iptv.zig").guide_view = @import("live_tv_guide.zig").render;
     switch (tab) {
         .Search => search.renderSearchContent(),
         .Downloads => transfers.renderTransfersContent(renderAboveTransfers),

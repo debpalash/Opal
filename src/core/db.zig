@@ -900,6 +900,30 @@ fn createTables() void {
         if (stmt != null and step(stmt) != c.SQLITE_ROW)
             exec("ALTER TABLE iptv_catalog ADD COLUMN quality_tier INTEGER DEFAULT 0");
     }
+    // chan_id (playlist tvg-id / iptv-org channel id) is the programme-guide
+    // join key (services/epg.zig). Older catalogs read '' until the next 24h
+    // re-ingest; until then the guide matches those rows by normalised name.
+    addColumnIfMissing("iptv_catalog", "chan_id", "ALTER TABLE iptv_catalog ADD COLUMN chan_id TEXT DEFAULT ''");
+    addColumnIfMissing("iptv_channels", "chan_id", "ALTER TABLE iptv_channels ADD COLUMN chan_id TEXT DEFAULT ''");
+    // Remote play/favourite resolve a channel by stream URL.
+    exec("CREATE INDEX IF NOT EXISTS idx_iptv_catalog_hash ON iptv_catalog(url_hash)");
+    // Live TV programme guide (opt-in XMLTV). The guide itself is a disposable
+    // cache file; these hold the user's choices: the source (meta 'source') and
+    // per-channel overrides keyed by epg_pure.channelKey ("id:…" / "name:…").
+    exec(
+        \\CREATE TABLE IF NOT EXISTS iptv_epg_meta (
+        \\  key TEXT PRIMARY KEY,
+        \\  value TEXT
+        \\)
+    );
+    exec(
+        \\CREATE TABLE IF NOT EXISTS iptv_epg_map (
+        \\  chan_key TEXT PRIMARY KEY,
+        \\  guide_id TEXT NOT NULL,
+        \\  label TEXT,
+        \\  ts INTEGER DEFAULT (strftime('%s','now'))
+        \\)
+    );
     // name_lc drives the search LIKE (lowercased at ingest so the query need not
     // call lower() per row); country/category drive the drill-in facets.
     exec("CREATE INDEX IF NOT EXISTS idx_iptv_catalog_name ON iptv_catalog(name_lc)");
@@ -1031,6 +1055,17 @@ fn bindSyncIdentity() void {
 
 /// True when `name` is an existing table. Used by the one-shot schema fixups in
 /// createTables so a pragma probe isn't run against a table that doesn't exist.
+/// Run `alter` only when `table` exists and lacks `column` (ADD COLUMN would
+/// otherwise fail on every startup).
+fn addColumnIfMissing(table: []const u8, column: []const u8, alter: [*:0]const u8) void {
+    if (!tableExists(table)) return;
+    const stmt = prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name=?2") orelse return;
+    defer finalize(stmt);
+    bindText(stmt, 1, table);
+    bindText(stmt, 2, column);
+    if (step(stmt) != c.SQLITE_ROW) exec(alter);
+}
+
 pub fn tableExists(name: []const u8) bool {
     const stmt = prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1") orelse return false;
     defer finalize(stmt);

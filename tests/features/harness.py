@@ -276,6 +276,7 @@ def _remote_api():
         "remote_custom_sources_api.zig",
         "remote_books_api.zig",
         "remote_details_api.zig",
+        "remote_livetv_guide_api.zig",
     )
     return "\n".join(_src(f"src/services/{name}") for name in names)
 
