@@ -2924,6 +2924,10 @@ fn buildSupported(b: *std.Build) void {
         "src/services/marker_match_pure.zig",
         "src/services/markers_pure.zig",
         "src/services/skip_policy_pure.zig",
+        // Perceptual duplicate hashing + automatic chapters (ROADMAP 7.2);
+        // phash.zig and auto_chapters.zig route through these.
+        "src/services/phash_pure.zig",
+        "src/services/auto_chapters_pure.zig",
     }) |perception_src| {
         const t = addBoundTest(b, .{
             .root_module = b.createModule(.{

@@ -213,6 +213,11 @@ pub fn render() void {
     })) duplicates_only = !duplicates_only;
     if (@import("builtin").is_test) test_rows[2] = controls.data().borderRectScale().r;
     controls.deinit();
+    if (duplicates_only and @import("../services/phash.zig").hashing.load(.acquire))
+        _ = dvui.labelNoFmt(@src(), "Comparing videos for visual duplicates…", .{}, .{
+            .expand = .horizontal,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
+        });
 
     var items: [library.MAX_RESULTS]library.Item = undefined;
     const query = std.mem.sliceTo(&query_buf, 0);
@@ -234,7 +239,7 @@ pub fn render() void {
         var meta_buf: [80]u8 = undefined;
         const meta = std.fmt.bufPrint(&meta_buf, "{d} MB{s}", .{
             item.size / (1024 * 1024),
-            if (item.duplicate_count > 1) " · likely duplicate" else "",
+            layout.duplicateLabel(item.duplicate_count, item.visual_count),
         }) catch "";
         _ = dvui.labelNoFmt(@src(), meta, .{}, .{ .id_extra = index, .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary) });
         if (dvui.button(@src(), "Edit", .{}, .{ .id_extra = index, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated) })) {

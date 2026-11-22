@@ -19,6 +19,9 @@ pub const Item = struct {
     kind_len: usize = 0,
     size: u64 = 0,
     duplicate_count: u16 = 1,
+    /// Files perceptually matching this one (re-encodes, other resolutions),
+    /// itself included; 0 when it has no visual match. See phash.zig.
+    visual_count: u16 = 0,
 };
 
 pub const Root = struct {
@@ -31,7 +34,7 @@ var data_revision = std.atomic.Value(u64).init(1);
 pub fn revision() u64 {
     return data_revision.load(.acquire);
 }
-fn changed() void {
+pub fn changed() void {
     _ = data_revision.fetchAdd(1, .acq_rel);
     state.wakeUi();
 }
@@ -280,6 +283,12 @@ pub fn search(query_raw: []const u8, duplicates_only: bool, out: []Item) usize {
     return searchPage(query_raw, duplicates_only, 0, out).count;
 }
 
+/// Size of this row's perceptual group (0 when ungrouped).
+const visual_count_sql = "(SELECT COUNT(*) FROM media_phash g WHERE g.group_id>0 AND " ++
+    "g.group_id=(SELECT h.group_id FROM media_phash h WHERE h.path=local_media.path)) ";
+const duplicate_where_sql = "((fingerprint<>'' AND fingerprint IN (SELECT fingerprint FROM local_media WHERE fingerprint<>'' " ++
+    "GROUP BY fingerprint HAVING COUNT(*)>1)) OR path IN (SELECT path FROM media_phash WHERE group_id>0)) ";
+
 pub const SearchPage = struct { count: usize = 0, total: usize = 0, failed: bool = false };
 pub fn searchPage(query_raw: []const u8, duplicates_only: bool, offset: usize, out: []Item) SearchPage {
     const query = std.mem.trim(u8, query_raw, " \t\r\n");
@@ -291,14 +300,16 @@ pub fn searchPage(query_raw: []const u8, duplicates_only: bool, offset: usize, o
         // list already computes, so every candidate row paid for it twice. The
         // fingerprint index turns each lookup from a full-table scan into a
         // B-tree probe.
+        // Exact (sampled-bytes fingerprint) and perceptual (media_phash group)
+        // duplicates both qualify; visual groups sort together.
         "SELECT rowid,path,COALESCE(NULLIF(display_title,''),title),media_kind,size," ++
-            "(SELECT COUNT(*) FROM local_media d WHERE d.fingerprint=local_media.fingerprint) " ++
-            "FROM local_media WHERE fingerprint<>'' " ++
-            "AND fingerprint IN (SELECT fingerprint FROM local_media WHERE fingerprint<>'' GROUP BY fingerprint HAVING COUNT(*)>1) " ++
-            "AND (title LIKE ?1 COLLATE NOCASE OR display_title LIKE ?1 COLLATE NOCASE) ORDER BY fingerprint,mtime DESC,rowid DESC LIMIT ?2 OFFSET ?3"
+            "(SELECT COUNT(*) FROM local_media d WHERE d.fingerprint=local_media.fingerprint)," ++ visual_count_sql ++
+            "FROM local_media WHERE " ++ duplicate_where_sql ++
+            "AND (title LIKE ?1 COLLATE NOCASE OR display_title LIKE ?1 COLLATE NOCASE) " ++
+            "ORDER BY COALESCE((SELECT h.group_id FROM media_phash h WHERE h.path=local_media.path),0),fingerprint,mtime DESC,rowid DESC LIMIT ?2 OFFSET ?3"
     else
         "SELECT rowid,path,COALESCE(NULLIF(display_title,''),title),media_kind,size," ++
-            "(SELECT COUNT(*) FROM local_media d WHERE d.fingerprint=local_media.fingerprint AND d.fingerprint<>'') " ++
+            "(SELECT COUNT(*) FROM local_media d WHERE d.fingerprint=local_media.fingerprint AND d.fingerprint<>'')," ++ visual_count_sql ++
             "FROM local_media WHERE title LIKE ?1 COLLATE NOCASE OR display_title LIKE ?1 COLLATE NOCASE " ++
             "ORDER BY mtime DESC,rowid DESC LIMIT ?2 OFFSET ?3") orelse return .{ .failed = true };
     defer db.finalize(stmt);
@@ -317,10 +328,13 @@ pub fn searchPage(query_raw: []const u8, duplicates_only: bool, offset: usize, o
         db.copyColumn(stmt, 3, &out[count].kind, &out[count].kind_len);
         out[count].size = @intCast(@max(db.columnInt64(stmt, 4), 0));
         out[count].duplicate_count = @intCast(@min(@max(db.columnInt64(stmt, 5), 1), std.math.maxInt(u16)));
+        out[count].visual_count = @intCast(@min(@max(db.columnInt64(stmt, 6), 0), std.math.maxInt(u16)));
     }
     if (!indexed_once.load(.acquire)) scanAsync();
+    // Asking for duplicates is the opt-in for signing videos perceptually.
+    if (duplicates_only) @import("phash.zig").ensureAsync();
     const total_stmt = db.prepare(if (duplicates_only)
-        "SELECT COUNT(*) FROM local_media WHERE fingerprint<>'' AND fingerprint IN (SELECT fingerprint FROM local_media WHERE fingerprint<>'' GROUP BY fingerprint HAVING COUNT(*)>1) AND (title LIKE ?1 COLLATE NOCASE OR display_title LIKE ?1 COLLATE NOCASE)"
+        "SELECT COUNT(*) FROM local_media WHERE " ++ duplicate_where_sql ++ "AND (title LIKE ?1 COLLATE NOCASE OR display_title LIKE ?1 COLLATE NOCASE)"
     else
         "SELECT COUNT(*) FROM local_media WHERE title LIKE ?1 COLLATE NOCASE OR display_title LIKE ?1 COLLATE NOCASE") orelse return .{ .count = count, .failed = true };
     defer db.finalize(total_stmt);

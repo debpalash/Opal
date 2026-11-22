@@ -729,6 +729,40 @@ fn createTables() void {
         \\)
     );
 
+    // Perceptual duplicate detection (ROADMAP 7.2): SAMPLES 64-bit pHashes per
+    // local video (phash_pure.zig), keyed by path and validated by size+mtime
+    // like media_fingerprints. samples=0 marks a file that was examined but
+    // could not be hashed (audio, decode failure), so it is not retried until
+    // it changes. group_id is a shared non-zero id for files that match each
+    // other; distance is the best mean Hamming distance inside that group.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS media_phash (
+        \\  path TEXT PRIMARY KEY,
+        \\  size INTEGER NOT NULL,
+        \\  mtime INTEGER NOT NULL,
+        \\  duration REAL NOT NULL DEFAULT 0,
+        \\  samples INTEGER NOT NULL DEFAULT 0,
+        \\  flat_mask INTEGER NOT NULL DEFAULT 0,
+        \\  hashes BLOB,
+        \\  group_id INTEGER NOT NULL DEFAULT 0,
+        \\  distance REAL NOT NULL DEFAULT 0,
+        \\  updated_at INTEGER DEFAULT (strftime('%s','now'))
+        \\)
+    );
+    exec("CREATE INDEX IF NOT EXISTS idx_media_phash_group ON media_phash(group_id)");
+    // Automatic chapters (ROADMAP 7.2) for files without any: scene cuts merged
+    // with intro/credits markers, keyed like media_markers. An empty `chapters`
+    // text means "analysed, nothing worth adding". See auto_chapters.zig.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS media_auto_chapters (
+        \\  media_key TEXT NOT NULL,
+        \\  method TEXT NOT NULL DEFAULT '',
+        \\  chapters TEXT NOT NULL DEFAULT '',
+        \\  updated_at INTEGER DEFAULT (strftime('%s','now')),
+        \\  PRIMARY KEY(media_key, method)
+        \\)
+    );
+
     // Recall (ROADMAP 7.1) — semantic index over the library and inside media.
     // A derived, rebuildable cache: services/recall_index.zig fills it in the
     // background from library_items / local_media / tv_shows and subtitle

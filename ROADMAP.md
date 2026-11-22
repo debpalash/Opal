@@ -75,7 +75,7 @@
 ### 3.3 — Smart Media Intelligence
 - [ ] Auto-skip intro/outro detection (audio fingerprinting — future)
 - [ ] Content tagging: auto-detect genre, quality, language from content (ML — future)
-- [ ] Duplicate detection across library (perceptual hashing — future)
+- [x] Duplicate detection across library (perceptual hashing, see 7.2)
 - [ ] Smart collections: auto-group related media (depends on tagging)
 
 ---
@@ -215,7 +215,7 @@ Unchecked capabilities below are not claims of complete verification.
 ### 7.2 — Perception (media understanding)
 - [ ] Intro / credits detection for any series (cross-episode audio
       fingerprinting + chapter names) → Skip button or auto-skip
-- [ ] Duplicate detection (perceptual hashing) and auto chapters
+- [x] Duplicate detection (perceptual hashing) and auto chapters
 
 ### 7.3 — Household
 - [ ] Profiles with PIN and kids mode (maturity cap, NSFW forced off)

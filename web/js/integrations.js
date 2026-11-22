@@ -601,10 +601,11 @@ async function loadLocalLibrary(){
     const roots = data.roots || [];
     $('local-roots').innerHTML = roots.map(root => `<span>${esc(root.name)} <button type="button" data-root-remove="${root.id}" aria-label="Remove ${esc(root.name)}">Remove</button></span>`).join('');
     $('local-hint').textContent = data.scanning ? 'Refreshing the index in the background…' :
+      duplicates && data.visual_hashing ? 'Comparing videos for visual duplicates…' :
       `${items.length} of ${data.total ?? items.length} indexed files shown${duplicates ? ' with likely duplicates' : ''}.`;
     $('local-results').innerHTML = items.map((item, index) => `<div class="file local-media-row" data-i="${index}">
       <div class="n"><input class="local-title" value="${esc(item.title)}" maxlength="255" aria-label="Corrected title">
-        <div class="file-meta"><span>${fmtSize(item.size)}</span>${item.copies > 1 ? `<span>${item.copies} likely duplicates</span>` : ''}</div></div>
+        <div class="file-meta"><span>${fmtSize(item.size)}</span>${item.copies > 1 ? `<span>${item.copies} likely duplicates</span>` : item.visual_copies > 1 ? `<span>${item.visual_copies} visual matches</span>` : ''}</div></div>
       <select class="local-kind" aria-label="Media type">
         ${[['','Automatic'],['movie','Movie'],['tv','TV episode'],['music','Music'],['audiobook','Audiobook'],['other','Other']]
           .map(([value,label]) => `<option value="${value}"${item.kind === value ? ' selected' : ''}>${label}</option>`).join('')}
@@ -621,7 +622,8 @@ async function loadLocalLibrary(){
     }
 
     localLibraryLoaded = true;
-    if (data.scanning && $('page-watch').classList.contains('on')) localLibraryTimer = setTimeout(loadLocalLibrary, 800);
+    if ((data.scanning || (duplicates && data.visual_hashing)) && $('page-watch').classList.contains('on'))
+      localLibraryTimer = setTimeout(loadLocalLibrary, data.scanning ? 800 : 2000);
   } catch { if (generation === localLibraryGeneration) $('local-hint').textContent = 'Local library index unavailable. Existing items remain available.'; }
 }
 $('local-query').addEventListener('input', () => {
