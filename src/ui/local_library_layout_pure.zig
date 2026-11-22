@@ -13,6 +13,21 @@ pub fn emptyHint(query_length: usize, duplicates_only: bool, roots: usize) []con
     return "No files indexed yet. Scan your media folders to refresh.";
 }
 
+/// Row suffix: byte-identical copies first, then perceptual (re-encode /
+/// other resolution) matches from media_phash.
+pub fn duplicateLabel(exact_copies: u16, visual_copies: u16) []const u8 {
+    if (exact_copies > 1) return " · likely duplicate";
+    if (visual_copies > 1) return " · visual match";
+    return "";
+}
+
+test "Local library rows name exact and visual duplicates" {
+    try std.testing.expectEqualStrings("", duplicateLabel(1, 0));
+    try std.testing.expectEqualStrings(" · likely duplicate", duplicateLabel(2, 3));
+    try std.testing.expectEqualStrings(" · visual match", duplicateLabel(1, 2));
+    try std.testing.expectEqualStrings("", duplicateLabel(1, 1));
+}
+
 test "Local library folder and editor controls stack in compact windows" {
     try std.testing.expect(stackFormControls(584)); // 640px shell minus panel padding.
     try std.testing.expect(stackFormControls(619));

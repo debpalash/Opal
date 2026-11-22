@@ -2,10 +2,56 @@
 const std = @import("std");
 const wire = @import("remote_http.zig");
 const library = @import("local_library.zig");
+const phash = @import("phash.zig");
+
+/// GET /local-library/visual-duplicates — perceptual duplicate groups
+/// (re-encodes, other resolutions). Starts signing unsigned videos, so the
+/// first call may return `hashing:true` with partial groups.
+fn visualDuplicates(stream: std.Io.net.Stream, query: []const u8) void {
+    const offset = std.fmt.parseInt(usize, wire.queryParam(query, "offset") orelse "0", 10) catch {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid offset\"}");
+        return;
+    };
+    const limit = std.fmt.parseInt(usize, wire.queryParam(query, "limit") orelse "64", 10) catch 0;
+    if (limit == 0 or limit > library.MAX_RESULTS) {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"limit out of range\"}");
+        return;
+    }
+    phash.ensureAsync();
+    const alloc = @import("../core/alloc.zig").allocator;
+    const rows = alloc.alloc(phash.GroupItem, limit) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(rows);
+    const n = phash.listGroups(offset, rows);
+    const st = phash.status();
+    const json = alloc.alloc(u8, 128 * 1024) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(json);
+    var w = std.Io.Writer.fixed(json);
+    w.print("{{\"hashing\":{s},\"hashed\":{d},\"pending\":{d},\"signed\":{d},\"grouped\":{d},\"offset\":{d},\"returned\":{d},\"items\":[", .{
+        if (st.hashing) "true" else "false", st.hashed, st.pending, st.signed, st.grouped, offset, n,
+    }) catch return;
+    for (rows[0..n], 0..) |*row, i| {
+        if (i > 0) w.writeAll(",") catch return;
+        w.print("{{\"group\":{d},\"id\":{d},\"title\":\"", .{ row.group, row.id }) catch return;
+        wire.writeJsonString(&w, row.title[0..row.title_len]);
+        w.print("\",\"size\":{d},\"duration\":{d:.2},\"distance\":{d:.2}}}", .{ row.size, row.duration, row.distance }) catch return;
+    }
+    w.writeAll("]}") catch return;
+    wire.sendJson(stream, json[0..w.end]);
+}
 
 pub fn handle(stream: std.Io.net.Stream, method: []const u8, path: []const u8, query: []const u8, body: []const u8) bool {
     if (std.mem.eql(u8, path, "/local-library")) {
         if (wire.requireMethod(stream, method, "GET")) list(stream, query);
+        return true;
+    }
+    if (std.mem.eql(u8, path, "/local-library/visual-duplicates")) {
+        if (wire.requireMethod(stream, method, "GET")) visualDuplicates(stream, query);
         return true;
     }
     if (std.mem.eql(u8, path, "/local-library/action")) {
@@ -52,14 +98,14 @@ fn list(stream: std.Io.net.Stream, query: []const u8) void {
     };
     defer alloc.free(json);
     var w = std.Io.Writer.fixed(json);
-    w.print("{{\"scanning\":{s},\"total\":{d},\"offset\":{d},\"limit\":{d},\"returned\":{d},\"has_more\":{s},\"items\":[", .{ if (library.scanning.load(.acquire)) "true" else "false", page.total, offset, limit, page.count, if (offset + page.count < page.total) "true" else "false" }) catch return;
+    w.print("{{\"visual_hashing\":{s},\"scanning\":{s},\"total\":{d},\"offset\":{d},\"limit\":{d},\"returned\":{d},\"has_more\":{s},\"items\":[", .{ if (phash.hashing.load(.acquire)) "true" else "false", if (library.scanning.load(.acquire)) "true" else "false", page.total, offset, limit, page.count, if (offset + page.count < page.total) "true" else "false" }) catch return;
     for (rows[0..page.count], 0..) |*row, index| {
         if (index > 0) w.writeAll(",") catch return;
         w.print("{{\"id\":{d},\"title\":\"", .{row.id}) catch return;
         wire.writeJsonString(&w, row.title[0..row.title_len]);
         w.writeAll("\",\"kind\":\"") catch return;
         wire.writeJsonString(&w, row.kind[0..row.kind_len]);
-        w.print("\",\"size\":{d},\"copies\":{d}}}", .{ row.size, row.duplicate_count }) catch return;
+        w.print("\",\"size\":{d},\"copies\":{d},\"visual_copies\":{d}}}", .{ row.size, row.duplicate_count, row.visual_count }) catch return;
     }
     w.writeAll("],\"roots\":[") catch return;
     var roots: [library.MAX_ROOTS]library.Root = undefined;
@@ -83,6 +129,11 @@ fn action(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {
     const name = wire.queryParam(body, "action") orelse wire.queryParam(query, "action") orelse "";
     if (std.mem.eql(u8, name, "scan")) {
         library.scanAsync();
+        wire.sendJson(stream, "{\"ok\":true}");
+        return;
+    }
+    if (std.mem.eql(u8, name, "visual-scan")) {
+        phash.ensureAsync();
         wire.sendJson(stream, "{\"ok\":true}");
         return;
     }

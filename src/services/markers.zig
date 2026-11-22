@@ -50,11 +50,17 @@ const EXTRACT_TIMEOUT_MS: i64 = 180_000;
 /// Called from the mpv event pump on MPV_EVENT_FILE_LOADED.
 pub fn onFileLoaded(p: anytype) void {
     const gen = skip_segments.reset(@intFromPtr(p));
-    if (policy.modeFromInt(state.app.skip_mode) == .off) return;
+    const skip_on = policy.modeFromInt(state.app.skip_mode) != .off;
 
     var duration: f64 = 0;
     _ = c.mpv.mpv_get_property(p.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &duration);
-    publishChapters(p, gen, duration);
+    if (skip_on) publishChapters(p, gen, duration);
+    // Files that ship no chapters get automatic ones (auto_chapters.zig),
+    // independent of the skip mode.
+    var chapter_count: i64 = 0;
+    _ = c.mpv.mpv_get_property(p.mpv_ctx, "chapter-list/count", c.mpv.MPV_FORMAT_INT64, &chapter_count);
+    const want_chapters = chapter_count <= 0;
+    if (!skip_on and !want_chapters) return;
 
     const path_c = c.mpv.mpv_get_property_string(p.mpv_ctx, "path");
     if (path_c == null) return;
@@ -62,7 +68,13 @@ pub fn onFileLoaded(p: anytype) void {
     var path: []const u8 = std.mem.span(path_c);
     if (std.mem.startsWith(u8, path, "file://")) path = path["file://".len..];
     if (!isLocalAbsolute(path) or path.len > PATH_CAP) return;
-    Worker.submit(path, gen);
+    Worker.submit(path, .{
+        .gen = gen,
+        .owner = @intFromPtr(p),
+        .duration = duration,
+        .markers = skip_on,
+        .chapters = want_chapters and mp.isVideoName(path),
+    });
 }
 
 fn isLocalAbsolute(path: []const u8) bool {
@@ -111,7 +123,13 @@ const Job = struct {
     path: [PATH_CAP]u8 = undefined,
     len: usize = 0,
     gen: u64 = 0,
+    owner: usize = 0,
+    duration: f64 = 0,
+    markers: bool = true,
+    chapters: bool = false,
 };
+
+const JobOptions = struct { gen: u64, owner: usize, duration: f64, markers: bool, chapters: bool };
 
 const Worker = struct {
     var mutex: sync.Mutex = .{};
@@ -119,11 +137,15 @@ const Worker = struct {
     var pending: Job = .{}; // under mutex
     var has_pending: bool = false; // under mutex
 
-    fn submit(path: []const u8, gen: u64) void {
+    fn submit(path: []const u8, o: JobOptions) void {
         @This().mutex.lock();
         @This().pending.len = @min(path.len, PATH_CAP);
         @memcpy(@This().pending.path[0..@This().pending.len], path[0..@This().pending.len]);
-        @This().pending.gen = gen;
+        @This().pending.gen = o.gen;
+        @This().pending.owner = o.owner;
+        @This().pending.duration = o.duration;
+        @This().pending.markers = o.markers;
+        @This().pending.chapters = o.chapters;
         @This().has_pending = true;
         if (@This().busy) {
             @This().mutex.unlock();
@@ -153,7 +175,11 @@ const Worker = struct {
             job.* = @This().pending;
             @This().has_pending = false;
             @This().mutex.unlock();
-            process(job.path[0..job.len], job.gen);
+            const path = job.path[0..job.len];
+            var segs: [8]policy.Seg = undefined;
+            const ns = if (job.markers) process(path, job.gen, &segs) else storedMarkers(path, &segs);
+            if (job.chapters and !workers.isQuitting())
+                @import("auto_chapters.zig").run(path, job.gen, job.owner, job.duration, segs[0..ns]);
         } else @This().mutex.lock();
         @This().busy = false;
         @This().mutex.unlock();
@@ -227,24 +253,34 @@ fn joinPath(dir: []const u8, name: []const u8, buf: []u8) ?[]const u8 {
     return std.fmt.bufPrint(buf, "{s}{s}{s}", .{ dir, sep, name }) catch null;
 }
 
-fn process(path: []const u8, gen: u64) void {
-    const eps = alloc.alloc(Ep, MAX_EPS) catch return;
+/// Intro/credits stored for `path` without detecting anything new.
+fn storedMarkers(path: []const u8, out: *[8]policy.Seg) usize {
+    var ep: Ep = .{};
+    if (!statEp(path, &ep)) return 0;
+    var key_buf: [PATH_CAP + 64]u8 = undefined;
+    const key = mp.mediaKey(ep.pathSlice(), ep.size, ep.mtime, &key_buf);
+    return if (key.len == 0) 0 else loadMarkers(key, out);
+}
+
+/// Publish (and when needed detect) the target's markers; returns them in
+/// `out` so the auto-chapter pass can name intro/credits chapters.
+fn process(path: []const u8, gen: u64, out: *[8]policy.Seg) usize {
+    const eps = alloc.alloc(Ep, MAX_EPS) catch return 0;
     defer {
         for (eps) |*e| e.deinit();
         alloc.free(eps);
     }
     for (eps) |*e| e.* = .{};
-    if (!statEp(path, &eps[0])) return;
+    if (!statEp(path, &eps[0])) return 0;
 
     var key_buf: [PATH_CAP + 64]u8 = undefined;
     const key = mp.mediaKey(eps[0].pathSlice(), eps[0].size, eps[0].mtime, &key_buf);
-    if (key.len == 0) return;
+    if (key.len == 0) return 0;
 
-    var stored: [8]policy.Seg = undefined;
-    const n_stored = loadMarkers(key, &stored);
-    if (n_stored > 0) _ = skip_segments.publish(.fingerprint, gen, stored[0..n_stored]);
+    const n_stored = loadMarkers(key, out);
+    if (n_stored > 0) _ = skip_segments.publish(.fingerprint, gen, out[0..n_stored]);
 
-    const names = alloc.create(Names) catch return;
+    const names = alloc.create(Names) catch return n_stored;
     defer alloc.destroy(names);
     const dir = dirName(path);
     listDir(dir, names);
@@ -254,15 +290,15 @@ fn process(path: []const u8, gen: u64) void {
         var nb: [PATH_CAP]u8 = undefined;
         if (joinPath(dir, listed[ni], &nb)) |np| skip_segments.publishNextPath(gen, np);
     }
-    if (n_stored > 0) return;
+    if (n_stored > 0) return n_stored;
 
     var sib: [MAX_EPS - 1]usize = undefined;
     const n_sib = mp.selectSiblings(path, listed, &sib);
-    if (n_sib == 0) return;
+    if (n_sib == 0) return 0;
 
     var detected: [MAX_EPS]mm.Result = undefined;
-    const n_eps = fingerprintAndDetect(eps, path, dir, listed, sib[0..n_sib], &detected) orelse return;
-    if (workers.isQuitting()) return;
+    const n_eps = fingerprintAndDetect(eps, path, dir, listed, sib[0..n_sib], &detected) orelse return 0;
+    if (workers.isQuitting()) return 0;
 
     // Store markers for every processed episode; publish the target's.
     for (0..n_eps) |i| {
@@ -279,6 +315,8 @@ fn process(path: []const u8, gen: u64) void {
         if (detected[0].credits != null) "yes" else "no",
     }) catch "fingerprint done", false);
     if (ns > 0) _ = skip_segments.publish(.fingerprint, gen, segs[0..ns]);
+    @memcpy(out[0..ns], segs[0..ns]);
+    return ns;
 }
 
 /// Fingerprint target (eps[0], already stat'ed) + siblings, then detect.
@@ -351,7 +389,7 @@ fn ffprobePath(ffmpeg: []const u8, buf: []u8) []const u8 {
     return "ffprobe";
 }
 
-fn probeDuration(ffmpeg: []const u8, path: []const u8) f64 {
+pub fn probeDuration(ffmpeg: []const u8, path: []const u8) f64 {
     var pb: [256]u8 = undefined;
     const argv = [_][]const u8{ ffprobePath(ffmpeg, &pb), "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path };
     var out: [128]u8 = undefined;

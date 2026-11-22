@@ -93,6 +93,7 @@ from features import (  # noqa: F401
     test_anime_extractors,
     test_anime_sites,
     test_content_cache,
+    test_perception,
     test_browse_infinite_scroll,
     test_plex_restore,
     test_jellyfin_state,
