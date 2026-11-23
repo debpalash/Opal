@@ -44,13 +44,15 @@ def test_headless_pumps_seams():
     # RENDER path commits them. Headless has no render path, so the fetch
     # succeeded and the results never appeared. Each seam needs an explicit pump.
     checks = {
-        "comics load drained": "comics.zig\").drainPendingLoad();" in hl
+        # Via the shared player tick, which also drains deferred player close.
+        "comics load drained": "app_services.zig\").tickPlayers();" in hl
+            and "comics.zig\").drainPendingLoad();" in _src("src/app_services.zig").split("pub fn tickPlayers", 1)[1]
             and "pub fn drainPendingLoad()" in cm,
         "drama results drained": "drama.zig\").pumpPending();" in hl
             and "pub fn pumpPending()" in dr,
         # Every 100ms, not on the 2s bookkeeping tick — it's an atomic swap when
         # idle and a reader waiting on a comic page shouldn't eat 2s.
-        "pumped every poll, not the slow tick": hl.index("drainPendingLoad();") < hl.index("const now_ms = io.milliTimestamp();"),
+        "pumped every poll, not the slow tick": hl.index("tickPlayers();") < hl.index("const now_ms = io.milliTimestamp();"),
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:

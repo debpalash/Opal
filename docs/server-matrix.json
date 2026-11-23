@@ -1,0 +1,125 @@
+{
+  "schema": 1,
+  "subject": "Opal as an independent self-hosted server (headless build), not as a client of Jellyfin/Plex",
+  "statuses": {
+    "verified": "A cited test executes the shipped server behaviour against owned fixtures and passes.",
+    "fixture-only": "Only pure helpers, extracted SQL or source inspection exercise it; no end-to-end server test.",
+    "unverified": "No test exercises it, or the feature does not exist."
+  },
+  "suites": {
+    "ci": "Deterministic, owned fixtures, run by .github/workflows on every push.",
+    "opt-in": "Deterministic live headless test with owned fixtures; run by hand, not in CI.",
+    "real-provider": "Needs real libraries, providers or hardware; never part of CI."
+  },
+  "environments": {
+    "workstation": "Developer workstation or CI runner.",
+    "nas_class": "Small NAS-class host (low-core ARM/x86, spinning disk)."
+  },
+  "capabilities": [
+    {
+      "id": "library_imports",
+      "label": "Library imports",
+      "cells": {
+        "workstation": {
+          "status": "verified",
+          "evidence": [
+            {"test": "tests/test_local_library_live.py::LocalLibraryLiveTest::test_scan_pagination_corrections_and_deleted_last_page", "suite": "opt-in"},
+            {"test": "tests/features/test_library.py::Local library is indexed, correctable, and duplicate-aware", "suite": "ci"}
+          ],
+          "note": "Add-root, scan and rescan after deletion; the end-to-end test is not in CI."
+        },
+        "nas_class": {"status": "unverified", "evidence": [], "note": "No large-library or slow-disk scan measured."}
+      }
+    },
+    {
+      "id": "metadata_fixes",
+      "label": "Metadata fixes",
+      "cells": {
+        "workstation": {
+          "status": "verified",
+          "evidence": [
+            {"test": "tests/test_local_library_live.py::LocalLibraryLiveTest::test_scan_pagination_corrections_and_deleted_last_page", "suite": "opt-in"}
+          ],
+          "note": "Title/kind correction of the local index survives a rescan. No catalog re-match route exists."
+        },
+        "nas_class": {"status": "unverified", "evidence": [], "note": ""}
+      }
+    },
+    {
+      "id": "multiple_users",
+      "label": "Multiple users",
+      "cells": {
+        "workstation": {
+          "status": "verified",
+          "evidence": [
+            {"test": "tests/test_remote_privileges_live.py::RemotePrivilegeTests::test_regular_and_admin_sessions_cannot_approve_executables", "suite": "ci"}
+          ],
+          "note": "Admin creates a second account that logs in with its own session."
+        },
+        "nas_class": {"status": "unverified", "evidence": [], "note": ""}
+      }
+    },
+    {
+      "id": "permissions",
+      "label": "Permissions",
+      "cells": {
+        "workstation": {
+          "status": "verified",
+          "evidence": [
+            {"test": "tests/test_remote_privileges_live.py::RemotePrivilegeTests::test_regular_and_admin_sessions_cannot_approve_executables", "suite": "ci"},
+            {"test": "src/services/access_pure.zig::route privilege matrix protects host administration and executable trust", "suite": "ci"},
+            {"test": "tests/test_remote_resource_limits_live.py::RemoteResourceLimitsLiveTest::test_username_case_variants_share_lockout_and_retry_after", "suite": "ci"}
+          ],
+          "note": "Regular sessions get 403 on host administration; login lockout is shared across username case."
+        },
+        "nas_class": {"status": "unverified", "evidence": [], "note": ""}
+      }
+    },
+    {
+      "id": "backup_restore",
+      "label": "Backup/restore",
+      "cells": {
+        "workstation": {"status": "unverified", "evidence": [], "note": "No DB/config/profile backup feature exists; only a one-level cleared-history undo."},
+        "nas_class": {"status": "unverified", "evidence": [], "note": ""}
+      }
+    },
+    {
+      "id": "migrations",
+      "label": "Migrations",
+      "cells": {
+        "workstation": {
+          "status": "fixture-only",
+          "evidence": [
+            {"test": "tests/features/test_database.py::Exact resume: schema v4 + path and catalog identity", "suite": "ci"},
+            {"test": "src/services/tv_merge.zig::merge: a failing pair rolls back whole", "suite": "ci"}
+          ],
+          "note": "Shipped schema SQL runs on a synthetic legacy DB in sqlite; the binary never upgrades a real old profile in a test, and the zigzag-to-opal path migration is untested."
+        },
+        "nas_class": {"status": "unverified", "evidence": [], "note": ""}
+      }
+    },
+    {
+      "id": "transcode_limits",
+      "label": "Transcode limits",
+      "cells": {
+        "workstation": {
+          "status": "fixture-only",
+          "evidence": [
+            {"test": "src/services/stream_pure.zig::stopped streaming slot cannot be reused until creation and requests release it", "suite": "ci"},
+            {"test": "src/services/stream_pure.zig::stream helpers: ffprobe sibling, percent, idle", "suite": "ci"}
+          ],
+          "note": "Slot and idle helpers only. No test hits the two-session cap, the idle reap or the /transcode watchdog."
+        },
+        "nas_class": {"status": "unverified", "evidence": [], "note": "Encoder throughput on low-core hosts not measured."}
+      }
+    },
+    {
+      "id": "concurrent_streams",
+      "label": "Concurrent streams",
+      "cells": {
+        "workstation": {"status": "unverified", "evidence": [], "note": "Concurrent API connections are tested; several simultaneous media streams are not."},
+        "nas_class": {"status": "unverified", "evidence": [], "note": ""}
+      }
+    }
+  ]
+}

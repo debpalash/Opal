@@ -105,7 +105,10 @@ pub fn headlessMain() !void {
         // it, so the comics vertical answered {"ok":true} and did nothing.
         // Every 100ms rather than on the 2s tick: it is an atomic swap when
         // idle, and a reader waiting on a page shouldn't eat 2s of latency.
-        @import("services/comics.zig").drainPendingLoad();
+        // The shared player tick drains that comic load AND deferred player
+        // removal: without it `/api/player/action?action=close` answered ok
+        // and the player kept playing (caught by bench_reliability_live.py).
+        @import("app_services.zig").tickPlayers();
         // The remote /api/load handler can queue a magnet while libtorrent
         // initializes. Desktop frames drain that FIFO, but headless has no
         // frame: without this the transfer never exists and cannot be canceled.

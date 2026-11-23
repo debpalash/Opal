@@ -97,7 +97,9 @@ def test_comic_page_route():
         # The desktop drains from appFrame(); headless has no frame loop, so
         # without this the load/close routes answered {"ok":true} and the
         # pending flag was never acted on.
-        "headless drains the deferral": "drainPendingLoad()" in _src("src/headless.zig"),
+        # Headless reaches it through the shared player tick (app_services.zig).
+        "headless drains the deferral": 'app_services.zig").tickPlayers();' in _src("src/headless.zig")
+            and "drainPendingLoad();" in _src("src/app_services.zig").split("pub fn tickPlayers", 1)[1],
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:

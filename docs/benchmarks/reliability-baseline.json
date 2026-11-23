@@ -1,0 +1,143 @@
+{
+  "schema": 1,
+  "platform": "macOS-27.0.1-arm64-arm-64bit",
+  "binary": "Debug headless (-Dheadless=true), this branch",
+  "ambient_load_average": {
+    "before": [
+      5.18,
+      11.42,
+      32.63
+    ],
+    "after": [
+      19.2,
+      15.49,
+      31.39
+    ]
+  },
+  "config": {
+    "repetitions": 20,
+    "launches": 5,
+    "soak_cycles": 300,
+    "reader_pages": 12,
+    "nav_tabs": [
+      "home",
+      "history",
+      "queue",
+      "downloads",
+      "settings",
+      "plugins",
+      "status"
+    ]
+  },
+  "method": {
+    "network": "loopback fixtures; proxied external requests rejected and counted",
+    "launch": "first launch is a fresh profile, later launches reuse it; 100 ms health polling",
+    "poll_interval_ms": 5,
+    "search_cancel": "cancel POST until loading clears and the stalled provider socket closes",
+    "stream_start": "open until duration known and position advancing; not first visible frame",
+    "reader_page_advance": "next downloaded page bytes through /api/comics/page",
+    "close": "player close action until status reports no active player",
+    "cpu_ms": "process CPU time consumed during the phase",
+    "workers": "OS threads of the Opal process",
+    "subprocesses": "live descendant processes"
+  },
+  "latency_ms": {
+    "launch": {
+      "samples": 5,
+      "p50_ms": 210.762,
+      "p95_ms": 422.119
+    },
+    "navigate": {
+      "samples": 140,
+      "p50_ms": 1.065,
+      "p95_ms": 2.496
+    },
+    "search_cancel": {
+      "samples": 20,
+      "p50_ms": 11.167,
+      "p95_ms": 13.361
+    },
+    "stream_start": {
+      "samples": 20,
+      "p50_ms": 221.499,
+      "p95_ms": 257.341
+    },
+    "art_first": {
+      "samples": 20,
+      "p50_ms": 3.747,
+      "p95_ms": 10.91
+    },
+    "art_repeat": {
+      "samples": 20,
+      "p50_ms": 0.655,
+      "p95_ms": 4.684
+    },
+    "seek": {
+      "samples": 20,
+      "p50_ms": 102.513,
+      "p95_ms": 112.516
+    },
+    "close": {
+      "samples": 20,
+      "p50_ms": 128.016,
+      "p95_ms": 137.924
+    },
+    "reader_page_advance": {
+      "samples": 22,
+      "p50_ms": 0.557,
+      "p95_ms": 0.715
+    }
+  },
+  "resources": {
+    "ready": {
+      "cpu_ms": 120.0,
+      "rss_kib": 57264,
+      "workers": 12,
+      "subprocesses": 0
+    },
+    "after_navigate": {
+      "cpu_ms": 200.0,
+      "rss_kib": 60400,
+      "workers": 14,
+      "subprocesses": 0
+    },
+    "after_search": {
+      "cpu_ms": 990.0,
+      "rss_kib": 87136,
+      "workers": 30,
+      "subprocesses": 1
+    },
+    "after_stream": {
+      "cpu_ms": 4340.0,
+      "rss_kib": 86352,
+      "workers": 16,
+      "subprocesses": 0
+    },
+    "after_reader": {
+      "cpu_ms": 310.0,
+      "rss_kib": 84896,
+      "workers": 18,
+      "subprocesses": 0
+    },
+    "after_soak": {
+      "cpu_ms": 39140.0,
+      "rss_kib": 59984,
+      "workers": 15,
+      "subprocesses": 0
+    }
+  },
+  "soak": {
+    "cycles": 300,
+    "failed_cycles": 0,
+    "orphan_players": 0,
+    "orphan_subprocesses": 0,
+    "clean_exit": true
+  },
+  "rejected_external": {
+    "api.jikan.moe": 2,
+    "github.com": 5,
+    "graphql.anilist.co": 1,
+    "v3-cinemeta.strem.io": 184,
+    "www.jiosaavn.com": 20
+  }
+}

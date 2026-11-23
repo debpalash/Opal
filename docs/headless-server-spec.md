@@ -176,3 +176,26 @@ start in parallel; S0 is a same-day unblock, S1 is the architecture work.
 - **Server verticals unsmoked:** Plex, Audiobookshelf and OPDS routes are wired
   and answer correctly when unconfigured, but nothing has exercised them against
   a live server.
+
+## 10. Independent-server matrix
+
+What Opal can honestly claim as a self-hosted server (not as a Jellyfin/Plex
+client). [`server-matrix.json`](server-matrix.json) is the source of truth; each
+verified cell names the test that proves it and whether CI runs it (`ci`), it is a
+deterministic opt-in live test (`opt-in`), or it needs real providers/hardware
+(`real-provider`). `tests/test_server_matrix.py` fails if this table drifts from the
+JSON, a cited test is missing or mislabelled, or a doc claims server replacement
+while any workstation cell is short of verified.
+
+<!-- server-matrix:begin -->
+| Capability | Workstation | NAS-class |
+| --- | --- | --- |
+| Library imports | verified (ci, opt-in) | unverified |
+| Metadata fixes | verified (opt-in) | unverified |
+| Multiple users | verified (ci) | unverified |
+| Permissions | verified (ci) | unverified |
+| Backup/restore | unverified | unverified |
+| Migrations | fixture-only (ci) | unverified |
+| Transcode limits | fixture-only (ci) | unverified |
+| Concurrent streams | unverified | unverified |
+<!-- server-matrix:end -->
