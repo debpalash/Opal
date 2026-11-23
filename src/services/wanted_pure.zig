@@ -593,6 +593,36 @@ test "alternate titles lose year and episode markers" {
     try std.testing.expect(cleanAltTitle("   ") == null);
 }
 
+/// Short status label for a Wanted row's pill: "Waiting", "Not found · 6 tries",
+/// "Downloading", "Paused", "Done".
+pub fn statusText(buf: []u8, status: Status, attempts: u32) []const u8 {
+    return switch (status) {
+        .wanted => if (attempts == 0)
+            "Waiting"
+        else
+            std.fmt.bufPrint(buf, "Not found \u{00B7} {d} {s}", .{ attempts, if (attempts == 1) "try" else "tries" }) catch "Searching",
+        .downloading => "Downloading",
+        .paused => "Paused",
+        .fulfilled => "Done",
+    };
+}
+
+/// Finished rows fold into the collapsed "Done" group; everything else is active.
+pub fn isDone(status: Status) bool {
+    return status == .fulfilled;
+}
+
+/// Cut `text` to at most `max` bytes on a UTF-8 boundary, ending in "…" when cut.
+pub fn fitTitle(buf: []u8, text: []const u8, max: usize) []const u8 {
+    if (text.len <= max) return text;
+    var end = @min(max, buf.len -| 3);
+    while (end > 0 and (text[end] & 0xC0) == 0x80) end -= 1;
+    const trimmed = std.mem.trimEnd(u8, text[0..end], " ,:-");
+    @memcpy(buf[0..trimmed.len], trimmed);
+    @memcpy(buf[trimmed.len .. trimmed.len + 3], "\u{2026}");
+    return buf[0 .. trimmed.len + 3];
+}
+
 /// The secondary line under a wanted row that has operator-found alternate titles
 /// (`extra`: newline separated): "also searching: A, B +2". At most two titles are
 /// named, each cut to 36 bytes on a character boundary. Empty when there are none.
@@ -627,5 +657,22 @@ test "also-searching line names at most two titles then a count" {
     try std.testing.expectEqualStrings("also searching: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...", alsoSearchingText(&b, @import("opal-repeat").bytes("a", 50)));
     // A multibyte character is never cut in half.
     const cut = alsoSearchingText(&b, @import("opal-repeat").bytes("a", 35) ++ "\u{e9}\u{e9}");
+    try std.testing.expect(std.unicode.utf8ValidateSlice(cut));
+}
+
+test "wanted row labels are short and pluralised" {
+    var b: [48]u8 = undefined;
+    try std.testing.expectEqualStrings("Waiting", statusText(&b, .wanted, 0));
+    try std.testing.expectEqualStrings("Not found \u{00B7} 1 try", statusText(&b, .wanted, 1));
+    try std.testing.expectEqualStrings("Not found \u{00B7} 14 tries", statusText(&b, .wanted, 14));
+    try std.testing.expectEqualStrings("Done", statusText(&b, .fulfilled, 3));
+    try std.testing.expect(isDone(.fulfilled) and !isDone(.wanted) and !isDone(.downloading) and !isDone(.paused));
+}
+
+test "long titles end in an ellipsis on a word-safe UTF-8 boundary" {
+    var b: [96]u8 = undefined;
+    try std.testing.expectEqualStrings("Dune", fitTitle(&b, "Dune", 40));
+    try std.testing.expectEqualStrings("The Lord of the Rings: The Rings of\u{2026}", fitTitle(&b, "The Lord of the Rings: The Rings of Power", 36));
+    const cut = fitTitle(&b, "Sen to Chihiro no Kamikakushi \u{5343}\u{3068}\u{5343}\u{5C0B}", 33);
     try std.testing.expect(std.unicode.utf8ValidateSlice(cut));
 }

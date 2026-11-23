@@ -19,7 +19,7 @@ pub fn renderAIContentBody() void {
     {
         const vb = @import("../../services/voice_backend.zig");
         {
-            var choices = dvui.flexbox(@src(), .{}, .{ .expand = .horizontal });
+            var choices = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .expand = .horizontal });
             defer choices.deinit();
             for (vb.allKinds(), 0..) |kind, i| {
                 const name = switch (kind) {
@@ -76,13 +76,7 @@ pub fn renderAIContentBody() void {
                 });
                 components.pollRefresh(100_000);
             } else {
-                if (dvui.button(@src(), "Set up (~1.6GB)", .{}, .{
-                    .color_fill = @import("../color_compat.zig").wrap(theme.colors.accent),
-                    .color_text = @import("../color_compat.zig").wrap(theme.colors.text_on_accent),
-                    .border = dvui.Rect.all(0),
-                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-                    .corners = theme.dims.rad_md,
-                })) {
+                if (components.actionButton(@src(), "Set up (~1.6GB)", .primary, 4100)) {
                     deps.fetchMlxWhisperModelAsync();
                     state.showToast("Setting up MLX Whisper (venv + model)…");
                 }
@@ -203,14 +197,10 @@ pub fn renderAIContentBody() void {
     aiSectionWithIcon(icons.tvg.lucide.@"hard-drive", "Models & Dependencies", "Install, update, or remove AI models", 80, @src());
     // Opens the "Setup" checklist modal on demand. This used to auto-pop at
     // first run; it now lives here so it never nags at startup.
-    if (dvui.button(@src(), "Open setup checklist…", .{}, .{
-        .color_fill = @import("../color_compat.zig").wrap(theme.colors.bg_elevated),
-        .color_text = @import("../color_compat.zig").wrap(theme.colors.text_secondary),
-        .corners = theme.dims.rad_sm,
-        .padding = .{ .x = theme.spacing.md, .y = 7, .w = theme.spacing.md, .h = 7 },
-        .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
-    })) {
-        state.app.deps_modal_open = true;
+    {
+        var cl_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm } });
+        defer cl_row.deinit();
+        if (components.actionButton(@src(), "Open setup checklist…", .secondary, 4101)) state.app.deps_modal_open = true;
     }
     {
         const deps = @import("../../core/deps.zig");
@@ -236,46 +226,18 @@ pub fn renderAIContentBody() void {
             deps.fetchSherpaStreamAsync();
             state.showToast("Downloading Stream ASR (296 MB)");
         }
-        // MLX Whisper (~1.6GB) — custom row with live status
+        // MLX Whisper (~1.6GB): same card as every other model, with live status.
         {
             const mlx_installed = ds.mlx_whisper_model and ds.mlx_whisper_cli;
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = 5005,
-                .expand = .horizontal,
-                .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.sm },
-            });
-            defer row.deinit();
-
-            dvui.icon(@src(), "", icons.tvg.lucide.cpu, .{}, .{
-                .id_extra = 5015,
-                .color_text = @import("../color_compat.zig").wrap(if (mlx_installed) theme.colors.accent else mutedText()),
-                .gravity_y = 0.5,
-                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
-            });
-            _ = dvui.label(@src(), "MLX Whisper (1.6GB)", .{}, .{
-                .id_extra = 5025,
-                .color_text = @import("../color_compat.zig").wrap(labelText()),
-                .gravity_y = 0.5,
-            });
-            {
-                var sp = dvui.box(@src(), .{}, .{ .id_extra = 5035, .expand = .horizontal });
-                sp.deinit();
-            }
-
-            if (deps.mlx_whisper_downloading) {
+            var ssnap: [128]u8 = undefined;
+            const st: ModelState = if (deps.mlx_whisper_downloading) blk: {
                 const slen = std.mem.indexOfScalar(u8, &deps.mlx_whisper_status, 0) orelse 0;
-                var ssnap: [128]u8 = undefined;
-                const stxt = if (slen > 0) @import("../../core/text.zig").safeUtf8Buf(deps.mlx_whisper_status[0..slen], &ssnap) else "Setting up…";
-                _ = dvui.label(@src(), "{s}", .{stxt}, .{
-                    .id_extra = 5045,
-                    .color_text = @import("../color_compat.zig").wrap(theme.colors.warning),
-                    .gravity_y = 0.5,
-                });
                 components.pollRefresh(100_000);
-            } else if (mlx_installed) {
-                components.statusPill("Installed", .success);
-            } else {
-                components.statusPill("Not installed", .info);
+                break :blk .{ .busy = if (slen > 0) @import("../../core/text.zig").safeUtf8Buf(deps.mlx_whisper_status[0..slen], &ssnap) else "Setting up…" };
+            } else if (mlx_installed) .installed else .{ .available = "Set up" };
+            if (modelCard("MLX Whisper (1.6GB)", icons.tvg.lucide.cpu, st, 5005, @src())) {
+                deps.fetchMlxWhisperModelAsync();
+                state.showToast("Setting up MLX Whisper (venv + model)…");
             }
         }
 
@@ -288,62 +250,13 @@ pub fn renderAIContentBody() void {
     _ = dvui.label(@src(), "Model operation: HTTPS curl › verify staged download › extract (archive models). MLX Whisper also installs uv, a Python venv, and mlx-whisper.", .{}, .{ .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary) });
 }
 
-/// One NVIDIA Parakeet model row: name + Installed pill / live download
-/// spinner / Download button. Requires the sherpa-onnx CLI (same engine the
-/// sherpa rows use).
+/// One NVIDIA Parakeet model row (needs the sherpa-onnx CLI, like the sherpa rows).
 fn parakeetModelRow(comptime name: []const u8, installed: bool, downloading: bool, v3: bool, id_extra: usize) void {
     const deps = @import("../../core/deps.zig");
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .id_extra = id_extra,
-        .expand = .horizontal,
-        .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.sm },
-    });
-    defer row.deinit();
-
-    dvui.icon(@src(), "", icons.tvg.lucide.@"audio-waveform", .{}, .{
-        .id_extra = id_extra + 10,
-        .color_text = @import("../color_compat.zig").wrap(if (installed) theme.colors.accent else theme.colors.text_secondary),
-        .min_size_content = theme.iconSize(.sm),
-        .gravity_y = 0.5,
-        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
-    });
-    _ = dvui.label(@src(), name, .{}, .{
-        .id_extra = id_extra + 20,
-        .color_text = @import("../color_compat.zig").wrap(theme.colors.text_primary),
-        .gravity_y = 0.5,
-    });
-    {
-        var sp = dvui.box(@src(), .{}, .{ .id_extra = id_extra + 30, .expand = .horizontal });
-        sp.deinit();
-    }
-    if (downloading) {
-        dvui.spinner(@src(), .{
-            .id_extra = id_extra + 40,
-            .color_text = @import("../color_compat.zig").wrap(theme.colors.warning),
-            .min_size_content = theme.iconSize(.sm),
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
-        });
-        _ = dvui.label(@src(), "Downloading…", .{}, .{
-            .id_extra = id_extra + 50,
-            .color_text = @import("../color_compat.zig").wrap(theme.colors.warning),
-            .gravity_y = 0.5,
-        });
-    } else if (installed) {
-        components.statusPill("Installed", .success);
-    } else {
-        if (dvui.button(@src(), "Download", .{}, .{
-            .id_extra = id_extra + 60,
-            .color_fill = @import("../color_compat.zig").wrap(theme.colors.accent),
-            .color_text = @import("../color_compat.zig").wrap(theme.colors.text_on_accent),
-            .border = dvui.Rect.all(0),
-            .corners = theme.dims.rad_sm,
-            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-            .gravity_y = 0.5,
-        })) {
-            deps.fetchParakeetAsync(v3);
-            state.showToast("Downloading Parakeet TDT — watch the row for progress");
-        }
+    const st: ModelState = if (downloading) .{ .busy = "Downloading…" } else if (installed) .installed else .{ .available = "Download" };
+    if (modelCard(name, icons.tvg.lucide.@"audio-waveform", st, id_extra, @src())) {
+        deps.fetchParakeetAsync(v3);
+        state.showToast("Downloading Parakeet TDT — watch the row for progress");
     }
 }
 fn aiSectionWithIcon(icon_data: anytype, comptime title: []const u8, comptime subtitle: []const u8, id_extra: usize, src: std.builtin.SourceLocation) void {
@@ -352,55 +265,70 @@ fn aiSectionWithIcon(icon_data: anytype, comptime title: []const u8, comptime su
     @import("../service_surfaces.zig").section(@src(), title, subtitle, icon_data);
 }
 
+const ModelState = union(enum) {
+    installed,
+    /// Live work (download / setup) with a short status line.
+    busy: []const u8,
+    /// Not installed; the label of the button that installs it.
+    available: []const u8,
+};
+
 fn modelRow(comptime name: []const u8, icon_data: anytype, installed: bool, downloading: bool, id_extra: usize, src: std.builtin.SourceLocation) bool {
-    // Calm: a spacing-only row (no card fill / border / radius). The icon
-    // tint + a text-only status pill carry the state.
+    const st: ModelState = if (downloading) .{ .busy = "Downloading…" } else if (installed) .installed else .{ .available = "Download" };
+    return modelCard(name, icon_data, st, id_extra, src);
+}
+
+/// The one model row every entry uses: bordered card, icon, name, and a
+/// right-aligned status column (Installed pill / spinner + status / button).
+/// Returns true when the install button was clicked.
+fn modelCard(name: []const u8, icon_data: anytype, st: ModelState, id_extra: usize, src: std.builtin.SourceLocation) bool {
+    const installed = st == .installed;
     var row = dvui.box(src, .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
         .expand = .horizontal,
-        .padding = dvui.Rect.all(10),
-        .margin = .{ .y = 3, .h = 3 },
+        .min_size_content = .{ .w = 0, .h = 30 },
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+        .margin = .{ .x = 0, .y = 3, .w = 0, .h = 3 },
         .background = true,
         .color_fill = @import("../color_compat.zig").wrap(theme.colors.bg_surface),
         .border = dvui.Rect.all(1),
         .color_border = @import("../color_compat.zig").wrap(theme.colors.border_subtle),
-        .corners = dvui.CornerRect.all(8),
+        .corners = theme.dims.rad_md,
     });
     defer row.deinit();
 
-    // Icon
     dvui.icon(src, "", icon_data, .{}, .{
         .id_extra = id_extra + 10,
         .color_text = @import("../color_compat.zig").wrap(if (installed) theme.colors.accent else mutedText()),
+        .min_size_content = theme.iconSize(.sm),
         .gravity_y = 0.5,
-        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.md, .h = 0 },
     });
-    // Name
-    _ = dvui.label(src, name, .{}, .{
+    _ = dvui.label(src, "{s}", .{name}, .{
         .id_extra = id_extra + 20,
+        .expand = .horizontal,
         .color_text = @import("../color_compat.zig").wrap(labelText()),
         .gravity_y = 0.5,
     });
-    // Spacer
-    {
-        var sp = dvui.box(src, .{}, .{ .id_extra = id_extra + 30, .expand = .horizontal });
-        sp.deinit();
-    }
-    // Status — text-only pill.
-    if (downloading) {
-        components.statusPill("Downloading", .warn);
-    } else if (installed) {
-        components.statusPill("Installed", .success);
-    } else {
-        return dvui.button(src, "Download", .{}, .{
-            .id_extra = id_extra + 60,
-            .color_fill = @import("../color_compat.zig").wrap(theme.colors.accent),
-            .color_text = @import("../color_compat.zig").wrap(theme.colors.text_on_accent),
-            .border = dvui.Rect.all(0),
-            .corners = theme.dims.rad_sm,
-            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-            .gravity_y = 0.5,
-        });
+    var status = dvui.box(src, .{ .dir = .horizontal }, .{ .id_extra = id_extra + 30, .gravity_y = 0.5 });
+    defer status.deinit();
+    switch (st) {
+        .installed => components.statusPill("Installed", .success),
+        .busy => |text| {
+            dvui.spinner(src, .{
+                .id_extra = id_extra + 40,
+                .color_text = @import("../color_compat.zig").wrap(theme.colors.warning),
+                .min_size_content = theme.iconSize(.sm),
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+            });
+            _ = dvui.label(src, "{s}", .{text}, .{
+                .id_extra = id_extra + 50,
+                .color_text = @import("../color_compat.zig").wrap(theme.colors.warning),
+                .gravity_y = 0.5,
+            });
+        },
+        .available => |label| return components.actionButton(src, label, .primary, id_extra + 60),
     }
     return false;
 }
