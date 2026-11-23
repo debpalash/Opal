@@ -215,8 +215,7 @@ access restrictions remain external availability conditions.
 
 ## Maturity follow-up on 2026-10-02
 
-See [the maturity audit](maturity-audit.md) for implementation details and
-reproducible checks. Podcast feeds now expose their complete retained episode
+Podcast feeds now expose their complete retained episode
 count and 200-item pages within the existing 4 MiB feed bound. Playback actions
 validate the rendered page's generation.
 

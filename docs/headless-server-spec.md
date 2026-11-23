@@ -1,6 +1,6 @@
 # Opal headless server — execution spec (v2)
 
-**Supersedes** the planning in `headless-scoping.md` and consolidates the
+Consolidates the
 shipped work tracked in `headless-hosting-spec.md`. This is the authoritative
 plan for finishing the Docker/web-UI server story.
 

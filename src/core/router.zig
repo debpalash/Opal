@@ -8,8 +8,7 @@
 
 const std = @import("std");
 
-/// Top-level pages. Maps the legacy 14 `DrawerTab`s into a small IA
-/// (see docs/superpowers/specs/2026-06-23-page-shell-redesign-design.md).
+/// Top-level pages. Maps the legacy 14 `DrawerTab`s into a small IA.
 pub const Route = enum {
     home,
     search,

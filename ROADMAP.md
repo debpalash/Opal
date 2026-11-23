@@ -4,6 +4,57 @@
 
 ---
 
+## 🚀 v2 — active plan (2026-11-23)
+
+The single source of truth for v2 work. Shipped items get ticked here; nothing
+else in `docs/` tracks plans. Hardware-dependent items ship with fixtures and are
+marked **unverified** until checked on a real device.
+
+### P0 — Security & reliability
+- [ ] Plugin `require` allow-list + one-time permission grant (`services/plugins.zig`)
+- [ ] `rate_limit.acquire` on every outbound scraper/backend, enforced by a feature test
+- [ ] Private, deterministic extraction: no implicit browser/cookie access, TLS kept,
+      one bounded yt-dlp invocation policy; tested with a fake executable
+- [ ] Recoverable helper installs: stage beside target, verify, version-probe,
+      atomic publish, keep the working binary on failure
+- [ ] Measured reliability budgets: repeatable workload (launch, navigate, search
+      cancel, art, stream start, seek, reader page, close) recording p50/p95, CPU,
+      RSS, workers, subprocesses; no orphan playback after hundreds of cycles
+
+### P1 — Architecture & debt
+- [ ] Split `ui/settings.zig` into `ui/settings/` per-tab modules; theme spacing/radius/font tokens
+- [ ] `MockIo` seam so cross-boundary modules get real `zig build test` coverage
+- [ ] Unified scrobble bus fanning out to Trakt/AniList/SIMKL
+- [ ] Seek-aware torrent piece deadlines (`torrent_wrapper.cpp` FFI)
+- [ ] Durable transfer management: typed policy, persisted intent, path
+      confinement, delete-data needs confirmation, disk-full handling
+- [ ] One shared media/action identity model across native and web
+      (kind, provider IDs, show/season/episode, targets, resume, watched, queue);
+      explicit "Play here / Play on Opal / Queue"; late results never retarget
+- [ ] Verified private remote deployment: directory mounts, pinned images,
+      HTTPS proxy, reconnect, SSE, range/seek, key expiry, restart, admin bootstrap
+
+### P1 — Capabilities
+- [ ] Perceptual-hash duplicate detection + automatic chapters
+- [ ] Real casting (Chromecast/DLNA) + phone couch-mode cast picker
+- [ ] Kids mode: maturity cap on profiles, NSFW forced off
+- [ ] TVDB fallback for anime and obscure shows
+- [ ] Voice/mic → assistant moment jumps
+
+### P2 — Breadth
+- [ ] Live TV guide: opt-in M3U/XMLTV import, channel mapping, now/next, search,
+      favorites; time zones/DST, stale guide, dead-stream feedback
+- [ ] Reading quality: bounded decoded-image memory, neighbour-page cache, RTL,
+      spread/scroll, zoom, resume by server + chapter ID, untrusted archive paths
+- [ ] Independent-server matrix: imports, metadata fixes, users, permissions,
+      backup/restore, migrations, transcode limits, concurrent streams
+- [ ] i18n string table (`core/i18n.zig`)
+- [ ] Community addon index (on top of signed, user-added repos)
+- [ ] Mobile offline download + sync; fix iOS tv_play picker and phone torrent stall
+- [ ] Title-bar drag handle (`ui/header.zig` TODO)
+
+---
+
 ## ✅ Milestone 1 — Core Runtime (DONE)
 
 - [x] MPV-based playback engine with hardware decoding (`hwdec=auto-safe`)
