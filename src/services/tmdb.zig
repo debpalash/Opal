@@ -2798,7 +2798,7 @@ pub fn playEpisodeOf(
 
 /// Worker: resolve every source for `query`, auto-play the first CONFIDENT
 /// candidate (rank order; dead magnets and weak title-matches never auto-play
-/// — resolver_rank.pickBest, pure + tested), else land on the Search picker
+/// — resolver_rank.pickForStartup, pure + tested), else land on the Search picker
 /// with the results already populated.
 fn smartPlayEpisode(query: []const u8, generation: u64) void {
     const rank = @import("resolver_rank.zig");
@@ -2844,6 +2844,7 @@ fn smartPlayEpisode(query: []const u8, generation: u64) void {
                     .match_pct = it.match_pct,
                     .seeds = it.seeds,
                     .same_series = rank.sameSeries(it.name[0..it.name_len], query),
+                    .episode_exact = rank.episodeExact(it.source == .stremio, it.url[0..it.url_len], query),
                 };
             }
             if (rank.pickForStartup(cands[0..n], resolver.isResolving() and waited < 150)) |pi| {

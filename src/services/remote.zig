@@ -1273,6 +1273,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     if (@import("addon_repositories.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("remote_recall_api.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("remote_library_sync_api.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("offline_server.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("remote_profiles_api.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("stream_session.zig").handleApi(stream, method, api_path, query, body, request)) return;
     if (@import("handoff.zig").handleApi(stream, method, api_path, query, body, request)) return;

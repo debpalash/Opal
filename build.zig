@@ -2236,6 +2236,28 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_titlebar_geometry).step);
 
+    // Window drag handle / resize hit-test geometry (SDL_SetWindowHitTest on
+    // macOS, Windows and Linux).
+    const test_titlebar_hit = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ui/titlebar_hit_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_titlebar_hit).step);
+
+    // Download for offline: queue state machine, quota, Range resume, size
+    // verification and the progress merge (version + last writer).
+    const test_offline = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/offline_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_offline).step);
+
     // Runtime display probe: Linux EDID/sysfs fallback plus the shared Auto
     // scale seam used by startup and Settings.
     const test_display_info = addBoundTest(b, .{

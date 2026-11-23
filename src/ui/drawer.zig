@@ -423,7 +423,7 @@ pub fn renderTabContent(tab: state.DrawerTab) void {
     if (@import("profiles_ui.zig").blocksTab(tab)) return;
     switch (tab) {
         .Search => search.renderSearchContent(),
-        .Downloads => transfers.renderTransfersContent(@import("wanted_ui.zig").render),
+        .Downloads => transfers.renderTransfersContent(renderAboveTransfers),
         .TMDB => tmdb.renderTmdbContent(),
         .YouTube => youtube.renderContent(),
         .Queue => queue.renderContent(),
@@ -886,4 +886,10 @@ fn renderLogsContent() void {
             _ = dvui.label(@src(), "×{d}", .{r.count}, .{ .id_extra = ri + 70500, .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary), .gravity_y = 0.5 });
         }
     }
+}
+
+/// Panels above the transfer list: Wanted, then Offline (download for offline).
+fn renderAboveTransfers() void {
+    @import("wanted_ui.zig").render();
+    @import("offline_ui.zig").render();
 }

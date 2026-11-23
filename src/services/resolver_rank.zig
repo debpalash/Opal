@@ -542,7 +542,23 @@ pub const PickCand = struct {
     seeds: u16,
     /// sameSeries(name, query): the release's series title IS the show.
     same_series: bool = true,
+    /// episodeExact: the source looked the episode up by id and named its
+    /// file inside the release (see episodeExact).
+    episode_exact: bool = false,
 };
+
+/// Did an id-addressed source (a Stremio addon asked for `imdb:S:E`) name the
+/// episode's file inside this release? Its title is then usually the season
+/// pack ("Breaking Bad Season 1 Complete 720p"), which never matches the
+/// query's SxxEyy token, but the `&so=` file index plays the right episode.
+pub fn episodeExact(id_addressed: bool, url: []const u8, query: []const u8) bool {
+    if (!id_addressed) return false;
+    var lquery: [256]u8 = undefined;
+    const ql = @min(query.len, lquery.len);
+    for (0..ql) |i| lquery[i] = std.ascii.toLower(query[i]);
+    if (subs.findSxxEyy(lquery[0..ql]) == null) return false;
+    return @import("stream_source_pure.zig").magnetFileIndex(url) != null;
+}
 
 /// Is the release's SERIES title (the words before SxxEyy) the same show as an
 /// episode query's title — not merely containing it? Token presence alone let
@@ -626,12 +642,50 @@ pub fn pickBest(cands: []const PickCand) ?usize {
 
 /// Start immediately only on a complete query match while sources are arriving.
 /// Completion must not relax episode identity: partial matches stay in the picker.
+/// An id-addressed pack row with the episode's file index is exact by
+/// construction, so it starts at the normal rank bar (PICK_MIN_MATCH) even
+/// though its pack title lacks the episode token.
 pub fn pickForStartup(cands: []const PickCand, searching: bool) ?usize {
     _ = searching;
     for (cands, 0..) |candidate, index| {
         if (candidate.match_pct == 100 and pickBest(&.{candidate}) != null) return index;
+        if (candidate.episode_exact and candidate.playable and candidate.match_pct >= PICK_MIN_MATCH and
+            !(candidate.needs_seeds and candidate.seeds < PICK_MIN_SEEDS)) return index;
     }
     return null;
+}
+
+test "regression: tv_play picker starts an id-addressed season pack (iOS Breaking Bad)" {
+    // iOS has no Python engines, so Breaking Bad S01E01 resolves almost only
+    // to Torrentio season packs. Their names miss "s01e01" (match 66%) and the
+    // picker used to decline every one and fall back to the Search tab.
+    const query = "breaking bad s01e01";
+    const pack = "Breaking Bad Season 1 Complete 720p";
+    const magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&so=0";
+    const c = matchCounts(pack, query);
+    try std.testing.expect(c.match_words < c.total_words);
+    const exact = episodeExact(true, magnet, query);
+    try std.testing.expect(exact);
+    const cands = [_]PickCand{
+        .{ .playable = true, .needs_seeds = true, .match_pct = 100, .seeds = 0 },
+        .{ .playable = true, .needs_seeds = false, .match_pct = 66, .seeds = 0, .same_series = sameSeries(pack, query), .episode_exact = exact },
+    };
+    try std.testing.expectEqual(@as(?usize, 1), pickForStartup(&cands, true));
+    // Without the id-addressed file index it stays in the picker.
+    var plain = cands;
+    plain[1].episode_exact = false;
+    try std.testing.expectEqual(@as(?usize, null), pickForStartup(&plain, false));
+}
+
+test "episodeExact needs an id-addressed source, an episode query and a file index" {
+    const magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&so=3";
+    try std.testing.expect(!episodeExact(false, magnet, "breaking bad s01e01"));
+    try std.testing.expect(!episodeExact(true, magnet, "breaking bad"));
+    try std.testing.expect(!episodeExact(true, "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567", "breaking bad s01e01"));
+    try std.testing.expect(!episodeExact(true, "https://example.com/v.mp4", "breaking bad s01e01"));
+    // A weak id-addressed match still respects the rank bar.
+    const weak = [_]PickCand{.{ .playable = true, .needs_seeds = false, .match_pct = 33, .seeds = 0, .episode_exact = true }};
+    try std.testing.expectEqual(@as(?usize, null), pickForStartup(&weak, false));
 }
 
 test "episode startup accepts an early exact seeded match without waiting for providers" {

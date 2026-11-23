@@ -195,11 +195,16 @@ pub const Disk = enum { ok, low };
 /// Guard the download volume. Below the reserve everything that writes stops;
 /// a background download that cannot fit its remaining bytes above the reserve
 /// does not start. A stream is exempt from the fit check (it may only ever
-/// read one file of a large pack) but not from the reserve floor.
+/// read one file of a large pack) but not from the reserve floor. A transfer
+/// opened for playback counts as a stream before the proxy serves it: the
+/// proxy only starts once the readiness gate has pieces, so pausing it there
+/// would never let it reach `streaming` (and `remaining` still covers the
+/// whole pack until the player narrows the file priorities).
 pub fn diskVerdict(f: Facts, reserve: u64) Disk {
     const free = f.free_bytes orelse return .ok;
     if (free < reserve) return .low;
-    if (!f.streaming and f.has_metadata and f.remaining() > free - reserve) return .low;
+    const stream = f.streaming or f.interactive;
+    if (!stream and f.has_metadata and f.remaining() > free - reserve) return .low;
     return .ok;
 }
 
@@ -500,6 +505,31 @@ test "disk guard: remaining bytes must fit above the reserve" {
     // A stream skips the fit check but not the floor.
     try t.expectEqual(Disk.ok, diskVerdict(.{ .has_metadata = true, .wanted = 10_000, .free_bytes = 5_000, .streaming = true }, 1_000));
     try t.expectEqual(Disk.low, diskVerdict(.{ .free_bytes = 500, .streaming = true }, 1_000));
+}
+
+test "regression: phone stream stall, disk fit check paused a playback torrent before its proxy started" {
+    // A 40 GB season pack on a phone with 6 GB free: the player opened it
+    // (interactive) but the proxy is not serving yet (streaming=false).
+    const reserve: u64 = 256 << 20;
+    var f = running(40 << 30, 0);
+    f.free_bytes = 6 << 30;
+    f.interactive = true;
+    try t.expectEqual(Disk.ok, diskVerdict(f, reserve));
+    var rec = Record{};
+    try t.expectEqual(Action.none, step(&rec, f, .{ .reserve_bytes = reserve }, .{}));
+    try t.expectEqual(State.downloading, rec.state);
+    // One already blocked by the old rule recovers on the next step.
+    var blocked = Record{ .state = .blocked_disk };
+    f.paused = true;
+    _ = step(&blocked, f, .{ .reserve_bytes = reserve }, .{});
+    try t.expect(blocked.state != .blocked_disk);
+    // The reserve floor still applies to playback.
+    f.free_bytes = 100 << 20;
+    try t.expectEqual(Disk.low, diskVerdict(f, reserve));
+    // A background download of the same size is still held back.
+    f.free_bytes = 6 << 30;
+    f.interactive = false;
+    try t.expectEqual(Disk.low, diskVerdict(f, reserve));
 }
 
 test "disk guard: seeding is not blocked (it does not write)" {

@@ -7,6 +7,9 @@
 //! SDL_SetWindowHitTest, so window snapping and multi-monitor behavior stay
 //! native — we only tell SDL which regions drag vs. resize.
 //!
+//! The same hit-test runs on macOS and Linux with native decorations, where
+//! it only adds the header's title cluster as a drag handle.
+//!
 //! Enabled on Windows by default (state.app.custom_titlebar). On a build where
 //! it's off, nothing here runs and the native title bar is kept.
 
@@ -17,6 +20,7 @@ const c = @import("../core/c.zig");
 const theme = @import("theme.zig");
 const state = @import("../core/state.zig");
 const geometry = @import("titlebar_geometry.zig");
+const hit_pure = @import("titlebar_hit_pure.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -53,6 +57,9 @@ pub var close_requested: bool = false;
 // The SDL window, captured on enable(). null until then.
 var sdl_window: ?*c.sdl.SDL_Window = null;
 var installed: bool = false;
+var hit_test_installed: bool = false;
+/// Header drag handle for the current frame (empty = none). See setHeaderDragRect.
+var header_drag_rect: hit_pure.FracRect = .{};
 
 // Physical-pixel geometry of the draggable band, refreshed each frame by
 // render() and read by the (event-thread) hit-test callback. The band spans the
@@ -76,59 +83,74 @@ pub fn active() bool {
     return is_windows and state.app.custom_titlebar;
 }
 
-/// SDL hit-test: map a point to drag / resize / normal. Everything is done in
-/// SDL's own window-coordinate space (the space `area` and SDL_GetWindowSize
-/// share), using fractions for the title band / controls so no DPI conversion
-/// is needed. DRAGGABLE → Windows HTCAPTION → native move + Aero Snap +
-/// double-click-maximize; RESIZE_* → native edge resize.
+/// SDL hit-test: map a point to drag / resize / normal. The geometry lives in
+/// titlebar_hit_pure.classify; this only gathers the live inputs. DRAGGABLE is
+/// the OS move (Windows HTCAPTION + Aero Snap, macOS window drag, X11
+/// _NET_WM_MOVERESIZE, Wayland xdg move); RESIZE_* is a native edge resize.
+/// SDL runs it on the thread that pumps window events, which is the UI thread
+/// on every desktop backend, so the frame-written geometry needs no lock.
 fn hitTest(win: ?*c.sdl.SDL_Window, area: [*c]const c.sdl.SDL_Point, data: ?*anyopaque) callconv(.c) c.sdl.SDL_HitTestResult {
     _ = data;
     var ww: c_int = 0;
     var wh: c_int = 0;
     c.sdl.SDL_GetWindowSize(win, &ww, &wh);
-    if (ww <= 0 or wh <= 0) return c.sdl.SDL_HITTEST_NORMAL;
-    const x = area.*.x;
-    const y = area.*.y;
-    const xf: f32 = @as(f32, @floatFromInt(x)) / @as(f32, @floatFromInt(ww));
-    const yf: f32 = @as(f32, @floatFromInt(y)) / @as(f32, @floatFromInt(wh));
-
-    // Resize borders (SDL-space px). Skipped when maximized (no edges to grab).
+    const custom = active();
+    // Resize borders only exist on the borderless custom title bar, and not
+    // while maximized (no edges to grab).
     const maximized = win != null and (c.sdl.SDL_GetWindowFlags(win) & c.sdl.SDL_WINDOW_MAXIMIZED) != 0;
-    const b: c_int = 6;
-    if (!maximized and (x < b or y < b or x >= ww - b or y >= wh - b)) {
-        const on_top = y < b;
-        const on_bot = y >= wh - b;
-        const on_left = x < b;
-        const on_right = x >= ww - b;
-        if (on_top and on_left) return c.sdl.SDL_HITTEST_RESIZE_TOPLEFT;
-        if (on_top and on_right) return c.sdl.SDL_HITTEST_RESIZE_TOPRIGHT;
-        if (on_bot and on_left) return c.sdl.SDL_HITTEST_RESIZE_BOTTOMLEFT;
-        if (on_bot and on_right) return c.sdl.SDL_HITTEST_RESIZE_BOTTOMRIGHT;
-        if (on_top) return c.sdl.SDL_HITTEST_RESIZE_TOP;
-        if (on_bot) return c.sdl.SDL_HITTEST_RESIZE_BOTTOM;
-        if (on_left) return c.sdl.SDL_HITTEST_RESIZE_LEFT;
-        return c.sdl.SDL_HITTEST_RESIZE_RIGHT;
-    }
-
-    // Title-bar band → draggable, except over the control buttons.
-    if (yf < band_frac) {
-        if (controls_active and xf >= controls_frac) return c.sdl.SDL_HITTEST_NORMAL;
-        return c.sdl.SDL_HITTEST_DRAGGABLE;
-    }
-    return c.sdl.SDL_HITTEST_NORMAL;
+    const drag_rects: []const hit_pure.FracRect = if (header_drag_rect.isEmpty()) &.{} else (&header_drag_rect)[0..1];
+    const hit = hit_pure.classify(.{
+        .x = area.*.x,
+        .y = area.*.y,
+        .window_w = ww,
+        .window_h = wh,
+        .resize_border = if (custom and !maximized) 6 else 0,
+        .band_fraction = if (custom) band_frac else 0,
+        .controls_fraction = if (custom and controls_active) controls_frac else null,
+        .drag_rects = drag_rects,
+    });
+    return switch (hit) {
+        .normal => c.sdl.SDL_HITTEST_NORMAL,
+        .draggable => c.sdl.SDL_HITTEST_DRAGGABLE,
+        .resize_top_left => c.sdl.SDL_HITTEST_RESIZE_TOPLEFT,
+        .resize_top => c.sdl.SDL_HITTEST_RESIZE_TOP,
+        .resize_top_right => c.sdl.SDL_HITTEST_RESIZE_TOPRIGHT,
+        .resize_right => c.sdl.SDL_HITTEST_RESIZE_RIGHT,
+        .resize_bottom_right => c.sdl.SDL_HITTEST_RESIZE_BOTTOMRIGHT,
+        .resize_bottom => c.sdl.SDL_HITTEST_RESIZE_BOTTOM,
+        .resize_bottom_left => c.sdl.SDL_HITTEST_RESIZE_BOTTOMLEFT,
+        .resize_left => c.sdl.SDL_HITTEST_RESIZE_LEFT,
+    };
 }
 
-/// Make the window borderless + install the hit-test. Idempotent; call each
-/// frame — it self-gates. `win` is dvui's underlying SDL_Window.
+/// Install the hit-test (every desktop OS) and, with the custom title bar,
+/// make the window borderless. Call each frame before any chrome is drawn: it
+/// self-gates, and it clears last frame's header drag handle so a hidden
+/// header (immersive playback, page shell) stops dragging. `win` is dvui's
+/// underlying SDL_Window.
 pub fn ensureEnabled(win: ?*c.sdl.SDL_Window) void {
-    if (!active() or win == null) return;
+    header_drag_rect = .{};
+    if (comptime !hit_pure.platformSupported(builtin.os.tag, builtin.abi)) return;
+    if (win == null) return;
     sdl_window = win;
-    if (installed) return;
+    if (!hit_test_installed) {
+        hit_test_installed = true;
+        _ = c.sdl.SDL_SetWindowHitTest(win, hitTest, null);
+    }
+    if (!active() or installed) return;
     installed = true;
     c.sdl.SDL_SetWindowBordered(win, c.sdl.SDL_FALSE);
     c.sdl.SDL_SetWindowResizable(win, c.sdl.SDL_TRUE);
-    _ = c.sdl.SDL_SetWindowHitTest(win, hitTest, null);
     native.opal_titlebar_install_native(win);
+}
+
+/// Mark a widget as a window drag handle for the next hit tests. `r` is a
+/// physical-pixel rect (dvui `borderRectScale().r`); it is stored as a window
+/// fraction so it matches SDL's window coordinates at any DPI. Only labels and
+/// images may sit under it: the OS consumes presses on a drag handle.
+pub fn setHeaderDragRect(r: dvui.Rect.Physical) void {
+    const wp = dvui.windowRectPixels();
+    header_drag_rect = hit_pure.fracRect(r.x, r.y, r.w, r.h, wp.w, wp.h);
 }
 
 /// Enter the platform's native caption-drag loop from a drag gesture on the
