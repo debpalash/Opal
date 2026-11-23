@@ -3075,6 +3075,13 @@ pub fn loadContentDirectMetaHeaders(
 
 /// Load content with automatic provider routing
 pub fn loadContent(url: []const u8) void {
+    // A local .cbz (CLI / file association / second-instance forward) opens in
+    // the comic reader; mpv can't play it.
+    if (@import("reader_pure.zig").isLocalComicArchive(url)) {
+        @import("comics.zig").loadCbzFile(url);
+        state.navigateToTab(.Comics);
+        return;
+    }
     if (@import("browser_pure.zig").isPublicWebcomicRoute(url)) {
         @import("comics.zig").loadComic(url);
         state.navigateToTab(.Comics);
