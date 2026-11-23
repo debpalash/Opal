@@ -15,7 +15,7 @@ def test_web_remote_module_boundaries():
     html = _src("web/index.html")
     remote = _src("src/services/remote.zig")
     web_modules = (
-        "core.js", "now-playing.js", "search.js", "catalog.js", "playback.js",
+        "core.js", "identity.js", "now-playing.js", "search.js", "catalog.js", "playback.js",
         "integrations.js", "access.js", "source-management.js", "browse-loading.js", "media.js", "drama-vndb.js", "source-details.js", "discovery.js", "boot.js",
     )
     backend_modules = (
@@ -29,6 +29,7 @@ def test_web_remote_module_boundaries():
         "remote_custom_sources_api.zig",
         "remote_books_api.zig",
         "remote_details_api.zig",
+        "remote_identity.zig",
     )
     checks = {
         "top router stays below 5k lines": len(remote.splitlines()) < 5000,
@@ -192,7 +193,7 @@ def test_web_discovery_and_party_workflows():
     checks = {
         "merged search": "function renderUnifiedResults(" in ui
             and "api('/unified_search?q='" in ui and "api('/unified_search')" in ui,
-        "opaque source actions": "r.key" in ui and ("r.queueable" in ui or "row.queueable" in ui or "variant.queueable" in ui)
+        "opaque source actions": "r.key" in ui and "identityHas(row.identity, 'queue')" in ui
             and "apiMutation('/unified_search/' + action" in ui
             and "resolver.resolve(dq" in remote
             and "resolver.lockRemoteSnapshot()" in remote

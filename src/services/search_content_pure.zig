@@ -138,21 +138,24 @@ pub fn episodeMatches(work_title: []const u8, release_title: []const u8) bool {
     }
     return false;
 }
-fn imdb(row: anytype) []const u8 {
-    return row.catalog_imdb[0..row.catalog_imdb_len];
-}
-fn validImdb(text: []const u8) bool {
-    if (text.len < 3 or !std.mem.startsWith(u8, text, "tt")) return false;
-    for (text[2..]) |c| if (!std.ascii.isDigit(c)) return false;
-    return true;
+const media_identity = @import("media_identity_pure.zig");
+/// A row's typed identity through the shared media identity model, so search
+/// grouping (native gallery and the web JSON) compares ids exactly the way
+/// every other surface does. Only TMDB rows' numeric ids are TMDB ids.
+pub fn mediaIdentity(row: anytype) media_identity.Identity {
+    const source = @tagName(row.source);
+    return media_identity.fromCatalog(row.catalog_kind[0..row.catalog_kind_len], source, if (std.mem.eql(u8, source, "tmdb")) row.catalog_id else 0, row.catalog_imdb[0..row.catalog_imdb_len]);
 }
 pub fn identity(row: anytype) u64 {
     var h = std.hash.Wyhash.init(0);
-    const typed_imdb = imdb(&row);
-    if (validImdb(typed_imdb) and row.catalog_kind_len > 0) {
+    const typed = mediaIdentity(row);
+    if (typed.ids.imdb != 0 and row.catalog_kind_len > 0) {
+        // Canonical spelling: identical bytes for already-canonical ids, so
+        // saved work keys survive; `TT944947` now joins `tt0944947`.
+        var imdb_buf: [16]u8 = undefined;
         h.update("imdb");
         h.update(row.catalog_kind[0..row.catalog_kind_len]);
-        h.update(typed_imdb);
+        h.update(media_identity.formatImdb(typed.ids.imdb, &imdb_buf));
         const key = h.final();
         return if (key == 0) 1 else key;
     }
@@ -168,7 +171,9 @@ pub fn identity(row: anytype) u64 {
 }
 fn sameWork(a: anytype, b: anytype) bool {
     const same_kind = a.catalog_kind_len > 0 and std.mem.eql(u8, a.catalog_kind[0..a.catalog_kind_len], b.catalog_kind[0..b.catalog_kind_len]);
-    return same_kind and ((a.catalog_id > 0 and b.catalog_id == a.catalog_id and a.source == b.source) or (validImdb(imdb(&a)) and std.mem.eql(u8, imdb(&a), imdb(&b))));
+    if (!same_kind) return false;
+    if (a.catalog_id > 0 and b.catalog_id == a.catalog_id and a.source == b.source) return true;
+    return media_identity.compareTitle(mediaIdentity(a), mediaIdentity(b)) == .same;
 }
 fn isOffer(row: anytype) bool {
     const source = @tagName(row.source);
@@ -505,4 +510,26 @@ test "strongest show match leads shelves and releases stay last" {
     var order: [3]Category = undefined;
     try std.testing.expectEqual(@as(usize, 3), categoryOrder(projection, &.{ 0, 1, 2 }, &order));
     try std.testing.expectEqualSlices(Category, &.{ .shows, .movies, .releases }, &order);
+}
+
+test "IMDb ids group by normalised value, not spelling" {
+    // Regression: grouping compared raw IMDb text, so a plugin row spelling
+    // `TT0944947` or an imdb.com URL never joined the catalog's `tt0944947`.
+    var a = fixture(.tmdb, "Work", 2022, 1);
+    var b = fixture(.music, "Work", 2022, 2);
+    @memcpy(a.catalog_imdb[0..9], "tt0944947");
+    a.catalog_imdb_len = 9;
+    @memcpy(b.catalog_imdb[0..9], "TT0944947");
+    b.catalog_imdb_len = 9;
+    const out = try std.testing.allocator.create(Projection);
+    defer std.testing.allocator.destroy(out);
+    projectInto(&[_]Fixture{ a, b }, &.{ 0, 1 }, out);
+    try std.testing.expectEqual(@as(usize, 1), out.count);
+    try std.testing.expectEqual(identity(a), identity(b));
+    // A canonical id hashes exactly as before (saved work keys survive).
+    var h = std.hash.Wyhash.init(0);
+    h.update("imdb");
+    h.update("movie");
+    h.update("tt0944947");
+    try std.testing.expectEqual(h.final(), identity(a));
 }

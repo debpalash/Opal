@@ -17,7 +17,8 @@
 # at 127.0.0.1:41595. Opal binds no host port of its own.
 services:
   tailscale:
-    image: tailscale/tailscale:latest
+    # Reviewed multi-arch index digest of :stable (2026-11-23); never :latest.
+    image: tailscale/tailscale:stable@sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4
     hostname: opal # → https://opal.<tailnet>.ts.net
     restart: unless-stopped
     environment:
@@ -47,11 +48,26 @@ services:
     environment:
       OPAL_HEADLESS: "1"
       OPAL_HTTPS_PROXY: "1"
+      OPAL_DOWNLOAD_DIR: "/media"
     # Share the tailscale netns so `tailscale serve` proxies to localhost:41595.
     network_mode: service:tailscale
+    # Same prepared host directories as docker-compose.yml (create_host_path:
+    # false: a missing directory fails startup instead of being root-created).
     volumes:
-      - ../data/config:/config
-      - ../data/cache:/cache
-      - ../data/media:/media
+      - type: bind
+        source: ../data/config
+        target: /config
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../data/cache
+        target: /cache
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../data/media
+        target: /media
+        bind:
+          create_host_path: false
     depends_on:
       - tailscale

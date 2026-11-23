@@ -19,18 +19,32 @@ services:
     environment:
       OPAL_HEADLESS: "1"
       OPAL_HTTPS_PROXY: "1"
+      OPAL_DOWNLOAD_DIR: "/media"
     network_mode: service:caddy
     depends_on:
       - caddy
+    # Same prepared host directories as docker-compose.yml (create_host_path:
+    # false: a missing directory fails startup instead of being root-created).
     volumes:
-      # Runtime data at the repo root (see .gitignore); move to named volumes
-      # or host paths for a real deployment.
-      - ../data/config:/config
-      - ../data/cache:/cache
-      - ../data/media:/media
+      - type: bind
+        source: ../data/config
+        target: /config
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../data/cache
+        target: /cache
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../data/media
+        target: /media
+        bind:
+          create_host_path: false
 
   caddy:
-    image: caddy:2
+    # Reviewed multi-arch index digest (2026-11-23); bump deliberately.
+    image: caddy:2@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b
     restart: unless-stopped
     ports:
       - "80:80"

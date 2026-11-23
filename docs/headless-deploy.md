@@ -68,9 +68,80 @@ network clients: passwords and session cookies would be unencrypted.
 |------------|------------------------------------------|------------------------|
 | `/config`  | config, DB, `api.token`, one-time `setup.token` | `XDG_CONFIG_HOME`/`HOME` |
 | `/cache`   | caches, thumbnails, transient data       | `XDG_CACHE_HOME`       |
-| `/media`   | local media library                      | —                      |
+| `/media`   | downloads, `/stream` root, default local library | `OPAL_DOWNLOAD_DIR=/media` |
 
 With `XDG_CONFIG_HOME=/config`, the config dir resolves to **`/config/opal/`**.
+
+`OPAL_DOWNLOAD_DIR` (absolute paths only) sets the default download folder.
+Without it, downloads went to `$HOME/Downloads/opal`. Because `HOME=/config`, that put
+them on the config volume, and `/media` was never read. A `save_path` you set
+in Settings still takes precedence.
+
+The compose files use long-syntax bind mounts with
+`create_host_path: false`. If a host directory is missing, startup fails with
+a clear error. With the short `../data/config:/config` form, Docker would
+silently create a root-owned directory that UID 10001 cannot write. Run the
+`install -d` / `chown` lines above before the first start. You can add extra
+read-only libraries beneath `/media` (for example
+`- /srv/films:/media/films:ro`).
+
+## Pinned images
+
+`Dockerfile` (`debian:12-slim`), `docker-compose.tls.yml` (`caddy:2`) and
+`docker-compose.tailscale.yml` (`tailscale/tailscale:stable`) reference
+reviewed multi-arch index digests (`image:tag@sha256:…`; the digest wins).
+The Docker workflow fails if any `FROM`/`image:` loses its digest. To bump an
+image, resolve the new index digest from the registry, rebuild, rerun the
+validation below, and commit the digest change on its own.
+
+## Local validation (scripted)
+
+`scripts/validate-headless-deploy.py` exercises a private deployment end to
+end. It uses a throwaway HOME/XDG root with the container layout and a free
+port, so it never touches `~/.config/opal`, and it never prints a credential:
+
+```sh
+zig build -Dheadless=true                     # or point --binary at a build
+python3 scripts/validate-headless-deploy.py   # bare binary
+python3 scripts/validate-headless-deploy.py --image opal:headless   # Docker host
+```
+
+| Step | What is proved |
+|---|---|
+| startup | `/health` 200; `setup.token` is 0600, 64 hex, and absent from the log |
+| bootstrap | registration needs the header token, rejects a cross-origin request, is single-use, and removes the token file |
+| range | `/stream` from the download mount: 206 plus the exact `Content-Range` and bytes for four ranges; 401 without a session; traversal refused |
+| identity | `/api/downloads` gives the hosted file the shared media identity: `here=direct`, `opal=false`, and only a "Play here" action |
+| sse | `/events` is `text/event-stream` and sends a data frame |
+| reconnect | three SSE reconnects each get a frame; a bogus session gets 401 |
+| restart | clean SIGTERM exit; the session, the account and `api.token` survive; `setup.token` is not recreated |
+| https_proxy | Caddy (`tls internal`, `skip_install_trust`, `admin off`) in front of an `OPAL_HTTPS_PROXY=1` loopback server: verified TLS, a Secure cookie, and SSE + Range through the proxy (SKIP when `caddy` is absent) |
+| expiry | expired and logged-out sessions are refused by the API and `/stream`; a live session is kept; re-login works |
+
+`tests/features/test_headless_deploy.py` runs it whenever a headless binary is
+present.
+
+## Tailscale: manual-only steps
+
+The repository never automates anything that changes a real tailnet. The
+validation script and the feature tests make **no** Tailscale calls. Do the
+following steps by hand, on the deployment host, with your own account:
+
+1. Create the auth key in the Tailscale admin console (reusable or one-off,
+   with an expiry you choose). Pass it as `TS_AUTHKEY` in the environment only,
+   never in a committed file.
+2. Review your tailnet ACL / grants so that only the intended users or tags
+   reach `opal:443`.
+3. Start `deploy/docker-compose.tailscale.yml`, then run
+   `docker compose -f deploy/docker-compose.tailscale.yml exec tailscale tailscale status`.
+4. From another tailnet device, test an authenticated HTTPS request and a
+   media seek. You can run the validation script's checks by hand against
+   `https://opal.<tailnet>.ts.net`.
+5. Funnel (public exposure) is opt-in and off by default. Enabling it is a
+   separate, deliberate admin-console and `tailscale funnel` action. Read
+   [secure remote access](secure-remote.md) first.
+6. After first login, revoke or let the auth key expire. `TS_AUTH_ONCE=true`
+   and the persisted `data/tailscale` state keep the node joined.
 
 ## Config setup
 
