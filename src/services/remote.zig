@@ -1385,9 +1385,10 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     // ── First-run setup over the API (hosted mode has no desktop Settings) ──
     if (std.mem.eql(u8, api_path, "/setup")) {
         var jb: [128]u8 = undefined;
-        const j = std.fmt.bufPrint(&jb, "{{\"has_sources\":{s},\"has_tmdb\":{s}}}", .{
+        const j = std.fmt.bufPrint(&jb, "{{\"has_sources\":{s},\"has_tmdb\":{s},\"has_tvdb\":{s}}}", .{
             if (@import("../core/source_config.zig").anyInstalled()) "true" else "false",
             if (state.app.tmdb.api_key_len > 0) "true" else "false",
+            if (state.app.tvdb_api_key_len > 0) "true" else "false",
         }) catch return;
         sendJson(stream, j);
         return;
@@ -1398,6 +1399,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
         sendJson(stream, std.fmt.bufPrint(&jb, "{{\"installed\":{d}}}", .{n}) catch "{\"installed\":0}");
         return;
     }
+    if (std.mem.eql(u8, api_path, "/setup/tvdb")) return @import("remote_tvdb_api.zig").handleSetup(stream, method, body);
     if (std.mem.eql(u8, api_path, "/setup/tmdb")) {
         if (!requireMethod(stream, method, "POST")) return;
         // API keys must never arrive in a URL, where they can enter access

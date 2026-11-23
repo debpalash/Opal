@@ -271,6 +271,9 @@ pub fn seedBrowseFromCache() void {
     var i: usize = 0;
     while (i < n and t.results.items.len < TMDB_MAX_CACHED_ITEMS) : (i += 1) {
         const it = deserializeItem(&r) orelse break;
+        // Cache-only (UI thread): a kid profile never paints a row it has
+        // not already proven is within its cap.
+        if (!@import("profiles_maturity.zig").visibleCached(&it)) continue;
         t.results.append(alloc, it) catch break;
         if (it.imdb_id_len > 0 and it.imdb_id_len <= it.imdb_id.len) rememberIdentity(mediaKind(&it), it.id, it.imdb_id[0..it.imdb_id_len]);
     }
@@ -317,6 +320,9 @@ pub fn searchCatalogInto(query: []const u8, out: []state.TmdbItem) usize {
         fetchCinemetaInto(&staged, .search, query, .trending, .all, 0, 0, 1);
     }
 
+    // No catalog match anywhere: TheTVDB, when the user has a key.
+    if (staged.items.len == 0) _ = @import("tvdb.zig").searchFallback(query, &staged);
+
     var written: usize = 0;
     for (staged.items) |item| {
         if (written >= out.len) break;
@@ -325,7 +331,8 @@ pub fn searchCatalogInto(query: []const u8, out: []state.TmdbItem) usize {
         out[written] = item;
         written += 1;
     }
-    return written;
+    // Kid profiles: the resolver's catalog rows obey the same cap.
+    return @import("profiles_maturity.zig").filterSliceBlocking(out[0..written]);
 }
 
 /// True when some catalog row is the typed title, ignoring spacing/case.
@@ -440,6 +447,15 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
                 state.app.tmdb.results_mutex.unlock();
                 if (have_visible) return;
             }
+
+            // TMDB (and Cinemeta) had no match for a show search: try TheTVDB
+            // when the user has a key (anime, obscure shows).
+            if (S.fetch_mode == .search and !S.do_append and staged.items.len == 0 and S.media_filter != .movie)
+                _ = @import("tvdb.zig").searchFallback(S.q[0..S.q_len], &staged);
+
+            // Kid profiles: drop over-cap / unrated titles before anything
+            // (grid, Home rails, web catalog, browse cache) can see them.
+            @import("profiles_maturity.zig").filterStaged(&staged);
 
             // SWR write: persist the fresh default browse grid (page 1 only) so
             // the next cold start paints instantly. Search + infinite-scroll

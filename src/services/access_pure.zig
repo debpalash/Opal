@@ -273,6 +273,7 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
         "/moments/create",       "/moments/send",       "/moments/delete",
         "/addons",               "/addons/add",         "/addons/refresh",
         "/addons/remove",        "/setup/sources",      "/setup/tmdb",
+        "/setup/tvdb",
         "/settings",             "/settings/toggle",    "/source/add",
         "/source/config",        "/livetv/sources",     "/rss/manage",
         "/local-library/action", "/jellyfin/login",     "/jellyfin/disconnect",
@@ -301,6 +302,7 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
         // Household profiles: switching restarts the host into another
         // person's data; create/delete manage the household. Listing is open.
         "/profiles/switch",      "/profiles/create",    "/profiles/delete",
+        "/profiles/kid",
         // Continuum handoff: send/bring make this host call a peer URL.
         "/handoff/send",         "/handoff/bring",
         // Anti-block scraper proxy: makes this host fetch arbitrary URLs.
@@ -369,10 +371,11 @@ pub fn allowsRoute(principal: Principal, path: []const u8, method: []const u8, a
 
 test "household profile management is admin-only, listing is open to sessions" {
     for ([_]Principal{ .machine, .admin_session, .session }) |principal| {
-        for ([_][]const u8{ "/profiles/switch", "/profiles/create", "/profiles/delete" }) |route| {
+        for ([_][]const u8{ "/profiles/switch", "/profiles/create", "/profiles/delete", "/profiles/kid" }) |route| {
             try std.testing.expectEqual(principal != .session, allowsRoute(principal, route, "POST", ""));
         }
         try std.testing.expect(allowsRoute(principal, "/profiles", "GET", ""));
+        try std.testing.expect(allowsRoute(principal, "/profiles/maturity", "GET", ""));
     }
     try std.testing.expect(!allowsRoute(.browser, "/profiles", "GET", ""));
     try std.testing.expect(!allowsRoute(.browser, "/profiles/switch", "POST", ""));
@@ -389,6 +392,7 @@ test "route privilege matrix protects host administration and executable trust" 
         try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/local-library/action", "POST", "add-root"));
         try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/jellyfin/login", "POST", ""));
         try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/setup/tmdb", "GET", ""));
+        try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/setup/tvdb", "POST", ""));
         for ([_][]const u8{ "/agent/tasks", "/agent/tasks/add", "/agent/tasks/remove", "/agent/tasks/run" }) |route| {
             try std.testing.expectEqual(principal != .session, allowsRoute(principal, route, "POST", ""));
         }

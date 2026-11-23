@@ -27,6 +27,7 @@ pub fn tvDetails(stream: std.Io.net.Stream, query: []const u8) void {
         return;
     };
     const season: ?i32 = if (wire.queryParam(query, "season")) |raw| (std.fmt.parseInt(i32, raw, 10) catch 0) else null;
+    if (!maturityGate(stream, query, .series, id)) return;
     if (useKeyless(query, .series, id)) {
         sendKeyless(stream, query, .series, id, season);
         return;
@@ -36,6 +37,7 @@ pub fn tvDetails(stream: std.Io.net.Stream, query: []const u8) void {
         std.fmt.bufPrint(&path_buf, "/3/tv/{d}/season/{d}", .{ id, sn }) catch return
     else
         std.fmt.bufPrint(&path_buf, "/3/tv/{d}", .{id}) catch return;
+    if (season) |sn| return sendSeasonJson(stream, query, path, id, sn);
     sendTmdbJson(stream, path);
 }
 
@@ -85,6 +87,7 @@ pub fn movieDetails(stream: std.Io.net.Stream, query: []const u8) void {
         wire.sendJson(stream, "{\"error\":\"bad id\"}");
         return;
     };
+    if (!maturityGate(stream, query, .movie, id)) return;
     if (useKeyless(query, .movie, id)) {
         sendKeyless(stream, query, .movie, id, null);
         return;
@@ -92,6 +95,37 @@ pub fn movieDetails(stream: std.Io.net.Stream, query: []const u8) void {
     var path_buf: [96]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buf, "/3/movie/{d}", .{id}) catch return;
     sendTmdbJson(stream, path);
+}
+
+/// Kid profiles: a title over the age cap (or unrated, unless the parent
+/// allowed those) gets 403 instead of details, so the web companion cannot
+/// open it or hunt streams for it. True = proceed.
+fn maturityGate(stream: std.Io.net.Stream, query: []const u8, kind: keyless.Kind, id: i32) bool {
+    var from_query: [32]u8 = undefined;
+    const imdb: []const u8 = if (wire.queryParam(query, "imdb")) |raw| (wire.urlDecode(raw, &from_query) orelse "") else "";
+    const decision = @import("profiles_maturity.zig").apiDecision(id, kind == .series, imdb);
+    if (decision == .allow) return true;
+    var buf: [160]u8 = undefined;
+    const body = std.fmt.bufPrint(&buf, "{{\"error\":\"{s}\",\"maturity\":\"{s}\"}}", .{ decision.message(), @tagName(decision) }) catch "{\"error\":\"blocked by this profile's age limit\"}";
+    wire.sendJsonStatus(stream, "403 Forbidden", body);
+    return false;
+}
+
+/// TMDB season document, gaps filled from TheTVDB when the user has a key and
+/// TMDB has no such season or an incomplete one (tvdb_pure.seasonIncomplete).
+fn sendSeasonJson(stream: std.Io.net.Stream, query: []const u8, path: []const u8, id: i32, season: i32) void {
+    const alloc = @import("../core/alloc.zig").allocator;
+    const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
+    const body = @import("tmdb_api.zig").tmdbApiOwned(path, key, 256 * 1024);
+    defer if (body) |b| alloc.free(b);
+    var imdb_buf: [32]u8 = undefined;
+    const imdb: []const u8 = if (wire.queryParam(query, "imdb")) |raw| (wire.urlDecode(raw, &imdb_buf) orelse "") else "";
+    if (@import("tvdb.zig").completeSeason(id, season, body, imdb, key)) |merged| {
+        defer alloc.free(merged);
+        return wire.sendJson(stream, merged);
+    }
+    if (body) |b| return wire.sendJson(stream, b);
+    wire.sendJson(stream, "{\"error\":\"tmdb fetch failed\"}");
 }
 
 /// Proxy one TMDB details GET through the server. The browser never holds the

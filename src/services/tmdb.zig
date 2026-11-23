@@ -2133,10 +2133,20 @@ fn fetchEpisodesThread(tmdb_id: i32, season_number: i32, my_gen: u32, use_cineme
     else
         std.fmt.bufPrint(&url_buf, "/3/tv/{d}/season/{d}", .{ tmdb_id, season_number }) catch return;
 
-    const buf = (if (use_cinemeta)
+    const tmdb_key = api_key[0..@min(api_key_len, api_key.len)];
+    var fetched = if (use_cinemeta)
         api.cinemetaApiOwned(url, tmdb_pure.DETAIL_BODY_LIMIT)
     else
-        api.tmdbApiOwned(url, api_key[0..@min(api_key_len, api_key.len)], tmdb_pure.DETAIL_BODY_LIMIT)) orelse {
+        api.tmdbApiOwned(url, tmdb_key, tmdb_pure.DETAIL_BODY_LIMIT);
+    // TMDB has no such season, or it is incomplete (placeholder names, no air
+    // dates; common for anime): fill it from TheTVDB when the user has a key.
+    if (!use_cinemeta) {
+        if (@import("tvdb.zig").completeSeason(tmdb_id, season_number, fetched, imdb_id[0..@min(imdb_id_len, imdb_id.len)], tmdb_key)) |merged| {
+            if (fetched) |old| alloc.free(old);
+            fetched = merged;
+        }
+    }
+    const buf = fetched orelse {
         publishDetail(.{ .buffer = &.{}, .len = 0, .id = tmdb_id, .generation = my_gen, .cinemeta = use_cinemeta, .season = season_number });
         return;
     };

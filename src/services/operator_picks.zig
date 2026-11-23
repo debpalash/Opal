@@ -55,7 +55,10 @@ fn ensureTable() bool {
 }
 
 pub fn enabled() bool {
-    return state.app.operator_enabled and state.app.operator_picks_enabled and !state.app.incognito_mode;
+    // Picks carry no certification; a kid profile hides them unless its
+    // parent allowed unrated titles.
+    return state.app.operator_enabled and state.app.operator_picks_enabled and !state.app.incognito_mode and
+        @import("profiles_maturity.zig").unratedVisible();
 }
 
 // ── Taste ───────────────────────────────────────────────────────────────

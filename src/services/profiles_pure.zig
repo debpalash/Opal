@@ -19,10 +19,9 @@ pub const DEFAULT_NAME = "Main";
 
 /// No maturity cap (adult profile).
 pub const NO_CAP: u8 = 255;
-/// Cap a new kid profile starts with.
-pub const KID_DEFAULT_CAP: u8 = 12;
-/// Caps offered in Settings, in display order.
-pub const CAP_CHOICES = [_]u8{ 7, 10, 12, 13, 16, 18 };
+/// Cap a new kid profile starts with (PG / TV-PG). The cap scale and its
+/// labels live in maturity_pure.zig.
+pub const KID_DEFAULT_CAP: u8 = 8;
 
 pub const PIN_MIN: usize = 4;
 pub const PIN_MAX: usize = 8;
@@ -286,6 +285,22 @@ pub fn lockMs(failures: u8) i64 {
     return @min(MAX_LOCK_MS, BASE_LOCK_MS << shift);
 }
 
+/// Outcome of checking a PIN against a stored hash under a backoff.
+pub const PinCheck = enum { ok, required, wrong, locked };
+
+/// `hash` empty = no PIN set (nothing to check). Records the attempt on `bo`.
+pub fn checkPin(hash: []const u8, pin: []const u8, bo: *Backoff, now_ms: i64) PinCheck {
+    if (hash.len == 0) return .ok;
+    if (bo.retryAfterMs(now_ms) > 0) return .locked;
+    if (pin.len == 0) return .required;
+    if (!verifyPin(pin, hash)) {
+        bo.recordFailure(now_ms);
+        return if (bo.retryAfterMs(now_ms) > 0) .locked else .wrong;
+    }
+    bo.recordSuccess();
+    return .ok;
+}
+
 // ── Switching policy ─────────────────────────────────────────────────────────
 
 pub const PinSource = enum { none, target, owner };
@@ -479,6 +494,9 @@ pub fn parse(text: []const u8, reg: *Registry) void {
         p.color = parseColor(color_raw) orelse .accent;
         p.kid = std.mem.eql(u8, kid_raw, "1");
         p.max_age = std.fmt.parseInt(u8, age_raw, 10) catch (if (p.kid) KID_DEFAULT_CAP else NO_CAP);
+        // Kid caps sit on the one rating scale; an old free-form cap snaps
+        // down to the tier below it (tightening, never loosening).
+        if (p.kid) p.max_age = @import("maturity_pure.zig").normalizeCap(p.max_age);
         p.allow_unrated = std.mem.eql(u8, unrated_raw, "1");
         p.setPinHash(pin_raw);
         p.created = std.fmt.parseInt(i64, created_raw, 10) catch 0;
@@ -669,7 +687,7 @@ test "registry round-trips and always holds the default first" {
     kid.setId("00000000000000aa");
     kid.setName("Kiddo");
     kid.kid = true;
-    kid.max_age = 10;
+    kid.max_age = 13;
     kid.color = .green;
     kid.created = 42;
     try reg.add(kid);
@@ -683,7 +701,7 @@ test "registry round-trips and always holds the default first" {
     try T.expectEqualStrings("00000000000000aa", back.activeId());
     const k = back.get("00000000000000aa").?;
     try T.expect(k.kid);
-    try T.expectEqual(@as(u8, 10), k.max_age);
+    try T.expectEqual(@as(u8, 13), k.max_age);
     try T.expectEqual(Color.green, k.color);
     try T.expectEqual(@as(i64, 42), k.created);
     try T.expectEqualStrings("pbkdf2-sha256$1$aa$bb", back.profiles[0].pinHash());
@@ -742,6 +760,8 @@ pub fn writePublicProfiles(w: *std.Io.Writer, active: []const u8, items: []const
     try w.writeAll(",\"profiles\":[");
     for (items, 0..) |*p, i| {
         if (i > 0) try w.writeByte(',');
+        var label_buf: [32]u8 = undefined;
+        const cap = p.effectiveCap();
         try std.json.Stringify.value(.{
             .id = p.idText(),
             .name = p.nameText(),
@@ -750,6 +770,9 @@ pub fn writePublicProfiles(w: *std.Io.Writer, active: []const u8, items: []const
             .has_pin = p.hasPin(),
             .default = p.isDefault(),
             .active = std.mem.eql(u8, p.idText(), active),
+            .max_age = if (cap == NO_CAP) null else @as(?u8, cap),
+            .rating = @import("maturity_pure.zig").capLabel(cap, &label_buf),
+            .allow_unrated = p.kid and p.allow_unrated,
         }, .{}, w);
     }
     try w.writeAll("]}");
@@ -770,7 +793,9 @@ test "profile API quotes identifiers and escapes names without exposing PIN hash
     try std.testing.expectEqualStrings(p.nameText(), row.get("name").?.string);
     try std.testing.expect(row.get("has_pin").?.bool);
     try std.testing.expect(row.get("active").?.bool);
-    try std.testing.expectEqual(@as(usize, 7), row.count());
+    try std.testing.expectEqual(@as(usize, 10), row.count());
+    try std.testing.expect(row.get("max_age").? == .null); // adults uncapped
+    try std.testing.expectEqualStrings("No limit", row.get("rating").?.string);
     try std.testing.expect(std.mem.indexOf(u8, w.buffered(), "secret-hash") == null);
 }
 
@@ -783,4 +808,42 @@ test "child NSFW filter cannot be disabled even before the next owner tick" {
     try std.testing.expect(effectiveNsfwFilter(true, true));
     try std.testing.expect(!effectiveNsfwFilter(false, false));
     try std.testing.expect(effectiveNsfwFilter(false, true));
+}
+
+test "kid cap from an old registry snaps down onto the rating scale" {
+    var reg: Registry = .{};
+    parse("opal-profiles\t1\nactive\tdefault\np\t00000000000000aa\tKid\tgreen\t1\t12\t0\t\t0\np\t00000000000000bb\tAdult\tred\t0\t255\t0\t\t0\n", &reg);
+    try T.expectEqual(@as(u8, 8), reg.get("00000000000000aa").?.max_age);
+    try T.expectEqual(NO_CAP, reg.get("00000000000000bb").?.effectiveCap());
+}
+
+test "profile API exposes a kid's cap as an age and a rating label" {
+    var p: Profile = .{};
+    p.setId("00000000000000aa");
+    p.setName("Kid");
+    p.kid = true;
+    p.max_age = 13;
+    var buf: [4096]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writePublicProfiles(&w, "default", &.{p});
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, w.buffered(), .{});
+    defer parsed.deinit();
+    const row = parsed.value.object.get("profiles").?.array.items[0].object;
+    try T.expectEqual(@as(i64, 13), row.get("max_age").?.integer);
+    try T.expectEqualStrings("PG-13 / TV-PG", row.get("rating").?.string);
+    try T.expect(!row.get("allow_unrated").?.bool);
+}
+
+test "parent pin check: none set, required, wrong, then locked out" {
+    var hb: [HASH_MAX]u8 = undefined;
+    const hash = hashPin("1357", @as([SALT_LEN]u8, @splat(3)), 1000, &hb).?;
+    var bo: Backoff = .{};
+    try T.expectEqual(PinCheck.ok, checkPin("", "", &bo, 0)); // household unlocked
+    try T.expectEqual(PinCheck.required, checkPin(hash, "", &bo, 0));
+    try T.expectEqual(PinCheck.wrong, checkPin(hash, "0000", &bo, 0));
+    try T.expectEqual(PinCheck.wrong, checkPin(hash, "0000", &bo, 0));
+    try T.expectEqual(PinCheck.locked, checkPin(hash, "0000", &bo, 0));
+    try T.expectEqual(PinCheck.locked, checkPin(hash, "1357", &bo, 1000)); // even the right one
+    try T.expectEqual(PinCheck.ok, checkPin(hash, "1357", &bo, BASE_LOCK_MS + 1));
+    try T.expectEqual(@as(u8, 0), bo.failures);
 }

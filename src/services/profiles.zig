@@ -22,6 +22,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const pure = @import("profiles_pure.zig");
+const maturity = @import("maturity_pure.zig");
 const paths = @import("../core/paths.zig");
 const io = @import("../core/io_global.zig");
 const logs = @import("../core/logs.zig");
@@ -218,7 +219,7 @@ pub fn maturityAllows(age: ?u8) bool {
 /// Who is asking. The admin API acts as the household owner.
 pub const Actor = enum { ui, admin_api };
 
-pub const EditError = error{ Forbidden, NotFound, NameEmpty, NameTooLong, NameBadCharacter, NameTaken, BadPin, Full, Default, Running, Storage };
+pub const EditError = error{ Forbidden, NotFound, NameEmpty, NameTooLong, NameBadCharacter, NameTaken, BadPin, Full, Default, Running, Storage, PinRequired, WrongPin, Locked };
 
 fn allowed(actor: Actor, target_id: []const u8) bool {
     return actor == .admin_api or pure.canEdit(&running, target_id);
@@ -275,7 +276,7 @@ pub fn create(actor: Actor, name_raw: []const u8, color: pure.Color, kid: bool, 
     p.setName(name);
     p.color = color;
     p.kid = kid;
-    p.max_age = if (kid) pure.KID_DEFAULT_CAP else pure.NO_CAP;
+    p.max_age = if (kid) maturity.KID_DEFAULT_CAP else pure.NO_CAP;
     p.created = io.timestamp();
     if (pin.len > 0) {
         var hb: [pure.HASH_MAX]u8 = undefined;
@@ -368,17 +369,61 @@ pub fn setColor(actor: Actor, id: []const u8, color: pure.Color) EditError!void 
 }
 
 /// Kid flag + maturity cap + unrated policy. Owner only; never on the default
-/// profile; takes effect on that profile's next launch.
-pub fn setKidOptions(actor: Actor, id: []const u8, kid: bool, max_age: u8, allow_unrated: bool) EditError!void {
+/// profile; takes effect on that profile's next launch. An edit that loosens a
+/// kid profile (higher cap, unrated allowed, kid mode off) needs the parent
+/// (main profile) PIN when one is set, with the same backoff as switching.
+pub fn setKidOptions(actor: Actor, id: []const u8, kid: bool, max_age: u8, allow_unrated: bool, parent_pin: []const u8) EditError!void {
     mutex.lock();
     defer mutex.unlock();
     if (!ownerAction(actor)) return error.Forbidden;
     if (std.mem.eql(u8, id, pure.DEFAULT_ID)) return error.Default;
     const p = reg.get(id) orelse return error.NotFound;
-    p.kid = kid;
-    p.max_age = if (kid) max_age else pure.NO_CAP;
-    p.allow_unrated = allow_unrated;
+    const next: maturity.KidOptions = .{ .kid = kid, .cap = if (kid) maturity.normalizeCap(max_age) else pure.NO_CAP, .allow_unrated = kid and allow_unrated };
+    if (maturity.loosens(.{ .kid = p.kid, .cap = p.max_age, .allow_unrated = p.allow_unrated }, next)) {
+        try checkParentPinLocked(parent_pin);
+    }
+    p.kid = next.kid;
+    p.max_age = next.cap;
+    p.allow_unrated = next.allow_unrated;
     if (!saveLocked()) return error.Storage;
+    var msg_buf: [96]u8 = undefined;
+    var label_buf: [32]u8 = undefined;
+    logs.pushLog("info", "profiles", std.fmt.bufPrint(&msg_buf, "Age limit for {s}: {s}", .{ p.nameText(), maturity.capLabel(p.effectiveCap(), &label_buf) }) catch "Age limit changed", false);
+}
+
+/// Verify the main profile's PIN (no PIN set = the household chose not to lock
+/// it). Shares the owner backoff slot with kid-exit switching.
+fn checkParentPinLocked(pin: []const u8) EditError!void {
+    const owner = reg.defaultProfile() orelse return;
+    return switch (pure.checkPin(owner.pinHash(), pin, backoffFor(pure.DEFAULT_ID), io.milliTimestamp())) {
+        .ok => {},
+        .required => error.PinRequired,
+        .wrong => error.WrongPin,
+        .locked => error.Locked,
+    };
+}
+
+/// Seconds until another parent-PIN attempt is allowed (0 = now).
+pub fn parentRetryAfterSecs() i64 {
+    mutex.lock();
+    defer mutex.unlock();
+    const ms = backoffFor(pure.DEFAULT_ID).retryAfterMs(io.milliTimestamp());
+    return @divTrunc(ms + 999, 1000);
+}
+
+/// Whether the main profile has a PIN (the UI asks for it on loosening edits).
+pub fn parentHasPin() bool {
+    mutex.lock();
+    defer mutex.unlock();
+    const owner = reg.defaultProfile() orelse return false;
+    return owner.hasPin();
+}
+
+/// The running profile's cap + unrated policy, for list filtering.
+pub fn runningCap() struct { cap: u8, allow_unrated: bool } {
+    mutex.lock();
+    defer mutex.unlock();
+    return .{ .cap = running.effectiveCap(), .allow_unrated = running.allow_unrated };
 }
 
 /// Set (or clear, with an empty `pin`) a profile's PIN.

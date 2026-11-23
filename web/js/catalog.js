@@ -572,9 +572,16 @@ async function openMovie(id, title, imdb = ''){
     const poster = meta.poster_path ? 'https://image.tmdb.org/t/p/w500' + meta.poster_path : (meta.poster || meta.background || '');
     renderMovieLibraryActions(id, resolvedTitle, poster, generation)
       .catch(() => { if (detailsCurrent(generation)) toast('Personal library state is unavailable.'); });
-  } catch {
-    if (detailsCurrent(generation)) $('show-meta').textContent = 'Details unavailable — you can still find streams.';
+  } catch (error) {
+    if (!detailsCurrent(generation)) return;
+    if (error?.status === 403) { blockedByProfile(error); return; }
+    $('show-meta').textContent = 'Details unavailable — you can still find streams.';
   }
+}
+// Kid profile: the server refuses titles above the age limit (or unrated).
+function blockedByProfile(error){
+  $('show-actions').innerHTML = '';
+  $('show-meta').textContent = error?.message || 'Not available on this profile.';
 }
 
 async function openShow(id, title, imdb){
@@ -600,7 +607,12 @@ async function openShow(id, title, imdb){
       loadSeason(+b.dataset.sn);
     });
     if (seasons.length) loadSeason(seasons[0].season_number);
-  } catch { if (detailsCurrent(generation)) $('show-meta').textContent = 'Failed to load'; }
+  } catch (error) {
+    if (detailsCurrent(generation)) {
+      if (error?.status === 403) { blockedByProfile(error); return; }
+      $('show-meta').textContent = 'Failed to load';
+    }
+  }
   if (detailsCurrent(generation)) loadLatest(id, generation);
 }
 

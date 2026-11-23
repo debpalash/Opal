@@ -883,6 +883,12 @@ pub const AppState = struct {
     // see config.zig. Downloads arrive as ZIP archives (extracted in-process).
     subdl_api_key: [128]u8 = std.mem.zeroes([128]u8),
     subdl_api_key_len: usize = 0,
+    // ── TheTVDB v4 (anime / obscure-show fallback) ──
+    // User-supplied key only; nothing is shipped. Empty -> services/tvdb.zig is
+    // fully inert. Persisted as a secret like the other keys (config.zig);
+    // never logged.
+    tvdb_api_key: [128]u8 = std.mem.zeroes([128]u8),
+    tvdb_api_key_len: usize = 0,
     // Auto-download subtitles when a video starts and none are present
     // (embedded or sidecar). Needs opensub_api_key; no-ops silently without it.
     auto_download_subs: bool = true,
@@ -1567,6 +1573,15 @@ pub fn setOmdbKey(key: []const u8) void {
     app.omdb_api_key_is_default = false;
 }
 
+/// Copy a user-supplied TheTVDB key into app state.
+pub fn setTvdbKey(key: []const u8) void {
+    const trimmed = std.mem.trim(u8, key, " \t\r\n");
+    const len = @min(trimmed.len, app.tvdb_api_key.len);
+    @memcpy(app.tvdb_api_key[0..len], trimmed[0..len]);
+    @memset(app.tvdb_api_key[len..], 0);
+    app.tvdb_api_key_len = len;
+}
+
 /// Load the TMDB + OMDb keys at startup. Precedence, highest first:
 ///   1. environment vars ($OPAL_TMDB_TOKEN / $TMDB_API_TOKEN / legacy; and
 ///      $OPAL_OMDB_KEY / $OMDB_API_KEY),
@@ -1581,6 +1596,15 @@ pub fn loadTmdbTokenFromEnv() void {
         if (if (std.c.getenv(name)) |raw| std.mem.span(raw) else null) |token| {
             if (token.len > 0) {
                 setTmdbKey(token);
+                break;
+            }
+        }
+    }
+    const tvdb_env = [_][*:0]const u8{ "OPAL_TVDB_KEY", "TVDB_API_KEY" };
+    for (tvdb_env) |name| {
+        if (if (std.c.getenv(name)) |raw| std.mem.span(raw) else null) |key| {
+            if (key.len > 0) {
+                setTvdbKey(key);
                 break;
             }
         }

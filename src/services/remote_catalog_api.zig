@@ -68,9 +68,19 @@ fn sendSnapshot(stream: std.Io.net.Stream) void {
     };
     defer alloc.free(rows);
     state.app.tmdb.results_mutex.lock();
-    const total = state.app.tmdb.results.items.len;
-    const count = @min(total, rows.len);
-    for (state.app.tmdb.results.items[0..count], rows[0..count]) |item, *row| row.* = projection.Row.copy(item);
+    // Kid profiles: rows are already filtered at fetch time; the cache-only
+    // check here keeps the API from serving anything not yet proven in-cap.
+    const maturity = @import("profiles_maturity.zig");
+    var total: usize = 0;
+    var count: usize = 0;
+    for (state.app.tmdb.results.items) |*item| {
+        if (!maturity.visibleCached(item)) continue;
+        total += 1;
+        if (count < rows.len) {
+            rows[count] = projection.Row.copy(item.*);
+            count += 1;
+        }
+    }
     const loading = state.app.tmdb.is_loading.load(.acquire);
     const has_key = state.app.tmdb.api_key_len > 0;
     state.app.tmdb.results_mutex.unlock();

@@ -3202,6 +3202,22 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_profiles_pure).step);
+    const test_maturity_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/maturity_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_maturity_pure).step);
+    const test_tvdb_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/tvdb_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_tvdb_pure).step);
     const test_reliable_fetch_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/reliable_fetch_pure.zig"),

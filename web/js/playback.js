@@ -112,6 +112,7 @@ async function loadSetup(){
     $('setup-install').disabled = !!d.has_sources;
     $('setup-install').textContent = d.has_sources ? 'Starter sources installed' : 'Install starter sources';
     $('setup-tmdb').textContent = d.has_tmdb ? 'TMDB key set ✓' : 'Optional. Only adds richer metadata; everything works without it.';
+    if (d.has_tvdb) $('setup-tvdb').textContent = 'TheTVDB key set. Used when TMDB has no match or is missing episodes.';
   } catch {}
   loadSources();
   loadSettings();
