@@ -109,6 +109,7 @@ from features import (  # noqa: F401
     test_youtube_innertube,
     test_library,
     test_profiles,
+    test_kids_tvdb,
     test_web_shell,
     test_web_ui,
     test_headless_auth,

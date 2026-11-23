@@ -833,6 +833,11 @@ const apiPost = (path, body) => fetch(BASE + '/api/access' + path, {
   body: body || '',
 }).then(async r => { const d = await r.json().catch(() => ({})); return { ok: r.ok, d }; });
 
+$('setup-tvdb-save').onclick = async () => {
+  const k = $('setup-tvdb-key').value.trim(); if (!k) return;
+  try { await apiFormMutation('/setup/tvdb', {key:k}); $('setup-tvdb').textContent = 'TheTVDB key set. Used when TMDB has no match or is missing episodes.'; $('setup-tvdb-key').value=''; }
+  catch { $('setup-tvdb').textContent = 'Failed to save'; }
+};
 $('setup-tmdb-save').onclick = async () => {
   const k = $('setup-tmdb-key').value.trim(); if (!k) return;
   try { await apiFormMutation('/setup/tmdb', {key:k}); $('setup-tmdb').textContent = 'TMDB key set ✓'; $('setup-tmdb-key').value=''; browseLoaded = false; }

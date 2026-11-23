@@ -519,12 +519,16 @@
     </details>
     <div class="sect">Profiles</div>
     <form id="profile-form" class="search-row"><select id="profile-choice" aria-label="Profile"></select><input id="profile-pin" type="password" inputmode="numeric" autocomplete="off" aria-label="Profile PIN" placeholder="PIN if required"><button id="profile-switch" type="submit">Switch profile</button><button id="profile-refresh" type="button">Refresh profiles</button></form><div id="profile-status" class="hint" role="status" aria-live="polite"></div>
+    <form id="profile-kid-form" class="search-row" hidden><select id="profile-kid-target" aria-label="Kid profile"></select><select id="profile-kid-rating" aria-label="Highest rating allowed"></select><label class="hint"><input id="profile-kid-unrated" type="checkbox"> Allow unrated titles</label><label class="hint"><input id="profile-kid-on" type="checkbox" checked> Kid profile</label><input id="profile-kid-pin" type="password" inputmode="numeric" autocomplete="off" aria-label="Main profile PIN" placeholder="Main profile PIN (to loosen limits)"><button id="profile-kid-save" type="submit">Save age limits</button></form><div id="profile-kid-status" class="hint" role="status" aria-live="polite"></div>
     <div class="sect">Sources</div>
     <div id="setup-sources" class="hint">Checking…</div>
     <button id="setup-install" class="quick-btn">Install starter sources</button>
     <div class="sect">TMDB key (advanced, optional)</div>
     <div id="setup-tmdb" class="hint">Optional. Only adds richer metadata; everything works without it.</div>
     <div class="search-row"><input id="setup-tmdb-key" placeholder="Optional: your own TMDB token" autocapitalize="off"><button id="setup-tmdb-save">Save</button></div>
+    <div class="sect">TheTVDB key (optional)</div>
+    <div id="setup-tvdb" class="hint">Optional. Fills in anime and obscure shows when TMDB has no match or is missing episodes. Use your own key from thetvdb.com.</div>
+    <div class="search-row"><input id="setup-tvdb-key" type="password" placeholder="Optional: your TheTVDB v4 API key" autocapitalize="off" autocomplete="off"><button id="setup-tvdb-save">Save</button></div>
     <div class="sect">Comic / novel sources</div>
     <div class="hint" id="srcs-hint">Install a site from the bundled catalog.</div>
     <div class="search-row"><input id="srcs-q" placeholder="Filter catalog…" autocapitalize="off"></div>

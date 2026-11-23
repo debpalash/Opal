@@ -14,6 +14,7 @@ const components = @import("components.zig");
 const state = @import("../core/state.zig");
 const profiles = @import("../services/profiles.zig");
 const pure = @import("../services/profiles_pure.zig");
+const mp = @import("../services/maturity_pure.zig");
 
 // ── UI-thread state ──────────────────────────────────────────────────────────
 var switch_open: bool = false;
@@ -31,6 +32,12 @@ var edit_id: [pure.ID_MAX]u8 = std.mem.zeroes([pure.ID_MAX]u8);
 var edit_len: usize = 0;
 var edit_name: [pure.NAME_MAX + 1]u8 = std.mem.zeroes([pure.NAME_MAX + 1]u8);
 var edit_pin: [pure.PIN_MAX + 1]u8 = std.mem.zeroes([pure.PIN_MAX + 1]u8);
+// Kid options staged in the editor until "Apply"; loosening asks for the
+// parent PIN first.
+var edit_kid: bool = false;
+var edit_cap: u8 = mp.KID_DEFAULT_CAP;
+var edit_unrated: bool = false;
+var parent_pin: [pure.PIN_MAX + 1]u8 = std.mem.zeroes([pure.PIN_MAX + 1]u8);
 
 fn zText(buf: []const u8) []const u8 {
     return buf[0 .. std.mem.indexOfScalar(u8, buf, 0) orelse buf.len];
@@ -347,6 +354,9 @@ fn editError(e: profiles.EditError) []const u8 {
         error.Default => "The main profile cannot be changed that way",
         error.Running => "Switch to another profile first",
         error.Storage => "Could not save profiles",
+        error.PinRequired => "Enter the main profile's PIN to loosen kid limits",
+        error.WrongPin => "Wrong PIN",
+        error.Locked => "Too many attempts - wait and try again",
     };
 }
 
@@ -374,11 +384,6 @@ fn field(buf: []u8, placeholder: []const u8, password: bool, id_extra: usize) vo
         .corners = theme.dims.rad_sm,
     });
     te.deinit();
-}
-
-fn capIndex(cap: u8) usize {
-    for (pure.CAP_CHOICES, 0..) |c, i| if (c == cap) return i;
-    return 2; // 12
 }
 
 pub fn renderSettingsTab() void {
@@ -438,6 +443,10 @@ pub fn renderSettingsTab() void {
                     @memset(&edit_name, 0);
                     @memcpy(edit_name[0..p.name_len], p.nameText());
                     @memset(&edit_pin, 0);
+                    edit_kid = p.kid;
+                    edit_cap = if (p.kid) p.max_age else mp.KID_DEFAULT_CAP;
+                    edit_unrated = p.allow_unrated;
+                    @memset(&parent_pin, 0);
                 }
             }
         }
@@ -471,19 +480,27 @@ pub fn renderSettingsTab() void {
             }
         }
         if (owner and !p.isDefault()) {
-            var kid = p.kid;
-            components.toggleRow(@src(), "Kid profile", "Forces the NSFW filter, caps age ratings, hides Settings and sources. Leaving it needs the main profile's PIN.", &kid);
-            var unrated = p.allow_unrated;
-            var cap = p.max_age;
-            if (kid) {
-                sectionLabel("Highest age rating allowed", 7670 + i);
-                const cap_labels = [_][]const u8{ "7", "10", "12", "13", "16", "18" };
-                if (components.segment(@src(), &cap_labels, capIndex(if (p.kid) p.max_age else pure.KID_DEFAULT_CAP))) |ci| cap = pure.CAP_CHOICES[ci];
-                components.toggleRow(@src(), "Allow unrated titles", "Titles with no known age rating stay hidden unless this is on", &unrated);
+            components.toggleRow(@src(), "Kid profile", "Forces the NSFW filter, hides titles above the age limit (and unrated ones) from browse, search, rails and recommendations, and locks Settings and sources. Leaving it needs the main profile's PIN.", &edit_kid);
+            if (edit_kid) {
+                var label_buf: [32]u8 = undefined;
+                var head_buf: [64]u8 = undefined;
+                sectionLabel(std.fmt.bufPrint(&head_buf, "Highest rating allowed: {s}", .{mp.capLabel(edit_cap, &label_buf)}) catch "Highest rating allowed", 7670 + i);
+                if (components.segment(@src(), &mp.TIER_SHORT, mp.tierIndex(edit_cap))) |ci| edit_cap = mp.TIERS[ci].age;
+                components.toggleRow(@src(), "Allow unrated titles", "Titles with no known age rating stay hidden unless this is on", &edit_unrated);
             }
-            if (kid != p.kid or unrated != p.allow_unrated or (kid and cap != p.max_age)) {
-                const eff_cap = if (kid and !p.kid) pure.KID_DEFAULT_CAP else cap;
-                profiles.setKidOptions(.ui, pid, kid, eff_cap, unrated) catch |e| state.showToast(editError(e));
+            const prev: mp.KidOptions = .{ .kid = p.kid, .cap = p.max_age, .allow_unrated = p.allow_unrated };
+            const next: mp.KidOptions = .{ .kid = edit_kid, .cap = if (edit_kid) edit_cap else pure.NO_CAP, .allow_unrated = edit_kid and edit_unrated };
+            if (mp.differs(prev, next)) {
+                const need_pin = mp.loosens(prev, next) and profiles.parentHasPin();
+                var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 60, .expand = .horizontal, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
+                defer row.deinit();
+                if (need_pin) field(parent_pin[0..pure.PIN_MAX], "Main profile PIN", true, 7675 + i);
+                if (components.actionButton(@src(), "Apply age limits", .primary, 7676 + i)) {
+                    if (profiles.setKidOptions(.ui, pid, next.kid, next.cap, next.allow_unrated, zText(&parent_pin))) |_| {
+                        state.showToast("Saved - applies the next time this profile opens");
+                    } else |e| state.showToast(editError(e));
+                    @memset(&parent_pin, 0);
+                }
             }
             {
                 var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 70, .expand = .horizontal, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
@@ -502,7 +519,7 @@ pub fn renderSettingsTab() void {
     sectionLabel("Add a profile", 7700);
     field(new_name[0..pure.NAME_MAX], "Name", false, 7701);
     field(new_pin[0..pure.PIN_MAX], "PIN (optional, 4-8 digits)", true, 7702);
-    components.toggleRow(@src(), "Kid profile", "Starts capped at age 12; unrated titles hidden", &new_kid);
+    components.toggleRow(@src(), "Kid profile", "Starts at PG / TV-PG; unrated titles hidden", &new_kid);
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
     defer row.deinit();
     if (components.actionButton(@src(), "Create profile", .primary, 7703)) {

@@ -31,7 +31,7 @@
 
 ### 2.2 — Metadata & Poster Art
 - [x] TMDB API integration (movies + TV shows)
-- [ ] TVDB fallback for anime/obscure shows
+- [x] TVDB fallback for anime/obscure shows (user key; no-match search + incomplete seasons)
 - [x] Poster grid view (Netflix-style browsable library)
 - [x] Metadata panel: synopsis, rating, cast, year, genre
 - [x] Auto-match filenames to TMDB IDs (fuzzy match)
@@ -218,7 +218,7 @@ Unchecked capabilities below are not claims of complete verification.
 - [ ] Duplicate detection (perceptual hashing) and auto chapters
 
 ### 7.3 — Household
-- [ ] Profiles with PIN and kids mode (maturity cap, NSFW forced off)
+- [x] Profiles with PIN and kids mode (maturity cap, NSFW forced off; enforced server-side)
 - [ ] Per-profile history, library, recommendations, and sync identity
 
 ### 7.4 — Continuum (play anywhere)

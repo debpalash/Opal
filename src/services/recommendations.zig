@@ -197,6 +197,9 @@ pub fn generateRecommendations() void {
 
         fn addRec(title: []const u8, reason: []const u8, id: i32, score: f64, poster_path: []const u8) void {
             if (rec_count >= 20) return;
+            // Kid profiles: only titles proven within the age cap (id 0 =
+            // a plain title with no catalog identity, i.e. unrated).
+            if (!@import("profiles_maturity.zig").idVisibleBlocking(id)) return;
             var rec = &recommendations[rec_count];
             const tlen = @min(title.len, 127);
             @memcpy(rec.title[0..tlen], title[0..tlen]);

@@ -19,7 +19,7 @@ fn secretBit(key: []const u8) u16 {
         "omdb_api_key",   "subdl_api_key",  "jf_token",
         "abs_token",      "opds_user",      "opds_pass",
         "lsync_token",    "lsync_p0_token", "lsync_p1_token",
-        "lsync_p2_token", "lsync_p3_token",
+        "lsync_p2_token", "lsync_p3_token", "tvdb_api_key",
     };
     for (names, 0..) |name, index| {
         if (std.mem.eql(u8, key, name)) return @as(u16, 1) << @intCast(index);
@@ -158,6 +158,7 @@ fn saveChecked() !void {
     setSecretKey("opensub_api_key", state.app.opensub_api_key[0..state.app.opensub_api_key_len]);
     setSecretKey("omdb_api_key", if (state.app.omdb_api_key_is_default) "" else state.app.omdb_api_key[0..state.app.omdb_api_key_len]);
     setSecretKey("subdl_api_key", state.app.subdl_api_key[0..state.app.subdl_api_key_len]);
+    setSecretKey("tvdb_api_key", state.app.tvdb_api_key[0..state.app.tvdb_api_key_len]);
     setKey("sponsorblock_enabled", if (state.app.sponsorblock_enabled) "1" else "0");
     setKey("anime_skip_enabled", if (state.app.anime_skip_enabled) "1" else "0");
     setKey("anime_skip_intro", if (state.app.anime_skip_intro) "1" else "0");
@@ -569,6 +570,7 @@ fn migrateLoadedSecrets() void {
     if (mask & secretBit("opensub_api_key") != 0) setSecretKey("opensub_api_key", state.app.opensub_api_key[0..state.app.opensub_api_key_len]);
     if (mask & secretBit("omdb_api_key") != 0) setSecretKey("omdb_api_key", if (state.app.omdb_api_key_is_default) "" else state.app.omdb_api_key[0..state.app.omdb_api_key_len]);
     if (mask & secretBit("subdl_api_key") != 0) setSecretKey("subdl_api_key", state.app.subdl_api_key[0..state.app.subdl_api_key_len]);
+    if (mask & secretBit("tvdb_api_key") != 0) setSecretKey("tvdb_api_key", state.app.tvdb_api_key[0..state.app.tvdb_api_key_len]);
     if (mask & secretBit("jf_token") != 0) setSecretKey("jf_token", state.app.jf.token[0..state.app.jf.token_len]);
     if (mask & secretBit("abs_token") != 0) setSecretKey("abs_token", state.app.abs.token[0..state.app.abs.token_len]);
     for (lsync_token_keys, 0..) |key, i| {
@@ -831,6 +833,11 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         if (val.len > 0 and loadSecretValue(key, val, &state.app.omdb_api_key, &restored_len) and restored_len > 0) {
             state.app.omdb_api_key_len = restored_len;
             state.app.omdb_api_key_is_default = false;
+        }
+    } else if (std.mem.eql(u8, key, "tvdb_api_key")) {
+        var restored_len: usize = 0;
+        if (val.len > 0 and loadSecretValue(key, val, &state.app.tvdb_api_key, &restored_len) and restored_len > 0) {
+            state.app.tvdb_api_key_len = restored_len;
         }
     } else if (std.mem.eql(u8, key, "subdl_api_key")) {
         var restored_len: usize = 0;
