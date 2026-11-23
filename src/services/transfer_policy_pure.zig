@@ -152,6 +152,27 @@ pub const Policy = struct {
     seed_minutes: u32 = 0,
 };
 
+/// Settings presets for the policy keys (0 = off/unlimited everywhere).
+pub const max_active_presets = [_]u32{ 0, 1, 2, 3, 5 };
+pub const reserve_mb_presets = [_]u32{ 0, 256, 1024, 5120 };
+pub const seed_ratio_presets = [_]u32{ 0, 100, 150, 200 };
+pub const seed_minutes_presets = [_]u32{ 0, 60, 360, 1440 };
+
+/// Index of the preset to highlight: exact match, else the nearest one, so a
+/// hand-edited config value still selects something sensible.
+pub fn presetIndex(value: u32, presets: []const u32) usize {
+    var best: usize = 0;
+    var best_d: u64 = std.math.maxInt(u64);
+    for (presets, 0..) |p, i| {
+        const d: u64 = if (p > value) p - value else value - p;
+        if (d < best_d) {
+            best = i;
+            best_d = d;
+        }
+    }
+    return best;
+}
+
 pub fn clampMaxActive(v: i64) u32 {
     return @intCast(std.math.clamp(v, 0, 32));
 }
@@ -645,4 +666,18 @@ test "policy clamps" {
     try t.expectEqual(@as(u32, 10_000), clampRatioX100(1 << 40));
     try t.expectEqual(@as(u32, 525_600), clampSeedMinutes(1 << 40));
     try t.expectEqual(@as(u32, 1024 * 1024), clampReserveMb(1 << 40));
+}
+
+test "settings presets select exact or nearest value" {
+    try std.testing.expectEqual(@as(usize, 0), presetIndex(0, &max_active_presets));
+    try std.testing.expectEqual(@as(usize, 4), presetIndex(5, &max_active_presets));
+    try std.testing.expectEqual(@as(usize, 4), presetIndex(32, &max_active_presets));
+    try std.testing.expectEqual(@as(usize, 1), presetIndex(256, &reserve_mb_presets));
+    try std.testing.expectEqual(@as(usize, 1), presetIndex(300, &reserve_mb_presets));
+    try std.testing.expectEqual(@as(usize, 2), presetIndex(150, &seed_ratio_presets));
+    // every preset survives the config clamps unchanged
+    for (max_active_presets) |v| try std.testing.expectEqual(v, clampMaxActive(v));
+    for (reserve_mb_presets) |v| try std.testing.expectEqual(v, clampReserveMb(v));
+    for (seed_ratio_presets) |v| try std.testing.expectEqual(v, clampRatioX100(v));
+    for (seed_minutes_presets) |v| try std.testing.expectEqual(v, clampSeedMinutes(v));
 }

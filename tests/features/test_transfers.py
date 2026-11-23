@@ -118,3 +118,22 @@ def test_transfer_policy_wiring():
     if "pub fn transition(" not in pure or "error.InvalidTransition" not in pure:
         return "fail", "state transitions must be explicit and typed"
     return "pass", "settings -> watchdog policy -> libtorrent; playback exempt from queue; API state"
+
+
+@test("Settings expose the transfer policy and TVDB key", "Settings")
+def test_settings_v2_controls():
+    net = _src("src/ui/settings/network.zig")
+    gen = _src("src/ui/settings/general.zig")
+    pure = _src("src/services/transfer_policy_pure.zig")
+    checks = {
+        "presets are pure and tested": "pub fn presetIndex(" in pure and 'test "settings presets select exact or nearest value"' in pure,
+        "all four policy keys have a themed segment": all(
+            f"tp.presetIndex(state.app.{k}, &tp.{p})" in net for k, p in (
+                ("torrent_max_active", "max_active_presets"), ("torrent_reserve_mb", "reserve_mb_presets"),
+                ("torrent_seed_ratio_x100", "seed_ratio_presets"), ("torrent_seed_minutes", "seed_minutes_presets"))),
+        "policy edits persist": net.count("state.markConfigDirty();") >= 6,
+        "TVDB key field is masked and saved": "&state.app.tvdb_api_key" in gen and '.password_char = "•"' in gen
+                                             and "state.app.tvdb_api_key_len = std.mem.indexOfScalar" in gen,
+    }
+    bad = [k for k, ok in checks.items() if not ok]
+    return ("fail", ", ".join(bad)) if bad else ("pass", "4 policy segments (pure presets) + masked TVDB key in Settings")
