@@ -75,6 +75,7 @@ from features import (  # noqa: F401
     test_page_shell3,
     test_audiobooks,
     test_reading,
+    test_reader_quality,
     test_manga_madara,
     test_novels,
     test_novel_sources,

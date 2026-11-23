@@ -9,6 +9,7 @@ const subtitles_mod = @import("../player/subtitles.zig");
 const podcasts_pure = @import("../services/podcasts_pure.zig");
 const radio_pure = @import("../services/radio_pure.zig");
 const iptv_pure = @import("../services/iptv_pure.zig");
+const reader_pure = @import("../services/reader_pure.zig");
 const music_pure = @import("../services/music_subsonic_pure.zig");
 const audiobookshelf_pure = @import("../services/audiobookshelf_pure.zig");
 const opds_pure = @import("../services/opds_pure.zig");
@@ -1014,7 +1015,11 @@ pub const AppState = struct {
         // subsequent scraper/MangaDex comic never sends stale credentials.
         auth_header: [512]u8 = std.mem.zeroes([512]u8),
         auth_header_len: usize = 0,
-        view_mode: enum { scroll, single_page } = .scroll,
+        // Reading mode (scroll / single page / two-page spread), page direction
+        // and zoom. Ordering + stepping + sizing live in services/reader_pure.zig.
+        view_mode: reader_pure.Mode = .scroll,
+        rtl: bool = false,
+        zoom: f32 = 1.0,
         current_page: usize = 0,
         dl_progress: std.atomic.Value(usize) = std.atomic.Value(usize).init(0), // images downloaded (atomic: written by ≤8 concurrent workers)
         // ── Download cancellation (UAF guard) ──

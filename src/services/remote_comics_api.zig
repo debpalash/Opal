@@ -19,6 +19,12 @@ pub fn apiComics(stream: std.Io.net.Stream, api_path: []const u8, query: []const
         if (getQueryParam(query, "url")) |url| {
             var decoded: [512]u8 = undefined;
             const comic_url = urlDecode(url, &decoded) orelse url;
+            // A remote client must not make the host open its own files: local
+            // archive routes (cbz:/file:/absolute paths) are desktop-only.
+            if (@import("reader_pure.zig").localArchivePath(comic_url) != null) {
+                sendJsonStatus(stream, "403 Forbidden", "{\"error\":\"local archives open in the desktop app\"}");
+                return;
+            }
             const comics_svc = @import("comics.zig");
             // Defer to the UI thread: loadComic frees textures via dvui (UI-only).
             comics_svc.requestLoad(comic_url);

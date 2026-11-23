@@ -504,6 +504,13 @@ button:disabled{cursor:not-allowed}
 .reader{white-space:pre-wrap;line-height:1.65;font-size:15px;padding:4px 2px 40px;color:var(--text-1)}
 /* Comic pages are tall scans — full width, never wider than the viewport. */
 .cx-page{display:block;width:100%;height:auto;max-width:1200px;margin:0 auto 2px;border-radius:0}
+#cx-pages{--cx-zoom:1;overflow-x:auto}
+#cx-pages .cx-page{width:calc(100% * var(--cx-zoom));max-width:calc(1200px * var(--cx-zoom))}
+#cx-pages.cx-paged{display:flex;justify-content:center;align-items:flex-start;gap:4px}
+#cx-pages.cx-spread .cx-page-slot{flex:1 1 0;min-width:0}
+#cx-pages.cx-spread .cx-page{max-height:calc(100vh * var(--cx-zoom));width:auto;max-width:100%}
+.cx-view-controls{flex-wrap:wrap;gap:6px}
+.cx-view-controls button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
 .cx-page-error{min-height:160px;cursor:pointer;background:var(--bg-surface);padding:16px;object-fit:contain}
 #cx-reader,#nv-text{margin-bottom:32px}
 .tor{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--rad);
