@@ -160,13 +160,22 @@ fn renderPlayer(viewport: layout.Viewport, video: layout.Insets, edges: layout.I
         @import("footer.zig").renderStatsOverlay();
         @import("skip_overlay.zig").render();
     }
-    const top = layout.bandOffset(edges.top, 32);
-    var top_bar = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_y = 0, .padding = .{ .x = edges.left + 12, .y = top, .w = edges.right + 12, .h = 0 } });
+    // Back floats over the video (overlay child, wrapped to its own size) and
+    // fades/hides with the transport bar; hidden it must not catch taps either.
+    const vis = @import("footer.zig").chromeOpacityNow();
+    if (vis <= 0) {
+        back_button_rect = .{};
+        @import("shell.zig").setPlayerTopChrome(.{});
+        return;
+    }
+    const prev_alpha = dvui.alpha(vis);
+    defer dvui.alphaSet(prev_alpha);
+    const top = layout.bandOffset(edges.top, layout.MIN_TOUCH);
+    // Left edge matches the transport bar's content edge (cutout inset only).
+    var top_bar = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 0, .gravity_y = 0, .margin = .{ .x = edges.left, .y = top, .w = 0, .h = 0 } });
     defer top_bar.deinit();
-    var hit = dvui.box(@src(), .{}, .{});
-    if (components.iconButton(@src(), icons.@"chevron-left", "Back to browsing", false)) state.app.router.leavePlayer();
-    back_button_rect = hit.data().borderRectScale().r;
-    hit.deinit();
+    if (components.iconButtonTouch(@src(), icons.@"chevron-left", "Back to browsing", layout.MIN_TOUCH, layout.BAR_ICON)) state.app.router.leavePlayer();
+    back_button_rect = top_bar.data().borderRectScale().r;
     @import("shell.zig").setPlayerTopChrome(top_bar.data().borderRectScale().r);
 }
 

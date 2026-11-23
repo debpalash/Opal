@@ -46,11 +46,52 @@ pub fn playerChromeInsets(requested: Insets) Insets {
     return requested;
 }
 /// Compact one-row mobile transport bar: content height == minimum touch target.
-pub const MIN_TOUCH: f32 = 40;
+/// Apple HIG wants >= 44pt, Material >= 48dp; 44 keeps the bar compact.
+pub const MIN_TOUCH: f32 = 44;
 pub const BAR_HEIGHT: f32 = MIN_TOUCH;
 /// Icon content + padding of a bar button; always reaches MIN_TOUCH.
 pub const BAR_ICON: f32 = 20;
 pub const BAR_ICON_PAD: f32 = (MIN_TOUCH - BAR_ICON) / 2;
+/// Seek thumb: a solid accent dot (not dvui's hollow ring), centred on the track.
+pub const THUMB_DIA: f32 = 16;
+/// Idle time before player chrome (transport bar AND Back button) starts to
+/// fade, and the fade length.
+pub const CHROME_HIDE_MS: i64 = 2500;
+pub const CHROME_FADE_MS: i64 = 220;
+/// Chrome opacity 0..1: held (paused / popover open) or fresh activity = 1,
+/// then a linear fade, then 0. Zero exactly when `chromeVisible` is false.
+pub fn chromeOpacity(idle_ms: i64, held: bool, threshold_ms: i64, fade_ms: i64) f32 {
+    if (held or idle_ms <= threshold_ms) return 1.0;
+    if (!chromeVisible(idle_ms, threshold_ms, fade_ms)) return 0.0;
+    const t = @as(f32, @floatFromInt(idle_ms - threshold_ms)) / @as(f32, @floatFromInt(@max(1, fade_ms)));
+    return std.math.clamp(1.0 - t, 0.0, 1.0);
+}
+/// Seek position 0..1 for a touch at `x` over a track starting at `track_x`.
+pub fn seekFraction(x: f32, track_x: f32, track_w: f32) f32 {
+    if (!(track_w > 0) or !std.math.isFinite(x)) return 0;
+    return std.math.clamp((x - track_x) / track_w, 0, 1);
+}
+/// Thumb centre x: the dot stays fully inside the track ends.
+pub fn thumbCenterX(track_x: f32, track_w: f32, frac: f32, dia: f32) f32 {
+    const f = if (std.math.isFinite(frac)) std.math.clamp(frac, 0, 1) else 0;
+    const inner = @max(0, track_w - dia);
+    return track_x + dia / 2 + inner * f;
+}
+pub const FrameRect = struct { x: f32, y: f32, w: f32, h: f32 };
+/// Video frame of `dw` x `dh` centred in a `vw` x `vh` pane (symmetric
+/// letterbox / pillarbox; never larger than the pane).
+pub fn centeredFrame(vw: f32, vh: f32, dw: f32, dh: f32) FrameRect {
+    if (!(vw > 0 and vh > 0 and dw > 0 and dh > 0) or !std.math.isFinite(vw + vh + dw + dh)) return .{ .x = 0, .y = 0, .w = @max(0, vw), .h = @max(0, vh) };
+    const k = @min(1.0, @min(vw / dw, vh / dh));
+    const w = dw * k;
+    const h = dh * k;
+    return .{ .x = (vw - w) / 2, .y = (vh - h) / 2, .w = w, .h = h };
+}
+/// Top (y) of a box of `h` centred on `center_y` (icon buttons, time labels,
+/// track and thumb all share one centre line).
+pub fn centeredTop(center_y: f32, h: f32) f32 {
+    return center_y - h / 2;
+}
 /// Chrome fully hidden once idle passes threshold + fade.
 pub fn chromeVisible(idle_ms: i64, threshold_ms: i64, fade_ms: i64) bool {
     return idle_ms < threshold_ms + fade_ms;
@@ -116,4 +157,53 @@ test "portrait landscape and keyboard layouts fit the full mobile display" {
     try std.testing.expectEqual(@as(f32, 381), landscape.content_height);
     const invalid = fit(0, 0, .{ .top = 1000, .bottom = 1000 });
     try std.testing.expect(invalid.content_width > 0 and invalid.content_height > 0);
+}
+
+test "bar controls and seek hit area meet 44pt (HIG)" {
+    try std.testing.expect(MIN_TOUCH >= 44);
+    try std.testing.expect(BAR_HEIGHT >= 44);
+    try std.testing.expect(THUMB_DIA < BAR_HEIGHT and THUMB_DIA >= 12);
+}
+test "regression: Back button hides with the transport bar" {
+    const t = CHROME_HIDE_MS;
+    const f = CHROME_FADE_MS;
+    try std.testing.expectEqual(@as(f32, 1), chromeOpacity(0, false, t, f));
+    try std.testing.expectEqual(@as(f32, 1), chromeOpacity(t, false, t, f));
+    const mid = chromeOpacity(t + f / 2, false, t, f);
+    try std.testing.expect(mid > 0 and mid < 1);
+    try std.testing.expectEqual(@as(f32, 0), chromeOpacity(t + f, false, t, f));
+    try std.testing.expectEqual(@as(f32, 0), chromeOpacity(60_000, false, t, f));
+    // held (paused / popover): never hides
+    try std.testing.expectEqual(@as(f32, 1), chromeOpacity(60_000, true, t, f));
+    // opacity is 0 exactly when chromeVisible is false
+    var i: i64 = 0;
+    while (i < 6000) : (i += 37) try std.testing.expectEqual(chromeVisible(i, t, f), chromeOpacity(i, false, t, f) > 0);
+}
+test "seek thumb stays on the track and maps touches" {
+    try std.testing.expectEqual(@as(f32, 0), seekFraction(10, 50, 200));
+    try std.testing.expectEqual(@as(f32, 1), seekFraction(999, 50, 200));
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), seekFraction(150, 50, 200), 1e-6);
+    try std.testing.expectEqual(@as(f32, 0), seekFraction(5, 0, 0));
+    try std.testing.expectEqual(@as(f32, 58), thumbCenterX(50, 200, 0, 16));
+    try std.testing.expectEqual(@as(f32, 242), thumbCenterX(50, 200, 1, 16));
+    try std.testing.expectEqual(@as(f32, 150), thumbCenterX(50, 200, 0.5, 16));
+}
+test "regression: icons, labels and track share one centre line" {
+    // Bar icon button (44 box) and the 44 scrub row centre on the same y.
+    const c: f32 = 100;
+    try std.testing.expectEqual(centeredTop(c, BAR_HEIGHT) + BAR_HEIGHT / 2, c);
+    try std.testing.expectEqual(centeredTop(c, THUMB_DIA) + THUMB_DIA / 2, c);
+}
+
+test "regression: ultra-wide video letterboxes symmetrically, never offset or cropped" {
+    // 2.55:1 frame in a 874x402 landscape pane: bars equal top and bottom.
+    const r = centeredFrame(874, 402, 874, 342.7);
+    try std.testing.expectApproxEqAbs(r.y, 402 - (r.y + r.h), 1e-3);
+    try std.testing.expect(r.y > 0 and r.y + r.h <= 402);
+    // oversized request (balanced/cover) is clamped into the pane
+    const o = centeredFrame(874, 402, 993, 457);
+    try std.testing.expect(o.x >= 0 and o.y >= 0 and o.x + o.w <= 874.01 and o.y + o.h <= 402.01);
+    try std.testing.expectApproxEqAbs(o.y, 402 - (o.y + o.h), 1e-3);
+    // degenerate input falls back to the pane
+    try std.testing.expectEqual(@as(f32, 874), centeredFrame(874, 402, 0, 0).w);
 }

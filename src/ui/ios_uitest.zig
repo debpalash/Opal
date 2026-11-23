@@ -45,6 +45,12 @@ const steps = [_]Step{
     .{ .name = "radio_play", .enter = enterRadioPlay, .ready = onPlayer, .timeout_ms = 10_000 },
     .{ .name = "radio_back", .enter = tapBack, .ready = leftPlayer, .timeout_ms = 5_000 },
     .{ .name = "player_file", .enter = enterPlayerFile, .ready = playing, .timeout_ms = 20_000 },
+    // Player chrome walk: shown/hidden in the launch orientation, then the same
+    // in the other one (screenshots are the visual check for the chrome layout).
+    .{ .name = "player_chrome", .enter = wakeChrome, .ready = always, .timeout_ms = 1_000 },
+    .{ .name = "player_chrome_hidden", .enter = always_enter, .ready = chromeHidden, .timeout_ms = 8_000 },
+    .{ .name = "player_rot_chrome", .enter = rotateWithChrome, .ready = rotatedWithChrome, .timeout_ms = 6_000 },
+    .{ .name = "player_rot_hidden", .enter = always_enter, .ready = chromeHidden, .timeout_ms = 8_000 },
     .{ .name = "player_torrent", .enter = enterTorrent, .ready = torrentStarted, .timeout_ms = 60_000 },
 };
 
@@ -370,6 +376,29 @@ fn leftPlayer() bool {
 }
 var left_once = false;
 extern fn opal_ios_open_demo() void;
+fn always_enter() void {}
+/// Wake the player chrome so the shot shows the bar + Back button.
+fn wakeChrome() void {
+    state.app.last_mouse_move_ms = io.milliTimestamp();
+}
+/// Chrome (bar + Back) has idled out.
+fn chromeHidden() bool {
+    const ml = @import("mobile_layout_pure.zig");
+    return !ml.chromeVisible(io.milliTimestamp() - state.app.last_mouse_move_ms, ml.CHROME_HIDE_MS, ml.CHROME_FADE_MS);
+}
+var rot_to_landscape = true;
+/// Flip orientation and wake the chrome so the shot shows it.
+fn rotateWithChrome() void {
+    const r = dvui.windowRect();
+    rot_to_landscape = r.h > r.w;
+    opal_ios_set_landscape(rot_to_landscape);
+    state.app.last_mouse_move_ms = io.milliTimestamp();
+}
+fn rotatedWithChrome() bool {
+    const r = dvui.windowRect();
+    state.app.last_mouse_move_ms = io.milliTimestamp();
+    return if (rot_to_landscape) r.w > r.h else r.h > r.w;
+}
 fn enterPlayerFile() void {
     opal_ios_open_demo();
 }
