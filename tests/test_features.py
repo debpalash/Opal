@@ -93,6 +93,7 @@ from features import (  # noqa: F401
     test_manga_themesia,
     test_manga_catalog,
     test_scrape_fetch,
+    test_extraction_privacy,
     test_extension,
     test_anime_extractors,
     test_anime_sites,

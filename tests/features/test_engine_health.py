@@ -760,10 +760,12 @@ def retrieve_url_routes_walls_to_the_browser():
               encoding="utf-8").read()
     if '"/api/scrape"' not in rm or "fn handleScrape(" not in rm:
         return "fail", "remote.zig exposes no /api/scrape for the engines to call"
-    if "sf.scrapeFetch(url, buf)" not in rm:
+    # One typed call carries GET and POST; the outcome (e.g. a wall that needs
+    # the browser opt-in) is reported back to the engine.
+    if "sf.scrapeFetchTyped(url, post, buf)" not in rm:
         return "fail", "handleScrape does not route through scrape_fetch"
     # POST support all the way down: endpoint -> scrape_fetch -> browser bridge.
-    for sym, where in (("scrapeFetchPost(url, p, buf)", "remote.zig"),
+    for sym, where in (("sf.scrapeFetchTyped(url, post, buf)", "remote.zig"),
                        ("browser.fetchHtmlWithCancellation(url, post_body, out_buf, cancel_epoch)", "scrape_fetch.zig")):
         src = rm if where == "remote.zig" else open(
             os.path.join(PROJECT_DIR, "src/services/scrape_fetch.zig"), encoding="utf-8").read()

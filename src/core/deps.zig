@@ -7,6 +7,8 @@
 const std = @import("std");
 const logs = @import("logs.zig");
 const io_global = @import("io_global.zig");
+const helper_install = @import("helper_install.zig");
+const helper_install_pure = @import("helper_install_pure.zig");
 
 pub const Status = struct {
     apfel: bool = false,
@@ -148,17 +150,26 @@ fn downloadVerified(url: []const u8, stage_path: []const u8, expected_size: u64,
     var cmd_buf: [512]u8 = undefined;
     logs.pushLog("info", "deps", std.fmt.bufPrint(&cmd_buf, "Downloading (https-only, atomic) {s}", .{url}) catch "Downloading verified model via HTTPS", false);
     io_global.deleteFileAbsolute(stage_path) catch {};
-    // reliable_fetch.download: https on every hop, written to `<stage>.part`
-    // and renamed only on a 2xx — a 404 page never reaches the hash check.
+    if (fetchWithRetry(url, stage_path) != .ok) return false;
+    return downloadedFileMatches(stage_path, expected_size, expected_sha256);
+}
+
+/// reliable_fetch.download: https on every hop, written to `<stage>.part`
+/// and renamed only on a 2xx — a 404 page never reaches the hash check.
+/// Up to three attempts; a 4xx is final.
+fn fetchWithRetry(url: []const u8, stage_path: []const u8) helper_install.FetchResult {
     var attempt: usize = 0;
+    var last: helper_install.FetchResult = .transport;
     while (attempt < 3) : (attempt += 1) {
         const res = fetchDownload(url, stage_path);
-        if (res.ok()) return downloadedFileMatches(stage_path, expected_size, expected_sha256);
-        if (res.failure == .cancelled or res.failure == .invalid_input) return false;
-        if (res.status >= 400 and res.status < 500) return false; // retrying a 404 can't help
+        if (res.ok()) return .ok;
+        if (res.failure == .cancelled) return .cancelled;
+        if (res.failure == .invalid_input) return .transport;
+        if (res.status >= 400 and res.status < 500) return .http_error; // retrying a 404 can't help
+        last = if (res.status >= 400) .http_error else .transport;
         io_global.sleep(1 * std.time.ns_per_s);
     }
-    return false;
+    return last;
 }
 
 /// One model/config download through the shared curl seam. Big ASR/MLX assets:
@@ -496,6 +507,17 @@ pub fn fetchSherpaStreamAsync() void {
 /// displayed "Not installed" and sherpa downloads lit up BOTH rows.
 pub var whisper_model_downloading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
+const WHISPER_MODEL_NAME = "ggml-tiny.en.bin";
+const WHISPER_MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
+
+fn whisperFetchHook(_: ?*anyopaque, stage_path: []const u8) helper_install.FetchResult {
+    return fetchWithRetry(WHISPER_MODEL_URL, stage_path);
+}
+
+fn quittingHook(_: ?*anyopaque) bool {
+    return @import("workers.zig").isQuitting();
+}
+
 pub fn fetchWhisperModelAsync() void {
     const S = struct {
         fn worker() void {
@@ -508,28 +530,22 @@ pub fn fetchWhisperModelAsync() void {
             // mkpath + check if already present
             io_global.makeDirAbsolute(dir) catch {};
             var path_buf: [512]u8 = undefined;
-            const model_path = @import("opal-fmt").bufPrintZ(&path_buf, "{s}/ggml-tiny.en.bin", .{dir}) catch return;
+            const model_path = @import("opal-fmt").bufPrintZ(&path_buf, "{s}/" ++ WHISPER_MODEL_NAME, .{dir}) catch return;
             if (downloadedFileMatches(model_path, 77_704_715, null)) return;
 
             logs.pushLog("info", "deps", "Fetching Whisper tiny.en (75MB)…", false);
-            var stage_buf: [544]u8 = undefined;
-            const stage_path = std.fmt.bufPrint(&stage_buf, "{s}.part", .{model_path}) catch return;
-            defer io_global.deleteFileAbsolute(stage_path) catch {};
-            if (downloadVerified(
-                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
-                stage_path,
-                77_704_715,
-                "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
-            )) {
-                // Only an invalid legacy file can exist here; the verified
-                // staged model remains isolated until the final rename.
-                io_global.deleteFileAbsolute(model_path) catch {};
-                io_global.renameAbsolute(stage_path, model_path) catch {
-                    logs.pushLog("error", "deps", "Could not publish verified Whisper model", true);
-                    return;
-                };
+            const models = io_global.openDirAbsolute(dir, .{}) catch return;
+            defer io_global.closeDir(models);
+            // Staged beside the model, size + SHA-256 verified, then an atomic
+            // rename. Only an invalid legacy file can be replaced, so no
+            // previous copy is kept.
+            const result = helper_install.install(io_global.io(), .{ .dir = models, .dir_path = dir, .name = WHISPER_MODEL_NAME }, .{
+                .expect = .{ .size = 77_704_715, .sha256_hex = "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f" },
+                .keep_previous = false,
+            }, .{ .fetch = whisperFetchHook, .cancelled = quittingHook });
+            if (result.ok()) {
                 logs.pushLog("info", "deps", "Whisper model ready", false);
-            } else {
+            } else if (result.failure != .cancelled) {
                 logs.pushLog("error", "deps", "Whisper download failed validation; no model was installed", true);
             }
         }
@@ -538,6 +554,34 @@ pub fn fetchWhisperModelAsync() void {
     if (@import("workers.zig").spawnLegacy(S.worker, .{})) |t| @import("workers.zig").release(t) else |_| {
         whisper_model_downloading.store(false, .release);
     }
+}
+
+/// Startup repair for the models folder, before any model download can run:
+/// remove partial archive downloads, half-extracted staging trees and a
+/// partial Whisper model left by a crash or a killed app.
+pub fn cleanupStaleDownloads() void {
+    var cfg_buf: [512]u8 = undefined;
+    const config_dir = @import("paths.zig").configDir(&cfg_buf);
+    var models_buf: [640]u8 = undefined;
+    const models_dir = std.fmt.bufPrint(&models_buf, "{s}/models", .{config_dir}) catch return;
+    const dir = io_global.openDirAbsolute(models_dir, .{ .iterate = true }) catch return;
+    defer io_global.closeDir(dir);
+    _ = helper_install.cleanupStale(io_global.io(), dir, WHISPER_MODEL_NAME);
+    var names: [16][128]u8 = undefined;
+    var lens: [16]usize = undefined;
+    var n: usize = 0;
+    var iter = dir.iterate();
+    while (iter.next(io_global.io()) catch null) |entry| {
+        if (n == names.len) break;
+        if (!helper_install_pure.isStaleModelEntry(entry.name) or entry.name.len > names[0].len) continue;
+        @memcpy(names[n][0..entry.name.len], entry.name);
+        lens[n] = entry.name.len;
+        n += 1;
+    }
+    for (names[0..n], lens[0..n]) |*name, len| {
+        dir.deleteTree(io_global.io(), name[0..len]) catch {};
+    }
+    if (n > 0) logs.pushLog("info", "deps", "Removed partial model downloads", false);
 }
 
 // ══════════════════════════════════════════════════════════

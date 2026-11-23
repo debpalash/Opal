@@ -40,6 +40,9 @@ pub const KEYS = [_]Key{
     .{ .name = "proxy_url", .kind = .text, .group = "Network", .label = "Proxy URL", .max_len = 127 },
     // 0 = unlimited. Upper bound is a sanity rail, not a hardware limit.
     .{ .name = "download_rate_limit", .kind = .integer, .group = "Network", .label = "Download limit (KB/s, 0 = unlimited)", .min = 0, .max = 1_000_000 },
+    // Off by default: a blocked page is never retried through a browser (the
+    // paired one or the anti-detect engine) without this. extraction_policy_pure.
+    .{ .name = "extraction_browser_opt_in", .kind = .boolean, .group = "Network", .label = "Retry blocked pages through a browser" },
     // Storage
     .{ .name = "save_path", .kind = .text, .group = "Storage", .label = "Download folder", .max_len = 255 },
     // AI & Voice. Speed is an integer PERCENT on the wire (f32 internally):
@@ -159,6 +162,12 @@ test "registry: text keys have a budget, integer keys a usable range" {
             .boolean => {},
         }
     }
+}
+
+test "browser fallback opt-in is a settable boolean" {
+    const k = find("extraction_browser_opt_in") orelse return error.MissingKey;
+    try std.testing.expectEqual(Kind.boolean, k.kind);
+    try std.testing.expectEqualStrings("Network", k.group);
 }
 
 test "parseBool: the forms clients actually send" {

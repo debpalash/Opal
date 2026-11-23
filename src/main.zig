@@ -295,6 +295,8 @@ pub fn coreInit() !void {
     // Resolve the bundled absolute path now so a cold YouTube launch cannot
     // race the background bootstrap and get stuck with a bare PATH lookup.
     if (!mobile) {
+        // Before any model download can start: drop partials a killed run left.
+        @import("core/deps.zig").cleanupStaleDownloads();
         const ytdlp = @import("services/ytdlp.zig");
         if (cli_arg_count == 0) {
             ytdlp.ensureAvailable();

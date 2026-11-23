@@ -1976,9 +1976,10 @@ fn handleScrapeBody(stream: std.Io.net.Stream, query: []const u8, post: ?[]const
 
     const sf = @import("scrape_fetch.zig");
     @import("../core/rate_limit.zig").acquireUrl(url, 1.0);
-    const body = (if (post) |p| sf.scrapeFetchPost(url, p, buf) else sf.scrapeFetch(url, buf)) orelse {
-        sendJsonStatus(stream, "502 Bad Gateway", "{\"error\":\"fetch failed\"}");
-        return;
+    const fetched = sf.scrapeFetchTyped(url, post, buf);
+    const body = fetched.body orelse {
+        var err_buf: [96]u8 = undefined; // outcome: an opt-in wall vs a dead host vs an HTTP error
+        return sendJsonStatus(stream, "502 Bad Gateway", sf.errorJson(&err_buf, fetched.outcome));
     };
 
     var header: [256]u8 = undefined;
@@ -3395,6 +3396,7 @@ fn settingValueWrite(w: *std.Io.Writer, k: sap.Key) void {
     if (std.mem.eql(u8, k.name, "incognito")) return w.writeAll(b.j(state.app.incognito_mode)) catch {};
     if (std.mem.eql(u8, k.name, "ui_scale_auto")) return w.writeAll(b.j(state.app.ui_scale_auto)) catch {};
     if (std.mem.eql(u8, k.name, "taste_enabled")) return w.writeAll(b.j(state.app.taste_enabled)) catch {};
+    if (std.mem.eql(u8, k.name, "extraction_browser_opt_in")) return w.writeAll(b.j(state.app.extraction_browser_opt_in)) catch {};
     if (std.mem.eql(u8, k.name, "ui_scale")) return w.print("{d}", .{@as(i32, @intFromFloat(state.app.ui_scale * 100))}) catch {};
     if (std.mem.eql(u8, k.name, "theme")) {
         w.writeAll("\"") catch return;
@@ -3483,6 +3485,8 @@ fn settingApply(k: sap.Key, raw: []const u8) bool {
                 state.app.ui_scale = scale_pure.scaleAfterAutoToggle(v, state.app.ui_scale);
             } else if (std.mem.eql(u8, k.name, "taste_enabled")) {
                 state.app.taste_enabled = v;
+            } else if (std.mem.eql(u8, k.name, "extraction_browser_opt_in")) {
+                state.app.extraction_browser_opt_in = v;
             } else return false;
         },
         .integer => {

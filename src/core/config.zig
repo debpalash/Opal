@@ -89,7 +89,7 @@ fn saveChecked() !void {
     setKey("continue_private", if (state.app.continue_private) "1" else "0");
     setKey("nsfw_filter", if (state.app.nsfw_filter_enabled) "1" else "0");
     setKey("gallerydl_enabled", if (state.app.gallerydl_enabled) "1" else "0");
-    setKey("scrape_use_browser", if (state.app.scrape_use_browser) "1" else "0");
+    setKey("extraction_browser_opt_in", if (state.app.extraction_browser_opt_in) "1" else "0");
     setKey("torrent_memory_only", if (state.app.torrent_memory_only) "1" else "0");
     setKey("torrent_memory_limit_mib", fmtInt(&fb, @intCast(state.app.torrent_memory_limit_mib)));
     setKey("prefetch_playlist", if (state.app.prefetch_playlist) "1" else "0");
@@ -653,8 +653,10 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.nsfw_filter_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "gallerydl_enabled")) {
         state.app.gallerydl_enabled = std.mem.eql(u8, val, "1");
-    } else if (std.mem.eql(u8, key, "scrape_use_browser")) {
-        state.app.scrape_use_browser = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "extraction_browser_opt_in")) {
+        // The legacy `scrape_use_browser` key is deliberately not read: it
+        // defaulted ON with no control, so a saved "1" is not consent.
+        state.app.extraction_browser_opt_in = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "torrent_memory_only")) {
         state.app.torrent_memory_only = std.mem.eql(u8, val, "1");
         state.applyTorrentStorageIfReady();

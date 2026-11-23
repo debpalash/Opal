@@ -895,7 +895,7 @@ fn fetchUrl(url: []const u8, dst: []u8) usize {
 
 /// HTML-scraper framework fetch that transparently defeats Cloudflare / DDoS-Guard
 /// / captcha blocks: a fast plain GET, and on a detected challenge a re-fetch
-/// through Opal's anti-detect browser. Gated internally by the `scrape_use_browser`
+/// through Opal's anti-detect browser. Gated internally by the `extraction_browser_opt_in`
 /// config toggle (scrapeFetch checks it) — OFF ⇒ plain HTTP, i.e. the prior
 /// behavior. Drop-in for the plain-GET `fetchUrl`, used by the Madara /
 /// MangaThemesia base-site page fetches and the generic readallcomics scraper.

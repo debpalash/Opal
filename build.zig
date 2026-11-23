@@ -3353,6 +3353,37 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_scrape_fetch_pure).step);
 
+    // Extraction order (plain, then paired browser, then anti-detect engine)
+    // and typed outcomes. No browser tier without the user's opt-in;
+    // scrape_fetch.zig executes exactly this plan.
+    const test_extraction_policy_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/extraction_policy_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_extraction_policy_pure).step);
+
+    // Recoverable helper installs: the pure step machine, and the file half
+    // run against a temporary directory with a local fixture (no network).
+    const test_helper_install_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/helper_install_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_helper_install_pure).step);
+    const test_helper_install = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/helper_install.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_helper_install).step);
+
     // Light-novel source engines — the chapter-TEXT container extraction per
     // engine (.text-left / epcontent / .chapter-content / #chr-content), the
     // readwn standalone list/detail/chapter parse + browse/search URL builders,

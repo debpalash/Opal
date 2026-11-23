@@ -54,10 +54,11 @@ def test_scrape_fetch():
         "service gets typed response status": "reliable_fetch.request(" in svc
             and "result.status" in svc,
         "public scrapeFetch api": "pub fn scrapeFetch(" in svc,
-        "browser fallback gated on config": "state.app.scrape_use_browser" in svc,
+        "browser fallback gated on opt-in": "state.app.extraction_browser_opt_in" in svc
+            and "policy.browserTiers(avail)" in svc,
         "browser fallback gated on engine": "browser.engineReady(" in svc,
         "calls cancellable browser fallback": "browser.fetchHtmlWithCancellation(url, post_body, out_buf, cancel_epoch)" in svc,
-        "compatible GET and POST wrappers": "scrapeFetchBody(url, null, out_buf, null)" in svc and "scrapeFetchBody(url, post_body, out_buf, null)" in svc,
+        "compatible GET and POST wrappers": "scrapeFetchBody(url, null, out_buf, null).body" in svc and "scrapeFetchBody(url, post_body, out_buf, null).body" in svc,
         "supervised plain request cancellation": ".cancel_epoch = cancel_epoch" in svc,
         "cancellable bridge admission and safe drain": "scrape_req_mutex.tryLock()" in brow and "scrapeCancelled(cancel_epoch)" in brow and "pub fn fetchHtmlWithCancellation" in brow,
         "one-time ready log": "Anti-block fetch ready" in svc,
@@ -78,9 +79,9 @@ def test_scrape_fetch():
         "classify fetchhtml_err": "fetchhtml_err" in brow_pure and 'event\\": \\"fetchhtml' in brow_pure,
 
         # ── Config toggle ──
-        "config setKey": 'setKey("scrape_use_browser"' in cfg,
-        "config apply": '"scrape_use_browser"' in cfg,
-        "state field": "scrape_use_browser: bool = true" in st,
+        "config setKey": 'setKey("extraction_browser_opt_in"' in cfg,
+        "config apply": 'eql(u8, key, "extraction_browser_opt_in")' in cfg,
+        "state field defaults off": "extraction_browser_opt_in: bool = false" in st,
 
         # ── Pure module registered in `zig build test` ──
         "test registered": 'b.path("src/services/scrape_fetch_pure.zig")' in build,

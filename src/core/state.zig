@@ -461,11 +461,12 @@ pub const AppState = struct {
     // downloader. Effective only when a gallery-dl binary is installed (see
     // services/gallerydl.zig enabled()); default ON.
     gallerydl_enabled: bool = true,
-    // Anti-block scrape fetch: when a scraper's plain HTTP fetch comes back as
-    // a Cloudflare / DDoS-Guard / captcha challenge, transparently re-fetch
-    // through the anti-detect browser (services/scrape_fetch.zig). Effective
-    // only when a browser engine is installed; default ON.
-    scrape_use_browser: bool = true,
+    // Opt-in browser fallback for blocked scraper fetches: when a plain HTTP
+    // fetch comes back as a Cloudflare / DDoS-Guard / captcha challenge, retry
+    // through the paired browser, then the anti-detect engine
+    // (services/extraction_policy_pure.zig). Default OFF: no extraction path
+    // starts or borrows a browser until the user turns this on.
+    extraction_browser_opt_in: bool = false,
 
     // ── Playback options verified present in upstream mpv (2026-08-01) ──
     // All three default OFF: each trades something real, so none should turn

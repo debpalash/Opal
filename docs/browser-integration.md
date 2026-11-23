@@ -181,7 +181,7 @@ First milestone (about one week, verifiable on this Linux machine with the insta
 
 | Use | Path | Notes |
 | --- | --- | --- |
-| Anti-bot fetch fallback | `scrape_fetch.zig` calls `browser.fetchHtmlWithCancellation` when `scrape_fetch_pure.needsBrowser` says a plain curl fetch hit Cloudflare / DDoS-Guard / captcha | Callers: `anime.zig`, `anime_extractors.zig`, `novels.zig`, `comics.zig`, `remote.zig` `/api/scrape`. GET and form POST (EZTV needs POST for magnet links). Serialized on one scrape page, 45 s ceiling, 2 MB cap. |
+| Anti-bot fetch fallback | Opt-in only (`extraction_browser_opt_in`, default off). `scrape_fetch.zig` runs the plan from `extraction_policy_pure.browserTiers` (paired browser, then `browser.fetchHtmlWithCancellation`) when `scrape_fetch_pure.needsBrowser` says a plain curl fetch hit Cloudflare / DDoS-Guard / captcha; without the opt-in the fetch ends as `blocked_opt_in_required` | Callers: `anime.zig`, `anime_extractors.zig`, `novels.zig`, `comics.zig`, `remote.zig` `/api/scrape`. GET and form POST (EZTV needs POST for magnet links). Serialized on one scrape page, 45 s ceiling, 2 MB cap. |
 | Search pre-warm | `search.zig:1089` | Starts the bridge during a search because boot takes about 20 s and a warm scrape takes about 2 s (comment in source). |
 | Web page | `browser.renderContent`, `routeContent` falls through to `.web` | The remote-desktop pane described above. |
 | Agent access | `/api/scrape?url=` | Bearer-authed, 2 MB, returned as `text/plain`. Not exposed as an MCP tool. I did not find a private-address (SSRF) guard in `handleScrapeBody`; see section 9. |
