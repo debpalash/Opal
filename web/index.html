@@ -83,11 +83,26 @@
       </div>
       <div id="cast-panel" class="cast-panel" hidden>
         <div class="cast-head"><strong>Cast to a device</strong>
+          <button id="cast-couch" class="text-btn" type="button" aria-pressed="false">Couch mode</button>
           <button id="cast-scan" class="text-btn">Scan</button>
           <button id="cast-stop" class="text-btn" hidden>Stop</button>
         </div>
         <div class="hint" id="cast-hint" role="status" aria-live="polite">Looking for devices…</div>
         <div class="cast-devices" id="cast-devices"></div>
+        <section id="cast-remote" class="cast-remote" aria-labelledby="cast-remote-title" hidden>
+          <div class="cast-remote-now">
+            <strong id="cast-remote-title">Casting</strong>
+            <small id="cast-remote-device"></small>
+          </div>
+          <input type="range" id="cast-seek" aria-label="Position on the TV" min="0" max="100" value="0">
+          <div class="times"><span id="cast-pos">--:--</span><span id="cast-state" role="status" aria-live="polite"></span><span id="cast-dur">--:--</span></div>
+          <div class="cast-remote-btns">
+            <button type="button" id="cast-back" aria-label="Back 30 seconds on the TV">-30s</button>
+            <button type="button" id="cast-toggle" class="cast-big" aria-label="Play or pause on the TV">Pause</button>
+            <button type="button" id="cast-fwd" aria-label="Forward 30 seconds on the TV">+30s</button>
+          </div>
+          <button type="button" id="cast-end" class="text-btn">Stop casting</button>
+        </section>
         <form id="cast-pair" class="cast-pair" hidden>
           <div class="hint" id="cast-pair-status" role="status" aria-live="polite"></div>
           <div class="cast-pair-row">

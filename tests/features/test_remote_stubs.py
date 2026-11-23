@@ -57,7 +57,7 @@ def test_party_cast_routes():
         "cast pair start/pin/cancel": all(f'"/cast/pair/{s}"' in rm for s in ("start", "pin", "cancel"))
             and "cast.startPairing(idx)" in rm and "cast.submitPin(pin)" in rm and "cast.cancelPairing()" in rm,
         # cast.zig used to reach into state.app.players itself, unlocked.
-        "cast url passed by value": "pub fn castTo(device_idx: usize, url: []const u8)" in cast
+        "cast url passed by value": "pub fn castTo(device_idx: usize, url: []const u8, title: []const u8, start_secs: f64)" in cast
             and "pub fn castActive(" in cast,
         "cast start holds players_mutex": "state.players_mutex.lock();\n        const refusal = cast.castActive(idx);\n        state.players_mutex.unlock();" in rm,
         # Worker threads write these; UI + connection threads poll them.

@@ -724,6 +724,10 @@ pub fn tryFastPath(raw_input: []const u8) bool {
     for (0..flen) |i| full_lower[i] = std.ascii.toLower(raw_input[i]);
     const fl = full_lower[0..flen];
 
+    // ── "Jump to the scene where …" (and the "which one?" answer) ──
+    // Before instant commands: "skip to the part where …" is not a skip.
+    if (@import("scene_jump.zig").tryHandle(raw_input)) return true;
+
     // ── Instant player/nav commands (skip LLM entirely) ──
     if (tryInstantCommand(raw_input, fl)) return true;
 

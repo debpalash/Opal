@@ -134,6 +134,7 @@ from features import (  # noqa: F401
     test_plugin_permissions,
     test_rate_limit_rollout,
     test_settings_split,
+    test_cast_native,
 )
 
 if __name__ == "__main__":
