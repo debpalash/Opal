@@ -48,7 +48,7 @@ def test_live_fixture_port_collision_guard():
     return "pass", "real wildcard listener rejected; unused isolated port accepted"
 
 
-BUILD_TIMEOUT = 900 if os.environ.get("CI") else 300
+BUILD_TIMEOUT = load_scaled_timeout(900 if os.environ.get("CI") else 300)
 
 
 @test("Zig Build", "Build")
@@ -1437,7 +1437,7 @@ def test_native_catalog_tv():
     try:
         result = subprocess.run(
             ["zig", "build", "test-browse", "test-tv-detail", "test-anime", "-Doptimize=fast"],
-            cwd=PROJECT_DIR, capture_output=True, text=True, timeout=300,
+            cwd=PROJECT_DIR, capture_output=True, text=True, timeout=load_scaled_timeout(300),
         )
         if result.returncode:
             return "fail", result.stderr[-1500:]
@@ -1452,7 +1452,7 @@ def test_memory_torrents():
         return "fail", "CI must expose full native torrent diagnostics before the aggregate suite"
     result = subprocess.run(
         [sys.executable, "tests/test_torrent_memory.py"], cwd=PROJECT_DIR,
-        capture_output=True, text=True, timeout=420,
+        capture_output=True, text=True, timeout=load_scaled_timeout(420),
     )
     if result.returncode:
         return "fail", (result.stdout + result.stderr)[-2000:]
@@ -1465,7 +1465,7 @@ def test_download_management_live():
     with tempfile.TemporaryDirectory(prefix="opal-download-tests-") as prefix:
         built = subprocess.run(
             ["zig", "build", "-Dheadless=true", "--prefix", prefix],
-            cwd=PROJECT_DIR, capture_output=True, text=True, timeout=300,
+            cwd=PROJECT_DIR, capture_output=True, text=True, timeout=load_scaled_timeout(300),
         )
         if built.returncode:
             return "fail", built.stderr[-2000:]

@@ -13,6 +13,7 @@ system package has a relative ``.path`` dependency (ghostty has several), so
 that probe hung regardless of SDL3.
 """
 from pathlib import Path
+import os
 import re
 import shutil
 import subprocess
@@ -43,7 +44,8 @@ class DvuiBackendTests(unittest.TestCase):
         # Generous timeout only covers a cold build-runner compile; a warm
         # cache answers in well under a second.
         result = subprocess.run(['zig', 'build', '--help'], cwd=ROOT,
-                                capture_output=True, text=True, timeout=120)
+                                capture_output=True, text=True,
+                                timeout=int(120 * min(4.0, max(1.0, os.getloadavg()[0] / (os.cpu_count() or 1)))))
         self.assertEqual(result.returncode, 0, result.stderr[-4000:])
         self.assertIn('test-native-episodes', result.stdout)
         names = system_integrations(result.stdout)

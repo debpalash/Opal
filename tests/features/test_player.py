@@ -2044,19 +2044,19 @@ def test_picture_grade_changes_pixels():
         if r.returncode:
             return "skip", "ffmpeg cannot generate clip: " + r.stderr[-200:]
         r = subprocess.run(["cc", "-o", exe, os.path.join(PROJECT_DIR, "tests/tools/mpv_eq_probe.c"),
-                            "-I" + inc, "-L" + lib, "-Wl,-rpath," + lib, "-lmpv"], capture_output=True, text=True, timeout=120)
+                            "-I" + inc, "-L" + lib, "-Wl,-rpath," + lib, "-lmpv"], capture_output=True, text=True, timeout=load_scaled_timeout(120))
         if r.returncode:
             return "skip", "cannot link libmpv: " + r.stderr[-200:]
 
         def spec(*a):
             r = subprocess.run([zig, "run", "--dep", "av", "-Mroot=tests/tools/eq_spec.zig",
                                 "-Mav=src/player/av_pure.zig", "--", *map(str, a)],
-                               cwd=PROJECT_DIR, capture_output=True, text=True, timeout=180)
+                               cwd=PROJECT_DIR, capture_output=True, text=True, timeout=load_scaled_timeout(180))
             return r.stdout.strip() if r.returncode == 0 else None
         std, vivid, desat = spec(1), spec(5), spec(1, 0, 0, -100, 0)
         if std != "" or not vivid or not desat:
             return "fail", "eq_spec produced std=%r vivid=%r desat=%r" % (std, vivid, desat)
-        r = subprocess.run([exe, clip, "auto-safe", std, vivid, desat], capture_output=True, text=True, timeout=60)
+        r = subprocess.run([exe, clip, "auto-safe", std, vivid, desat], capture_output=True, text=True, timeout=load_scaled_timeout(60))
         rows = re.findall(r"^(\d) mean=([\d.]+) chroma=([\d.]+)", r.stdout, re.M)
         if len(rows) != 3:
             return "skip", "probe could not render: " + (r.stdout + r.stderr)[-300:]

@@ -26,6 +26,21 @@ import re as _re
 import shutil
 from pathlib import Path
 
+
+def load_scaled_timeout(base, max_scale=4.0, load=None, cpus=None):
+    """Stretch a compile/build timeout when the machine is oversubscribed.
+
+    A fixed 300s budget turns "the box is busy" (load >> cores, e.g. parallel
+    worktree builds) into a false regression. Scale by load-per-core, never
+    below ``base`` and at most ``max_scale``x, so a genuinely hung build still
+    fails."""
+    try:
+        load = os.getloadavg()[0] if load is None else load
+    except (OSError, AttributeError):
+        return base
+    cpus = (os.cpu_count() or 1) if cpus is None else cpus
+    return int(base * min(max_scale, max(1.0, load / max(1, cpus))))
+
 # Windows consoles default to cp1252, which can't encode the ✅/❌ status glyphs
 # this harness prints (UnicodeEncodeError mid-run). Force UTF-8 output so the
 # suite runs on Windows too; CI's Linux/macOS already default to UTF-8.
@@ -139,6 +154,7 @@ def _create_isolated_db_fixture():
 _create_isolated_db_fixture()
 
 __all__ = [
+    "load_scaled_timeout",
     "test", "TestResult", "results", "REGISTRY", "run_all",
     "get_db", "_src", "_web_app", "_web_js", "_remote_api", "_between", "_parse_catalog",
     "DB_PATH", "PROJECT_DIR", "RESULTS_FILE", "_EMOJI", "_re", "_posix_shell",

@@ -388,3 +388,19 @@ def test_docs_references_resolve():
         return "fail", f"missing={sorted(missing)[:8]} stale={stale}"
     assert "## 🚀 v2 — active plan" in _src("ROADMAP.md")
     return "pass", f"{len(scan)} files scanned; docs/ references resolve; v2 plan lives in ROADMAP.md"
+
+
+@test("Build timeouts stretch with machine load instead of failing busy boxes", "Build")
+def test_load_scaled_timeout():
+    from .harness import load_scaled_timeout as f
+    cases = {
+        "idle keeps base": f(300, load=0.5, cpus=8) == 300,
+        "exactly saturated keeps base": f(300, load=8, cpus=8) == 300,
+        "2x oversubscribed doubles": f(300, load=16, cpus=8) == 600,
+        "capped at 4x so hangs still fail": f(300, load=700, cpus=8) == 1200,
+        "build checks use it": "load_scaled_timeout(300)" in _src("tests/features/test_build.py")
+                               and "BUILD_TIMEOUT = load_scaled_timeout(" in _src("tests/features/test_build.py"),
+        "pixel probe uses it": _src("tests/features/test_player.py").count("load_scaled_timeout(") >= 3,
+    }
+    bad = [k for k, ok in cases.items() if not ok]
+    return ("fail", ", ".join(bad)) if bad else ("pass", "300s budget -> up to 1200s at load/core >= 4")
