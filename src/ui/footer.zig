@@ -1,4 +1,5 @@
 const std = @import("std");
+const i18n = @import("../core/i18n.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
 // Pure (io-free, dvui-free) player-bar logic — clock formatting, scrub
@@ -998,7 +999,7 @@ fn renderScrubber(
             .corners = dvui.CornerRect.all(theme.radius.sm),
         });
         if (dvui.clicked(dur_box.data(), .{})) time_show_remaining = !time_show_remaining;
-        components.tip(@src(), dur_box.data().*, if (time_show_remaining) "Showing remaining — click for total" else "Click to show remaining time");
+        components.tip(@src(), dur_box.data().*, if (time_show_remaining) i18n.t(.player_show_total) else i18n.t(.player_show_remaining));
         // Unknown duration (live/streaming, or not probed yet) reads as "--:--"
         // rather than a misleading 0:00. Routed through footer_pure so the
         // remaining-time arithmetic — including the d_sec < t_sec case, which
@@ -1834,7 +1835,7 @@ pub fn renderLiquidGlassOverlay() void {
             })) {
                 if (has_prev) tv_lib.playNeighborEpisode(-1);
             }
-            components.tip(@src(), wd, if (has_prev) "Previous episode" else "This is the first episode");
+            components.tip(@src(), wd, if (has_prev) i18n.t(.player_prev_episode) else i18n.t(.player_first_episode));
         }
 
         // ── Transport: skip-back | rewind | play/pause | forward | skip-forward ──
@@ -1854,7 +1855,7 @@ pub fn renderLiquidGlassOverlay() void {
             })) {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-prev");
             }
-            components.tip(@src(), wd, "Previous track");
+            components.tip(@src(), wd, i18n.t(.player_prev_track));
         }
 
         // Rewind 10s — 32px square. Sheds with the rest of the skip group.
@@ -1873,7 +1874,7 @@ pub fn renderLiquidGlassOverlay() void {
         })) {
             _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek -10");
         };
-        if (fit.skip_buttons) components.tip(@src(), wd, "Skip back 10s (\xE2\x86\x90)");
+        if (fit.skip_buttons) components.tip(@src(), wd, i18n.t(.player_skip_back));
 
         // Play / Pause — bare icon, no resting fill: it reads as part of the
         // transport row rather than a stamped accent chip. Size (36px vs 32px)
@@ -1897,7 +1898,7 @@ pub fn renderLiquidGlassOverlay() void {
         })) {
             active_p.togglePause();
         }
-        components.tip(@src(), wd, "Play/Pause (Space)");
+        components.tip(@src(), wd, i18n.t(.player_play_pause_key));
 
         // Status beside the transport: only the states the glyph cannot express
         // ("Loading…", "Buffering…"). Playing and a deliberate pause print
@@ -2003,7 +2004,7 @@ pub fn renderLiquidGlassOverlay() void {
                 }
                 dvui.refresh(null, @src(), null);
             }
-            components.tip(@src(), wd, if (is_fs) "Exit fullscreen (Esc or F F)" else "Fullscreen (F F)");
+            components.tip(@src(), wd, if (is_fs) i18n.t(.player_exit_fullscreen) else i18n.t(.player_fullscreen));
         }
 
         if (has_playlist) {
@@ -2022,7 +2023,7 @@ pub fn renderLiquidGlassOverlay() void {
             })) {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-next");
             }
-            components.tip(@src(), wd, "Next track");
+            components.tip(@src(), wd, i18n.t(.player_next_track));
         }
 
         // ── Next episode ──
@@ -2045,7 +2046,7 @@ pub fn renderLiquidGlassOverlay() void {
             }
             // Greyed out rather than hidden when there's nothing next: a button
             // that vanishes mid-show is more confusing than one that's dim.
-            components.tip(@src(), wd, if (has_next) "Next episode" else "No next episode yet");
+            components.tip(@src(), wd, if (has_next) i18n.t(.player_next_episode) else i18n.t(.player_no_next_episode));
             // Babel: spoiler-safe "Previously on…" recap (first minutes only).
             _ = @import("babel_ui.zig").recapButton();
         }
@@ -2121,7 +2122,7 @@ pub fn renderLiquidGlassOverlay() void {
         })) {
             _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "cycle mute");
         }
-        components.tip(@src(), wd, if (is_muted) "Unmute" else "Mute");
+        components.tip(@src(), wd, if (is_muted) i18n.t(.player_unmute) else i18n.t(.player_mute));
 
         // 120px fixed slider — grouped tight against the mute icon, no boxed
         // chrome: faint trough, secondary (non-accent) fill. First group to go
@@ -2290,7 +2291,7 @@ pub fn renderLiquidGlassOverlay() void {
         }
         // Capture the actual rendered rect for next frame's hover test.
         close_button_rect = wd.borderRectScale().r;
-        components.tip(@src(), wd, "Close player");
+        components.tip(@src(), wd, i18n.t(.player_close));
     }
 
     // Secondary controls and transfer actions live above the single strip.
@@ -2629,7 +2630,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         });
         defer left.deinit();
         if (dvui.clicked(left.data(), .{})) state.app.router.navigate(.player);
-        components.tip(@src(), left.data().*, "Open player");
+        components.tip(@src(), left.data().*, i18n.t(.player_open));
 
         // Advance now-playing audio cover art (podcast/radio) — idempotent, so
         // the art still appears here even when the player grid isn't on screen.
@@ -2742,7 +2743,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             })) {
                 _ = c.mpv.mpv_command_string(p.mpv_ctx, "playlist-prev");
             }
-            components.tip(@src(), wd, "Previous");
+            components.tip(@src(), wd, i18n.t(.player_previous));
         }
 
         // Play / Pause — the single accent affordance.
@@ -2761,7 +2762,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         })) {
             p.togglePause();
         }
-        components.tip(@src(), wd, "Play/Pause");
+        components.tip(@src(), wd, i18n.t(.player_play_pause));
         if (@import("builtin").is_test) media_layout_for_test.dock_play = wd.borderRectScale().r;
 
         if (show_skip) {
@@ -2781,7 +2782,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             })) {
                 queue.playNextUnplayed(p);
             }
-            components.tip(@src(), wd, "Next (from queue)");
+            components.tip(@src(), wd, i18n.t(.player_next_from_queue));
         }
 
         if (show_media_title) {
@@ -2860,7 +2861,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     })) {
         state.app.router.navigate(.player);
     }
-    components.tip(@src(), wd, "Open full player");
+    components.tip(@src(), wd, i18n.t(.player_open_full));
 
     // Closing the media player is not pausing: use the same removal path as
     // the in-player X so mpv stops and this bar disappears on the next frame.
@@ -2878,7 +2879,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     })) {
         state.app.pending_remove_player_idx = @as(i32, @intCast(state.app.active_player_idx));
     }
-    components.tip(@src(), wd, "Stop and close player");
+    components.tip(@src(), wd, i18n.t(.player_stop_close));
     if (@import("builtin").is_test) media_layout_for_test.dock_close = wd.borderRectScale().r;
 }
 
@@ -3126,7 +3127,7 @@ pub fn renderResumePrompt() void {
             .gravity_y = 0.5,
         })
     else
-        components.iconButton(@src(), icons.tvg.lucide.x, "Dismiss", false);
+        components.iconButton(@src(), icons.tvg.lucide.x, i18n.t(.common_dismiss), false);
     if (dismissed) {
         if (state.app.resume_prompt_session) {
             state.app.session_saved = false;

@@ -233,6 +233,7 @@ fn saveChecked() !void {
     setKey("win_h", fmtInt(&fb, @as(usize, @intCast(@max(100, state.app.win_h)))));
     // drawer_open intentionally not persisted — always start with sidebar closed
     setKey("theme_preset", theme.presetName(theme.active_preset));
+    setKey("ui_locale", @import("i18n.zig").preference());
     setKey("audio_vis", @import("../player/player.zig").vis_style.label());
 
     // AI backend + selected Hugging Face model (the model picker).
@@ -431,6 +432,8 @@ pub fn load() void {
     const access_pure = @import("../services/access_pure.zig");
     var restored_bind = remote.bind_mode;
     var restored_port = remote.port;
+    // System locale first; a saved `ui_locale` below overrides it.
+    @import("i18n.zig").apply();
 
     // Publish readiness even if the config table cannot be queried. Defaults
     // are a valid fallback; leaving this false forever would strand Settings
@@ -987,6 +990,8 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         // or older config can't crash the player.
         const vis = @import("../player/visualizer_pure.zig");
         @import("../player/player.zig").vis_style = vis.Style.fromLabel(val);
+    } else if (std.mem.eql(u8, key, "ui_locale")) {
+        @import("i18n.zig").setPreference(val);
     } else if (std.mem.eql(u8, key, "theme_preset")) {
         const presets = [_]struct { name: []const u8, preset: theme.ThemePreset }{
             .{ .name = "Midnight", .preset = .midnight },

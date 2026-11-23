@@ -123,6 +123,7 @@ from features import (  # noqa: F401
     test_media_identity,
     test_aur_publish,
     test_web_parity2,
+    test_i18n_addons,
     test_windows_portability,
     test_trackers,
     test_transfers,

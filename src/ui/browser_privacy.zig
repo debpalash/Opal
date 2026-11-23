@@ -1,5 +1,6 @@
 //! Browser controls share Opal's theme and leave room for the native page.
 const std = @import("std");
+const i18n = @import("../core/i18n.zig");
 const dvui = @import("dvui");
 const c = @import("components.zig");
 const theme = @import("theme.zig");
@@ -452,7 +453,7 @@ fn proxyEditor() void {
         closeEditor();
         privacy.changed();
     }
-    if (c.actionButton(@src(), "Cancel", .secondary, 71802)) closeEditor();
+    if (c.actionButton(@src(), i18n.t(.common_cancel), .secondary, 71802)) closeEditor();
 }
 
 pub fn setPanelForTest(section: ?usize, editor: bool) void {

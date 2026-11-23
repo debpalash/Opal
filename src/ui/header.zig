@@ -1,4 +1,5 @@
 const std = @import("std");
+const i18n = @import("../core/i18n.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
 const c = @import("../core/c.zig");
@@ -81,7 +82,7 @@ pub fn donateButton() void {
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
     });
-    _ = dvui.label(@src(), "Donate", .{}, .{
+    _ = dvui.label(@src(), "{s}", .{i18n.t(.header_donate)}, .{
         .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .gravity_y = 0.5,
     });
@@ -210,13 +211,13 @@ pub fn renderHeader() void {
         {
             const ui = @import("ui.zig");
             ui.pollFileOpen();
-            if (components.iconButton(@src(), icons.tvg.lucide.@"folder-open", "Open file", false)) {
+            if (components.iconButton(@src(), icons.tvg.lucide.@"folder-open", i18n.t(.header_open_file), false)) {
                 ui.triggerFileOpen();
             }
         }
 
         spacerSm(@src());
-        if (components.iconButton(@src(), icons.tvg.lucide.save, "Save workspace", state.app.ws_save_open)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.save, i18n.t(.header_save_workspace), state.app.ws_save_open)) {
             state.app.ws_save_open = !state.app.ws_save_open;
             state.app.ws_load_open = false;
             if (state.app.ws_save_open) {
@@ -224,7 +225,7 @@ pub fn renderHeader() void {
             }
         }
         spacerSm(@src());
-        if (components.iconButton(@src(), icons.tvg.lucide.upload, "Load workspace", state.app.ws_load_open)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.upload, i18n.t(.header_load_workspace), state.app.ws_load_open)) {
             const workspace = @import("workspace.zig");
             workspace.scanWorkspaces();
             state.app.ws_load_open = !state.app.ws_load_open;
@@ -254,12 +255,12 @@ pub fn renderHeader() void {
         defer right.deinit();
 
         // Feature toggles cluster.
-        if (components.iconButton(@src(), icons.tvg.lucide.link, "Sync playback across screens", state.app.seek_sync)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.link, i18n.t(.header_sync_playback), state.app.seek_sync)) {
             state.app.seek_sync = !state.app.seek_sync;
             state.markConfigDirty();
         }
         spacerSm(@src());
-        if (components.iconButton(@src(), icons.tvg.lucide.cpu, "Hardware decode", state.app.hwdec_enabled)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.cpu, i18n.t(.header_hwdec), state.app.hwdec_enabled)) {
             state.app.hwdec_enabled = !state.app.hwdec_enabled;
             state.markConfigDirty();
             const hw_val = if (state.app.hwdec_enabled) "auto" else "no";
@@ -273,12 +274,12 @@ pub fn renderHeader() void {
         spacerSm(@src());
         renderWebUiButton();
         spacerSm(@src());
-        if (components.iconButton(@src(), icons.tvg.lucide.@"eye-off", "Incognito mode", state.app.incognito_mode)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.@"eye-off", i18n.t(.header_incognito), state.app.incognito_mode)) {
             state.app.incognito_mode = !state.app.incognito_mode;
             if (state.app.incognito_mode) {
-                state.showToast("Incognito ON");
+                state.showToast(i18n.t(.header_incognito_on));
             } else {
-                state.showToast("Incognito OFF");
+                state.showToast(i18n.t(.header_incognito_off));
             }
         }
 
@@ -301,13 +302,13 @@ pub fn renderHeader() void {
             icons.tvg.lucide.@"panel-right-close"
         else
             icons.tvg.lucide.@"panel-right-open";
-        if (components.iconButton(@src(), drawer_icon, "Toggle drawer", state.app.drawer_open)) {
+        if (components.iconButton(@src(), drawer_icon, i18n.t(.header_toggle_drawer), state.app.drawer_open)) {
             state.app.drawer_open = !state.app.drawer_open;
         }
 
         // Cheatsheet / info popover toggle.
         spacerSm(@src());
-        if (components.iconButton(@src(), icons.tvg.lucide.info, "Keyboard shortcuts", state.app.cheatsheet_open)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.info, i18n.t(.header_shortcuts), state.app.cheatsheet_open)) {
             state.app.cheatsheet_open = !state.app.cheatsheet_open;
         }
 
@@ -317,7 +318,7 @@ pub fn renderHeader() void {
 
         // Theme cycler.
         spacerSm(@src());
-        if (components.iconButton(@src(), icons.tvg.lucide.palette, "Cycle theme", false)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.palette, i18n.t(.header_cycle_theme), false)) {
             theme.cycleTheme();
             state.showToast(theme.presetName(theme.active_preset));
         }
@@ -325,7 +326,7 @@ pub fn renderHeader() void {
         // Settings.
         spacerSm(@src());
         const settings_active = state.app.drawer_open and state.app.drawer_tab == .Settings;
-        if (components.iconButton(@src(), icons.tvg.lucide.settings, "Settings", settings_active)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.settings, i18n.t(.nav_settings), settings_active)) {
             if (settings_active) {
                 state.app.drawer_open = false;
             } else {
@@ -639,7 +640,7 @@ pub fn renderUrlInput(is_large: bool) void {
         te_opts.min_size_content = .{ .w = 200, .h = 18 };
     }
 
-    var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.magnet_buf }, .placeholder = if (is_large) "Paste link, drop file, or ask AI…" else "Paste, drop, or ask…" }, te_opts);
+    var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.magnet_buf }, .placeholder = if (is_large) i18n.t(.header_input_placeholder) else i18n.t(.header_input_placeholder_short) }, te_opts);
     const enter_pressed = te.enter_pressed;
     if (dvui.focusedWidgetIdInCurrentSubwindow()) |fid| {
         UrlInputState.had_focus = te.data().id == fid;
@@ -699,7 +700,7 @@ pub fn renderUrlInput(is_large: bool) void {
     })) {
         handleClipboardPaste();
     }
-    if (!is_large) components.tip(@src(), paste_wd, "Paste from clipboard");
+    if (!is_large) components.tip(@src(), paste_wd, i18n.t(.header_paste));
 
     // Inline mic button — push-to-talk / record
     {
@@ -742,7 +743,7 @@ pub fn renderUrlInput(is_large: bool) void {
             })) {
                 ai_chat_mod.stopAll();
             }
-            if (!is_large) components.tip(@src(), stop_wd, "Stop");
+            if (!is_large) components.tip(@src(), stop_wd, i18n.t(.common_stop));
         }
     }
 

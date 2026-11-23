@@ -1271,6 +1271,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     if (@import("remote_local_library_api.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("moments.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("addon_repositories.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("remote_i18n_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_recall_api.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("remote_library_sync_api.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("offline_server.zig").handle(stream, method, api_path, query, body)) return;

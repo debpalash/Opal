@@ -7,7 +7,7 @@ const paths = @import("../core/paths.zig");
 const pure = @import("addon_repo_pure.zig");
 const wire = @import("remote_http.zig");
 
-fn ensure() void {
+pub fn ensure() void {
     db.exec("CREATE TABLE IF NOT EXISTS addon_repositories(id TEXT PRIMARY KEY,url TEXT NOT NULL,public_key TEXT NOT NULL,envelope TEXT NOT NULL DEFAULT '')");
 }
 
@@ -117,6 +117,8 @@ pub fn install(repo_id: []const u8, addon_id: []const u8, confirmation: []const 
         for (addon.files) |file| if (std.mem.eql(u8, file.name, "manifest.json")) {
             try writeFile(try std.fmt.bufPrint(&file_buf, "{s}/manifest.json", .{dir}), file.content);
         };
+        // Provenance for update/remove from the community index (addon_index.zig).
+        @import("addon_index.zig").recordInstall(repo_id, addon.id, addon.version);
         return;
     }
     return error.NotFound;
@@ -165,6 +167,8 @@ pub fn writeSnapshot(w: *std.Io.Writer) !void {
 
 pub fn handle(stream: std.Io.net.Stream, method: []const u8, path: []const u8, query: []const u8, body: []const u8) bool {
     if (!std.mem.eql(u8, path, "/addons") and !std.mem.startsWith(u8, path, "/addons/")) return false;
+    // Community index routes and update/uninstall, before the catch-all below.
+    if (@import("addon_index.zig").handle(stream, method, path, query, body)) return true;
     if (std.mem.eql(u8, path, "/addons")) {
         if (!wire.requireMethod(stream, method, "GET")) return true;
         var out: std.Io.Writer.Allocating = .init(alloc);

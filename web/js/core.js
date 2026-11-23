@@ -319,7 +319,24 @@ function paired(){
   loadCalendar();
   startStatus();
   syncThemeFromDesktop();
+  loadI18n();
   loadPage(currentPage);
+}
+
+// ── UI strings: the same key table as the native UI (core/i18n.zig), served
+// resolved (fallback already applied) by GET /api/i18n. Markup opts in with
+// data-i18n (text), data-i18n-label (aria-label) or data-i18n-placeholder.
+let I18N = {};
+function tr(key, fallback) { return I18N[key] || fallback || key; }
+function applyI18n(root) {
+  (root || document).querySelectorAll('[data-i18n]').forEach(el => { const s = I18N[el.dataset.i18n]; if (s) el.textContent = s; });
+  (root || document).querySelectorAll('[data-i18n-label]').forEach(el => { const s = I18N[el.dataset.i18nLabel]; if (s) el.setAttribute('aria-label', s); });
+  (root || document).querySelectorAll('[data-i18n-placeholder]').forEach(el => { const s = I18N[el.dataset.i18nPlaceholder]; if (s) el.setAttribute('placeholder', s); });
+}
+function loadI18n() {
+  return api('/i18n?locale=' + encodeURIComponent(navigator.language || ''))
+    .then(d => { I18N = d.strings || {}; document.documentElement.lang = d.locale || 'en'; applyI18n(); })
+    .catch(() => {});
 }
 
 // Sign out — also the 401 handler in api(). Revokes the session server-side.

@@ -9,6 +9,7 @@
 
 const page_controls = @import("browse_filters.zig");
 const std = @import("std");
+const i18n = @import("../core/i18n.zig");
 const icons = @import("icons");
 const dvui = @import("dvui");
 const theme = @import("theme.zig");
@@ -407,7 +408,7 @@ fn renderForm() void {
         var r = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 8, .w = 0, .h = 0 } });
         defer r.deinit();
         if (components.actionButton(@src(), "Add task", .primary, 9740)) submit();
-        if (components.actionButton(@src(), "Cancel", .secondary, 9741)) {
+        if (components.actionButton(@src(), i18n.t(.common_cancel), .secondary, 9741)) {
             form_open = false;
             message_len = 0;
         }

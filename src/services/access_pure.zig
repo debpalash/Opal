@@ -268,7 +268,10 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
             std.mem.eql(u8, action, "grant-perms") or std.mem.eql(u8, action, "revoke-perms")) return .approve_executable;
         return .administer_host;
     }
-    if (std.mem.eql(u8, path, "/addons/install")) return .approve_executable;
+    if (std.mem.eql(u8, path, "/addons/install") or std.mem.eql(u8, path, "/addons/update")) return .approve_executable;
+    // Every other add-on route (repositories, the community index, uninstall)
+    // is host administration, including any future /addons/* path.
+    if (std.mem.eql(u8, path, "/addons") or std.mem.startsWith(u8, path, "/addons/")) return .administer_host;
     const host_routes = [_][]const u8{
         "/moments/create",       "/moments/send",       "/moments/delete",
         "/addons",               "/addons/add",         "/addons/refresh",
@@ -547,4 +550,15 @@ test "signed addon installation remains machine-only and repository setup requir
     try std.testing.expect(!allowsRoute(.session, "/addons/add", "POST", ""));
     try std.testing.expect(!allowsRoute(.admin_session, "/addons/install", "POST", ""));
     try std.testing.expect(allowsRoute(.machine, "/addons/install", "POST", ""));
+}
+
+test "community index routes need host authority and updates stay machine-only" {
+    for ([_][]const u8{ "/addons/index", "/addons/index/config", "/addons/index/refresh", "/addons/index/add", "/addons/uninstall", "/addons/anything-new" }) |route| {
+        try std.testing.expect(!allowsRoute(.session, route, "POST", ""));
+        try std.testing.expect(!allowsRoute(.session, route, "GET", ""));
+        try std.testing.expect(allowsRoute(.admin_session, route, "POST", ""));
+    }
+    try std.testing.expect(!allowsRoute(.admin_session, "/addons/update", "POST", ""));
+    try std.testing.expect(allowsRoute(.machine, "/addons/update", "POST", ""));
+    try std.testing.expect(!allowsRoute(.browser, "/addons/index", "GET", ""));
 }

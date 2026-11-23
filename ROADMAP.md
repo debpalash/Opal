@@ -48,8 +48,8 @@ marked **unverified** until checked on a real device.
       spread/scroll, zoom, resume by server + chapter ID, untrusted archive paths
 - [ ] Independent-server matrix: imports, metadata fixes, users, permissions,
       backup/restore, migrations, transcode limits, concurrent streams
-- [ ] i18n string table (`core/i18n.zig`)
-- [ ] Community addon index (on top of signed, user-added repos)
+- [x] i18n string table (`core/i18n.zig`)
+- [x] Community addon index (on top of signed, user-added repos)
 - [ ] Mobile offline download + sync; fix iOS tv_play picker and phone torrent stall
 - [ ] Title-bar drag handle (`ui/header.zig` TODO)
 

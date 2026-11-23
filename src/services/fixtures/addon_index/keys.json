@@ -1,0 +1,5 @@
+{
+  "repo_public_key": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+  "index_public_key": "1398f62c6d1a457c51ba6a4b5f3dbd2f69fca93216218dc8997e416bd17d93ca",
+  "note": "Deterministic test keys (seeds 7 and 8). Fixture only; never trust in production."
+}

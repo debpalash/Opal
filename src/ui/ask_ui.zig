@@ -8,6 +8,7 @@
 //! fields, never from the agent's own label.
 
 const std = @import("std");
+const i18n = @import("../core/i18n.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
 const theme = @import("theme.zig");
@@ -198,7 +199,7 @@ fn drawWorking(base: usize, t: *ask.Turn, agent: pure.Agent, do_cancel: *bool) v
         var sp = dvui.box(@src(), .{}, .{ .id_extra = base + 13, .expand = .horizontal });
         sp.deinit();
     }
-    if (components.actionButton(@src(), "Cancel", .secondary, base + 14)) do_cancel.* = true;
+    if (components.actionButton(@src(), i18n.t(.common_cancel), .secondary, base + 14)) do_cancel.* = true;
 
     var hb: [96]u8 = undefined;
     const hint = std.fmt.bufPrint(&hb, "Uses your {s} credit, up to ${d}.{d:0>2}.", .{ if (agent == .codex) "Codex" else "Claude Code", pure.BUDGET_CENTS / 100, pure.BUDGET_CENTS % 100 }) catch "";

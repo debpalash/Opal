@@ -3,6 +3,7 @@
 
 const brands = @import("brands.zig");
 const std = @import("std");
+const i18n = @import("../core/i18n.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
 const theme = @import("theme.zig");
@@ -295,7 +296,7 @@ fn renderBrowsers() void {
         } else if (components.actionButton(@src(), if (view.active) "New code" else "Pair a browser", .primary, 31000)) {
             if (!link.startPairing()) state.showToast("No entropy source: could not make a code");
         }
-        if (view.active and components.actionButton(@src(), "Cancel", .secondary, 31001)) link.cancelPairing();
+        if (view.active and components.actionButton(@src(), i18n.t(.common_cancel), .secondary, 31001)) link.cancelPairing();
     }
     const Help = struct {
         var open = false;

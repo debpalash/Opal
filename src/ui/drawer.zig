@@ -1,5 +1,6 @@
 const page_controls = @import("browse_filters.zig");
 const std = @import("std");
+const i18n = @import("../core/i18n.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
 const state = @import("../core/state.zig");
@@ -82,12 +83,12 @@ fn groupOf(tab: state.DrawerTab) ?RailGroup {
 
 fn groupLabel(g: RailGroup) []const u8 {
     return switch (g) {
-        .movies_tv => "Movies & TV",
-        .video => "Video",
-        .anime => "Anime",
-        .reading => "Reading",
-        .audio => "Audio",
-        .web => "Web",
+        .movies_tv => i18n.t(.nav_movies_tv),
+        .video => i18n.t(.nav_group_video),
+        .anime => i18n.t(.nav_anime),
+        .reading => i18n.t(.nav_group_reading),
+        .audio => i18n.t(.nav_group_audio),
+        .web => i18n.t(.nav_group_web),
     };
 }
 
@@ -153,34 +154,34 @@ fn renderGroup(g: RailGroup, gi: usize) void {
     // Sources for this group (compact labels; ids kept distinct per tab).
     switch (g) {
         .movies_tv => {
-            renderRailTab(.TMDB, shell.iconForTab(.TMDB), "Movies & TV", 4);
-            renderRailTab(.Drama, shell.iconForTab(.Drama), "Drama", 21);
+            renderRailTab(.TMDB, shell.iconForTab(.TMDB), i18n.t(.nav_movies_tv), 4);
+            renderRailTab(.Drama, shell.iconForTab(.Drama), i18n.t(.nav_drama), 21);
             renderRailTab(.Jellyfin, shell.iconForTab(.Jellyfin), "Jellyfin", 12);
             renderRailTab(.Plex, shell.iconForTab(.Plex), "Plex", 13);
         },
         .video => {
             renderRailTab(.YouTube, shell.iconForTab(.YouTube), "YouTube", 5);
-            renderRailTab(.Iptv, shell.iconForTab(.Iptv), "Live TV", 23);
+            renderRailTab(.Iptv, shell.iconForTab(.Iptv), i18n.t(.nav_live_tv), 23);
         },
         .anime => {
-            renderRailTab(.Anime, shell.iconForTab(.Anime), "Anime", 6);
-            renderRailTab(.Comics, shell.iconForTab(.Comics), "Comics", 9);
+            renderRailTab(.Anime, shell.iconForTab(.Anime), i18n.t(.nav_anime), 6);
+            renderRailTab(.Comics, shell.iconForTab(.Comics), i18n.t(.nav_comics), 9);
         },
         .reading => {
-            renderRailTab(.Novels, shell.iconForTab(.Novels), "Novels", 20);
-            renderRailTab(.Vndb, shell.iconForTab(.Vndb), "Visual Novels", 22);
-            renderRailTab(.Opds, shell.iconForTab(.Opds), "Books", 17);
+            renderRailTab(.Novels, shell.iconForTab(.Novels), i18n.t(.nav_novels), 20);
+            renderRailTab(.Vndb, shell.iconForTab(.Vndb), i18n.t(.nav_visual_novels), 22);
+            renderRailTab(.Opds, shell.iconForTab(.Opds), i18n.t(.nav_books), 17);
         },
         .audio => {
-            renderRailTab(.Music, shell.iconForTab(.Music), "Music", 24);
-            renderRailTab(.Podcasts, shell.iconForTab(.Podcasts), "Podcasts", 7);
-            renderRailTab(.Radio, shell.iconForTab(.Radio), "Radio", 8);
-            renderRailTab(.Audiobooks, shell.iconForTab(.Audiobooks), "Audiobooks", 18);
+            renderRailTab(.Music, shell.iconForTab(.Music), i18n.t(.nav_music), 24);
+            renderRailTab(.Podcasts, shell.iconForTab(.Podcasts), i18n.t(.nav_podcasts), 7);
+            renderRailTab(.Radio, shell.iconForTab(.Radio), i18n.t(.nav_radio), 8);
+            renderRailTab(.Audiobooks, shell.iconForTab(.Audiobooks), i18n.t(.nav_audiobooks), 18);
         },
         .web => {
-            renderRailTab(.Web, shell.iconForTab(.Web), "Browser", 10);
+            renderRailTab(.Web, shell.iconForTab(.Web), i18n.t(.nav_browser), 10);
             renderRailTab(.RSS, shell.iconForTab(.RSS), "RSS", 11);
-            renderRailTab(.Wallpapers, shell.iconForTab(.Wallpapers), "Wallpapers", 25);
+            renderRailTab(.Wallpapers, shell.iconForTab(.Wallpapers), i18n.t(.nav_wallpapers), 25);
         },
     }
 }
@@ -354,10 +355,10 @@ pub fn renderDrawer() void {
         // numbered in VISUAL order: tab_index = id + 1, so keyboard focus
         // walks the rail top-to-bottom instead of jumping around.
         const shell = @import("shell.zig");
-        renderRailTab(.Search, shell.iconForTab(.Search), "Search", 0);
-        renderRailTab(.Downloads, shell.iconForTab(.Downloads), "Downloads", 1);
-        renderRailTab(.Queue, shell.iconForTab(.Queue), "Queue", 2);
-        renderRailTab(.History, shell.iconForTab(.History), "History", 3);
+        renderRailTab(.Search, shell.iconForTab(.Search), i18n.t(.nav_search), 0);
+        renderRailTab(.Downloads, shell.iconForTab(.Downloads), i18n.t(.nav_downloads), 1);
+        renderRailTab(.Queue, shell.iconForTab(.Queue), i18n.t(.nav_queue), 2);
+        renderRailTab(.History, shell.iconForTab(.History), i18n.t(.nav_history), 3);
 
         railGroupGap(0);
 
@@ -369,9 +370,9 @@ pub fn renderDrawer() void {
         railGroupGap(1);
 
         // ── Group 3: Configure ──
-        renderRailTab(.AI, shell.iconForTab(.AI), "AI", 14);
-        renderRailTab(.Plugins, shell.iconForTab(.Plugins), "Plugins", 15);
-        renderRailTab(.Settings, shell.iconForTab(.Settings), "Settings", 16);
+        renderRailTab(.AI, shell.iconForTab(.AI), i18n.t(.nav_ai), 14);
+        renderRailTab(.Plugins, shell.iconForTab(.Plugins), i18n.t(.nav_plugins), 15);
+        renderRailTab(.Settings, shell.iconForTab(.Settings), i18n.t(.nav_settings), 16);
 
         // Spacer to push bottom controls to the bottom of the rail.
         {
@@ -383,19 +384,19 @@ pub fn renderDrawer() void {
         renderBottomIcon(
             .{ .Tab = .Logs },
             icons.tvg.lucide.terminal,
-            "Developer Console",
+            i18n.t(.drawer_console),
             100,
         );
         renderBottomIcon(
             .ExpandToggle,
             if (state.app.drawer_expanded) icons.tvg.lucide.@"minimize-2" else icons.tvg.lucide.@"maximize-2",
-            if (state.app.drawer_expanded) "Collapse drawer" else "Expand drawer",
+            if (state.app.drawer_expanded) i18n.t(.drawer_collapse) else i18n.t(.drawer_expand),
             101,
         );
         renderBottomIcon(
             .CloseDrawer,
             icons.tvg.lucide.@"panel-right-close",
-            "Hide drawer",
+            i18n.t(.drawer_hide),
             102,
         );
     }

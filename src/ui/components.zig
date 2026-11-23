@@ -1,4 +1,5 @@
 const std = @import("std");
+const i18n = @import("../core/i18n.zig");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -1168,7 +1169,7 @@ pub fn confirmDangerButton(src: std.builtin.SourceLocation, label: []const u8, i
     if (armed) bw.data().options.color_fill = @import("color_compat.zig").wrap(theme.colors.danger_bg);
 
     bw.drawBackground();
-    _ = dvui.labelNoFmt(@src(), if (armed) "Click again to confirm" else label, .{ .align_x = 0.5, .align_y = 0.5 }, .{
+    _ = dvui.labelNoFmt(@src(), if (armed) i18n.t(.common_confirm_again) else label, .{ .align_x = 0.5, .align_y = 0.5 }, .{
         .color_text = @import("color_compat.zig").wrap(if (armed) tk.semantic_error() else tk.text_secondary()),
         .font = fontAt(tk.fs_small),
         .padding = dvui.Rect.all(0),
