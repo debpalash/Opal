@@ -425,14 +425,25 @@ def test_iptv_guide_fixture_shape():
         return base.timestamp() - off
 
     start, stop = re.findall(r'start="([^"]+)" stop="([^"]+)"', xml)[0]
-    gz = gzip.compress(b'<tv><channel id="a"><display-name>A</display-name></channel></tv>', mtime=0)
+    payload = b'<tv><channel id="a"><display-name>A</display-name></channel></tv>'
     pure = _src("src/services/epg_pure.zig")
-    gz_literal = "".join("\\x%02x" % b for b in gz)
+    # Compressed bytes differ between zlib builds (macOS vs Linux CI), so
+    # compare what the Zig fixture *decompresses to*, not the deflate stream.
+    def zig_gzip_payloads():
+        out = []
+        for lit in re.findall(r'"((?:\\x[0-9a-fA-F]{2})+)"', pure):
+            raw = bytes(int(h, 16) for h in re.findall(r"\\x([0-9a-fA-F]{2})", lit))
+            if raw[:2] == b"\x1f\x8b":
+                try:
+                    out.append(gzip.decompress(raw))
+                except Exception:
+                    out.append(None)
+        return out
     checks = {
         "fallback show lasts two real hours": parse(stop) - parse(start) == 7200,
         "zig test pins the same instant pair": '"20261025003000 +0100"' in pure and '"20261025013000 +0000"' in pure,
-        "gzip magic recognised": gz[:2] == b"\x1f\x8b" and "pub fn isGzip" in pure,
-        "zig gzip fixture is python's gzip output": gz_literal in pure,
+        "gzip magic recognised": "pub fn isGzip" in pure,
+        "zig gzip fixture decompresses to the expected XML": payload in zig_gzip_payloads(),
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
