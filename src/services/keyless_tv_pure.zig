@@ -428,6 +428,18 @@ pub fn movieScrobblePayload(id: i32, imdb: []const u8, quote_tmdb: bool, out: []
     return std.fmt.bufPrint(out, "{{\"movies\":[{{\"ids\":{{{s}}}}}]}}", .{ids}) catch null;
 }
 
+/// Trakt /scrobble/{start,pause,stop} body. `season`/`episode` < 0 means a
+/// movie. Progress is clamped to [0, 100] with one decimal. Null when no
+/// usable identity exists.
+pub fn liveScrobblePayload(id: i32, imdb: []const u8, season: i32, episode: i32, progress: f64, out: []u8) ?[]const u8 {
+    var ids_buf: [48]u8 = undefined;
+    const ids = externalIds(id, imdb, false, &ids_buf) orelse return null;
+    const pct = if (std.math.isFinite(progress)) std.math.clamp(progress, 0, 100) else 0;
+    if (episode < 0) return std.fmt.bufPrint(out, "{{\"movie\":{{\"ids\":{{{s}}}}},\"progress\":{d:.1}}}", .{ ids, pct }) catch null;
+    if (episode == 0 or season < 0) return null;
+    return std.fmt.bufPrint(out, "{{\"show\":{{\"ids\":{{{s}}}}},\"episode\":{{\"season\":{d},\"number\":{d}}},\"progress\":{d:.1}}}", .{ ids, season, episode, pct }) catch null;
+}
+
 // ══════════════════════════════════════════════════════════
 // Tests (small fixtures)
 // ══════════════════════════════════════════════════════════
@@ -601,4 +613,13 @@ test "movie scrobble: keyless movie sends its IMDb id, keyed movie keeps tmdb" {
     try t.expectEqualStrings("{\"movies\":[{\"ids\":{\"tmdb\":278}}]}", movieScrobblePayload(278, imdb, false, &b).?);
     try t.expectEqualStrings("{\"movies\":[{\"ids\":{\"tmdb\":\"278\"}}]}", movieScrobblePayload(278, "", true, &b).?);
     try t.expect(movieScrobblePayload(0, "", false, &b) == null);
+}
+
+test "Trakt live scrobble payload by id, never by title" {
+    var b: [256]u8 = undefined;
+    try t.expectEqualStrings("{\"movie\":{\"ids\":{\"tmdb\":278}},\"progress\":42.5}", liveScrobblePayload(278, "", -1, -1, 42.5, &b).?);
+    try t.expectEqualStrings("{\"show\":{\"ids\":{\"tmdb\":1399}},\"episode\":{\"season\":1,\"number\":2},\"progress\":100.0}", liveScrobblePayload(1399, "", 1, 2, 140, &b).?);
+    try t.expectEqualStrings("{\"movie\":{\"ids\":{\"tmdb\":278}},\"progress\":0.0}", liveScrobblePayload(278, "", -1, -1, std.math.nan(f64), &b).?);
+    try t.expect(liveScrobblePayload(0, "", -1, -1, 10, &b) == null);
+    try t.expect(liveScrobblePayload(1399, "", 1, 0, 10, &b) == null);
 }

@@ -862,6 +862,28 @@ fn buildSupported(b: *std.Build) void {
     }));
     test_step.dependOn(&b.addRunArtifact(test_nova2_spawn).step);
 
+    // Cross-boundary modules (anything importing core/io_global.zig) run
+    // against a MockIo: fake clock, virtual sleep, temp-dir CWD. The root
+    // sits at src/ so services/ -> ../core imports stay inside the module.
+    const test_io_seam = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/io_seam_tests.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_io_seam).step);
+
+    const test_scrobble_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/scrobble_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_scrobble_pure).step);
+
     const test_m3u = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/m3u.zig"),

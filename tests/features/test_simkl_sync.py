@@ -20,7 +20,8 @@ def test_simkl_sync_lifecycle():
         "token never serialized": "simkl_state" in api and "access_token[0.." not in api,
         "durable history": 'outbox.enqueueState("simkl", operation' in service
             and 'outbox.nextDue("simkl"' in service and "outbox.deferFailure" in service,
-        "tv completion hook": 'simkl.zig").markWatchedEpisode' in _src("src/services/tv_library.zig")
+        "tv completion hook": 'scrobble_bus.zig").mark(.tvEpisode(' in _src("src/services/tv_library.zig")
+            and "simkl.markWatchedEpisode(" in _src("src/services/scrobble_sinks.zig")
             and "setEpisodeWatched" in _src("src/services/tmdb.zig"),
         # Status comes from the reliable-fetch seam's typed result.
         "http semantics": "const status = res.status;" in service and "status == 401" in service

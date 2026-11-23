@@ -21,7 +21,8 @@ def test_anilist_sync_lifecycle():
         "provider api": 'api_path, "/sync-accounts"' in remote
             and "remote_sync_api.zig" in remote and 'std.mem.eql(u8, method, "POST")' in api,
         "stable media identity": "anilist_id: i64" in state
-            and "r.anilist_id = m.id" in anime and "anilist.updateProgress(r.anilist_id" in anime,
+            and "r.anilist_id = m.id" in anime and 'scrobble_bus.zig").mark(.anime(r.anilist_id' in anime
+            and "anilist.updateProgress(d.media.anilist_id" in _src("src/services/scrobble_sinks.zig"),
         "durable outbox": 'outbox.enqueue("anilist", "progress"' in service
             and "outbox.nextDue" in service and "outbox.deferFailure" in service,
         "revoked auth is actionable": "const Delivery = enum { success, retry, revoked }" in service

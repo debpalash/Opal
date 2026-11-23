@@ -228,8 +228,9 @@ def movie_history_removal_sync():
             and "catalog_tmdb_id" in history and "catalog_movie_tmdb_id" in player,
         "verified identity bound": "bindCatalogMovie(history_identity, p.catalog_tmdb_id)" in player
             and "pub fn bindCatalogMovie" in wh,
-        "native removal syncs": '@import("../services/trakt.zig").markUnwatchedMovie(catalog_tmdb_id, movie_imdb)' in wh
-            and '@import("../services/simkl.zig").markUnwatchedMovie(catalog_tmdb_id, movie_imdb)' in wh,
+        "native removal syncs": 'scrobble_bus.zig").mark(.movie(catalog_tmdb_id), false)' in wh
+            and "trakt.markUnwatchedMovie(m.tmdb_id, imdb)" in _src("src/services/scrobble_sinks.zig")
+            and "simkl.markUnwatchedMovie(m.tmdb_id, imdb)" in _src("src/services/scrobble_sinks.zig"),
         "trakt removal": "pub fn markUnwatchedMovie" in trakt
             and '"/sync/history/remove"' in trakt,
         "simkl removal": "pub fn markUnwatchedMovie" in simkl

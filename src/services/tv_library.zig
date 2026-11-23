@@ -618,17 +618,9 @@ pub fn setEpisodeWatched(tmdb_id: i32, season: u32, episode: u32, watched: bool)
     // rejecting negative IDs silently discarded acknowledged watched toggles.
     if (tmdb_id == 0 or episode == 0) return;
     db.tvMarkWatched(tmdb_id, season, episode, watched);
-    // The remembered IMDb id lets a keyless (hashed) show be reported by IMDb
-    // rather than as an unrelated TMDB id.
-    var imdb_buf: [16]u8 = undefined;
-    const imdb = db.tvImdbId(tmdb_id, &imdb_buf);
-    if (watched) {
-        @import("trakt.zig").markWatchedEpisode(tmdb_id, imdb, @intCast(season), @intCast(episode));
-        @import("simkl.zig").markWatchedEpisode(tmdb_id, imdb, @intCast(season), @intCast(episode));
-    } else {
-        @import("trakt.zig").markUnwatchedEpisode(tmdb_id, imdb, @intCast(season), @intCast(episode));
-        @import("simkl.zig").markUnwatchedEpisode(tmdb_id, imdb, @intCast(season), @intCast(episode));
-    }
+    // Trackers via the scrobble bus (dedupes the 80% playback mark against
+    // this commit; the sinks resolve a keyless show's remembered IMDb id).
+    @import("../core/scrobble_bus.zig").mark(.tvEpisode(tmdb_id, @intCast(season), @intCast(episode)), watched);
     markDirty();
 }
 
