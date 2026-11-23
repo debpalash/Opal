@@ -1111,6 +1111,8 @@ fn buildSupported(b: *std.Build) void {
         "src/services/recap_pure.zig",
         "src/services/next_episode_pure.zig",
         "src/services/addon_repo_pure.zig",
+        "src/services/addon_index_pure.zig",
+        "src/core/i18n_pure.zig",
         "src/services/moments_pure.zig",
         "src/services/llm_oneshot_pure.zig",
     }) |babel_pure| {

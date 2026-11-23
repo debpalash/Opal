@@ -525,6 +525,12 @@
       <form id="addon-form" class="search-row"><input id="addon-id" required maxlength="32" aria-label="Repository name" placeholder="Repository name"><input id="addon-url" required type="url" aria-label="Repository URL" placeholder="HTTPS repository URL"><input id="addon-key" required minlength="64" maxlength="64" aria-label="Publisher public key" placeholder="Publisher public key"><button id="addon-add">Add repository</button></form>
       <button id="addon-refresh" type="button">Reload repositories</button><div id="addon-status" class="hint" role="status" aria-live="polite"></div><div id="addon-list"></div>
     </details>
+    <details class="acc-group" id="addon-index"><summary data-i18n="addons_index_title">Community add-on index</summary>
+      <p class="hint" data-i18n="addons_index_hint">Off until you enter an index URL. Every repository it lists is still verified against its publisher key, and executable add-ons still need your approval.</p>
+      <form id="addon-index-form" class="search-row"><input id="addon-index-url" type="url" maxlength="1024" aria-label="Index URL" placeholder="Index URL (HTTPS)" data-i18n-placeholder="addons_index_url"><input id="addon-index-key" maxlength="64" aria-label="Index signing key" placeholder="Index signing key (optional)" data-i18n-placeholder="addons_index_key"><button id="addon-index-save" data-i18n="addons_index_save">Save index</button></form>
+      <div class="search-row"><input id="addon-index-q" type="search" aria-label="Search repositories and add-ons" placeholder="Search repositories and add-ons" data-i18n-placeholder="addons_index_search"><button id="addon-index-fetch" type="button" data-i18n="addons_index_fetch">Fetch index</button></div>
+      <div id="addon-index-status" class="hint" role="status" aria-live="polite"></div><div id="addon-index-list"></div>
+    </details>
     <div class="sect">Profiles</div>
     <form id="profile-form" class="search-row"><select id="profile-choice" aria-label="Profile"></select><input id="profile-pin" type="password" inputmode="numeric" autocomplete="off" aria-label="Profile PIN" placeholder="PIN if required"><button id="profile-switch" type="submit">Switch profile</button><button id="profile-refresh" type="button">Refresh profiles</button></form><div id="profile-status" class="hint" role="status" aria-live="polite"></div>
     <form id="profile-kid-form" class="search-row" hidden><select id="profile-kid-target" aria-label="Kid profile"></select><select id="profile-kid-rating" aria-label="Highest rating allowed"></select><label class="hint"><input id="profile-kid-unrated" type="checkbox"> Allow unrated titles</label><label class="hint"><input id="profile-kid-on" type="checkbox" checked> Kid profile</label><input id="profile-kid-pin" type="password" inputmode="numeric" autocomplete="off" aria-label="Main profile PIN" placeholder="Main profile PIN (to loosen limits)"><button id="profile-kid-save" type="submit">Save age limits</button></form><div id="profile-kid-status" class="hint" role="status" aria-live="polite"></div>
@@ -719,56 +725,56 @@
 <nav id="app-nav" aria-label="Main navigation">
   <div class="nav-brand"><div class="logo" aria-hidden="true"></div><span>Opal</span></div>
   <div class="nav-section nav-primary">
-    <div class="nav-label">Discover</div>
-    <button type="button" data-page="home" class="on"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10"/></svg>Home</button>
-    <button type="button" data-page="browse"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Browse</button>
-    <button type="button" data-page="search"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Search</button>
-    <button type="button" data-page="np"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg>Playing</button>
+    <div class="nav-label" data-i18n="nav_discover">Discover</div>
+    <button type="button" data-page="home" class="on"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10"/></svg><span data-i18n="nav_home">Home</span></button>
+    <button type="button" data-page="browse"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span data-i18n="nav_browse">Browse</span></button>
+    <button type="button" data-page="search"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg><span data-i18n="nav_search">Search</span></button>
+    <button type="button" data-page="np"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg><span data-i18n="nav_playing">Playing</span></button>
   </div>
 
   <button type="button" id="nav-more" aria-expanded="false" aria-controls="nav-more-panel">
-    <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>More
+    <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg><span data-i18n="nav_more">More</span>
   </button>
 </nav>
 <button type="button" id="nav-scrim" tabindex="-1" aria-label="Close navigation"></button>
 
   <nav id="nav-more-panel" aria-label="All media sections" aria-hidden="true" inert>
     <div class="nav-panel-surface">
-    <div class="nav-sheet-head"><h2>All of Opal</h2><button type="button" id="nav-close" aria-label="Close navigation">×</button></div>
+    <div class="nav-sheet-head"><h2 data-i18n="nav_all_of_opal">All of Opal</h2><button type="button" id="nav-close" aria-label="Close navigation" data-i18n-label="nav_close">×</button></div>
     <div class="nav-section">
-      <div class="nav-label">My Opal</div>
-      <button type="button" data-page="watch"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v9l6 3"/><circle cx="12" cy="12" r="9"/></svg>Watching</button>
-      <button type="button" data-page="act"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 19h16"/></svg>Activity</button>
-      <button type="button" data-page="ai"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-4.2-7.6L21 4l-1 4.2A8.9 8.9 0 0 1 21 12z"/><path d="M8 12h.01M12 12h.01M16 12h.01"/></svg>Ask</button>
+      <div class="nav-label" data-i18n="nav_my_opal">My Opal</div>
+      <button type="button" data-page="watch"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v9l6 3"/><circle cx="12" cy="12" r="9"/></svg><span data-i18n="nav_watching">Watching</span></button>
+      <button type="button" data-page="act"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 19h16"/></svg><span data-i18n="nav_activity">Activity</span></button>
+      <button type="button" data-page="ai"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-4.2-7.6L21 4l-1 4.2A8.9 8.9 0 0 1 21 12z"/><path d="M8 12h.01M12 12h.01M16 12h.01"/></svg><span data-i18n="nav_ask">Ask</span></button>
     </div>
     <div class="nav-section">
-      <div class="nav-label">Video</div>
+      <div class="nav-label" data-i18n="nav_group_video">Video</div>
       <button type="button" data-page="yt"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="3"/><path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none"/></svg>YouTube</button>
-      <button type="button" data-page="tv"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="13" rx="2"/><path d="m8 3 4 4 4-4"/></svg>Live TV</button>
-      <button type="button" data-page="anime"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg>Anime</button>
-      <button type="button" data-page="drama"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 7h18v12H3z"/><path d="m7 7 2-4M17 7l-2-4"/></svg>Drama</button>
+      <button type="button" data-page="tv"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="13" rx="2"/><path d="m8 3 4 4 4-4"/></svg><span data-i18n="nav_live_tv">Live TV</span></button>
+      <button type="button" data-page="anime"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg><span data-i18n="nav_anime">Anime</span></button>
+      <button type="button" data-page="drama"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 7h18v12H3z"/><path d="m7 7 2-4M17 7l-2-4"/></svg><span data-i18n="nav_drama">Drama</span></button>
     </div>
     <div class="nav-section">
-      <div class="nav-label">Audio</div>
-      <button type="button" data-page="music"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg>Music</button>
-      <button type="button" data-page="radio"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="13" r="3"/><rect x="2" y="7" width="20" height="14" rx="2"/><path d="m16 3-8 4"/></svg>Radio</button>
-      <button type="button" data-page="podcasts"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="11" r="3"/><path d="M12 14v7"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M6 14a8 8 0 1 1 12 0"/></svg>Podcasts</button>
-      <button type="button" data-page="abs"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6a8 8 0 0 1 16 0v9"/><rect x="2" y="13" width="4" height="6" rx="1"/><rect x="18" y="13" width="4" height="6" rx="1"/></svg>Audiobooks</button>
+      <div class="nav-label" data-i18n="nav_group_audio">Audio</div>
+      <button type="button" data-page="music"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg><span data-i18n="nav_music">Music</span></button>
+      <button type="button" data-page="radio"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="13" r="3"/><rect x="2" y="7" width="20" height="14" rx="2"/><path d="m16 3-8 4"/></svg><span data-i18n="nav_radio">Radio</span></button>
+      <button type="button" data-page="podcasts"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="11" r="3"/><path d="M12 14v7"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M6 14a8 8 0 1 1 12 0"/></svg><span data-i18n="nav_podcasts">Podcasts</span></button>
+      <button type="button" data-page="abs"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6a8 8 0 0 1 16 0v9"/><rect x="2" y="13" width="4" height="6" rx="1"/><rect x="18" y="13" width="4" height="6" rx="1"/></svg><span data-i18n="nav_audiobooks">Audiobooks</span></button>
     </div>
     <div class="nav-section">
-      <div class="nav-label">Reading</div>
-      <button type="button" data-page="comics"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 4h7v16H4z"/><path d="M13 4h7v16h-7z"/><path d="M4 9h7M13 9h7"/></svg>Comics</button>
-      <button type="button" data-page="novels"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h13v18H6a2 2 0 0 1-2-2z"/><path d="M8 7h7M8 11h7"/></svg>Novels</button>
-      <button type="button" data-page="vndb"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h6M7 13h4"/></svg>Visual Novels</button>
+      <div class="nav-label" data-i18n="nav_group_reading">Reading</div>
+      <button type="button" data-page="comics"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 4h7v16H4z"/><path d="M13 4h7v16h-7z"/><path d="M4 9h7M13 9h7"/></svg><span data-i18n="nav_comics">Comics</span></button>
+      <button type="button" data-page="novels"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h13v18H6a2 2 0 0 1-2-2z"/><path d="M8 7h7M8 11h7"/></svg><span data-i18n="nav_novels">Novels</span></button>
+      <button type="button" data-page="vndb"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h6M7 13h4"/></svg><span data-i18n="nav_visual_novels">Visual Novels</span></button>
       <button type="button" data-page="opds"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M2 5h8a3 3 0 0 1 2 1 3 3 0 0 1 2-1h8v14h-8a3 3 0 0 0-2 1 3 3 0 0 0-2-1H2z"/></svg>OPDS</button>
     </div>
     <div class="nav-section">
-      <div class="nav-label">Servers &amp; System</div>
+      <div class="nav-label" data-i18n="nav_servers_system">Servers &amp; System</div>
       <button type="button" data-page="plex"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m10 8 4 4-4 4z"/></svg>Plex</button>
       <button type="button" data-page="jf"><svg aria-hidden="true" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>Jellyfin</button>
       <button type="button" data-page="rss"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="5.5" cy="18.5" r="1.5"/><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/></svg>RSS</button>
-      <button type="button" data-page="logs"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h4"/></svg>Logs</button>
-      <button type="button" data-page="setup"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 6.6 19l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 13.4H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 6.6l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8v.1a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>Setup</button>
+      <button type="button" data-page="logs"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h4"/></svg><span data-i18n="nav_logs">Logs</span></button>
+      <button type="button" data-page="setup"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 6.6 19l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 13.4H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 6.6l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8v.1a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg><span data-i18n="nav_setup">Setup</span></button>
     </div>
     </div>
   </nav>

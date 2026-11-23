@@ -11,6 +11,7 @@ const settingRow = settings.settingRow;
 pub fn renderGeneralTab() void {
     // ── Interface ── (whitespace-separated, no card chrome)
     sectionHeader("Interface", "Customize how Opal looks and feels", 10, @src());
+    @import("../locale_picker.zig").render();
 
     // UI Scale — Auto is the default and never drops below 1.0×. DVUI handles
     // a reported OS scale; when Linux reports only a placeholder 1×, validated

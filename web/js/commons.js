@@ -36,6 +36,57 @@ $('addon-form').onsubmit = async event => {
   catch (error) { $('addon-status').textContent = error.message; }
   finally { $('addon-add').disabled = false; }
 };
+// Community index: browse/search and add a listed repository (which pins its
+// key). Catalog verification, install, update and executable approval stay on
+// the existing signed-repository path; updates are host-only like installs.
+async function loadAddonIndex() {
+  const status = $('addon-index-status');
+  try {
+    const data = await api('/addons/index?q=' + encodeURIComponent($('addon-index-q').value.trim()));
+    const cfg = data.index || {};
+    if (document.activeElement !== $('addon-index-url')) $('addon-index-url').value = cfg.url || '';
+    if (document.activeElement !== $('addon-index-key')) $('addon-index-key').value = cfg.public_key || '';
+    $('addon-index-fetch').disabled = !cfg.enabled;
+    $('addon-index-list').replaceChildren();
+    for (const entry of data.entries || []) {
+      const item = document.createElement('article'); item.className = 'file';
+      const copy = document.createElement('div'); copy.className = 'n';
+      const name = document.createElement('strong'); name.textContent = `${entry.name} (${entry.id})`; copy.append(name);
+      if (entry.description) { const d = document.createElement('p'); d.textContent = entry.description; copy.append(d); }
+      const key = document.createElement('p'); key.className = 'hint'; key.textContent = `${entry.url} · ${entry.public_key}`; copy.append(key);
+      item.append(copy);
+      if (entry.status === 'available') {
+        const add = document.createElement('button'); add.type = 'button'; add.textContent = tr('addons_index_add', 'Add repository (pins this key)');
+        add.onclick = async () => {
+          if (!confirm(`Pin publisher key ${entry.public_key} for ${entry.url}?`)) return;
+          add.disabled = true;
+          try { await apiFormMutation('/addons/index/add', {id:entry.id}); await apiFormMutation('/addons/refresh', {id:entry.id}); await loadAddonRepositories(); await loadAddonIndex(); }
+          catch (error) { status.textContent = error.message; add.disabled = false; }
+        };
+        item.append(add);
+      } else {
+        const s = document.createElement('span'); s.className = 'hint';
+        s.textContent = entry.status === 'added' ? tr('addons_index_added', 'Added') : tr('addons_index_conflict', 'Name in use by a different repository');
+        item.append(s);
+      }
+      $('addon-index-list').append(item);
+    }
+    status.textContent = cfg.error || (cfg.enabled ? (cfg.fetched ? '' : 'Index not fetched yet.') : tr('addons_index_hint', ''));
+  } catch (error) { status.textContent = error.message; }
+}
+$('addon-index').addEventListener('toggle', () => { if ($('addon-index').open) loadAddonIndex(); });
+$('addon-index-q').oninput = () => loadAddonIndex();
+$('addon-index-form').onsubmit = async event => {
+  event.preventDefault();
+  try { await apiFormMutation('/addons/index/config', {url:$('addon-index-url').value.trim(), public_key:$('addon-index-key').value.trim()}); await loadAddonIndex(); }
+  catch (error) { $('addon-index-status').textContent = error.message; }
+};
+$('addon-index-fetch').onclick = async () => {
+  $('addon-index-fetch').disabled = true;
+  try { await apiFormMutation('/addons/index/refresh', {}); await loadAddonIndex(); }
+  catch (error) { $('addon-index-status').textContent = error.message; }
+  finally { $('addon-index-fetch').disabled = false; }
+};
 async function loadMoments() {
   try {
     const data = await api('/moments'); $('moment-list').replaceChildren();

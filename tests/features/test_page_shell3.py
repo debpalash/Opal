@@ -243,8 +243,11 @@ def test_player_dropups():
         "fullscreen toggles": "fullscreen_player_idx" in ft,
         "fullscreen icon": ('icons.tvg.lucide.@"maximize-2"' in ft
                             and 'icons.tvg.lucide.@"minimize-2"' in ft),
-        "fullscreen shortcut truthful": ('"Fullscreen (F F)"' in ft
-                                          and '"Exit fullscreen (Esc or F F)"' in ft),
+        # Labels live in the i18n table (core/locales/en.zig); the footer reads the keys.
+        "fullscreen shortcut truthful": ('i18n.t(.player_fullscreen)' in ft
+                                          and 'i18n.t(.player_exit_fullscreen)' in ft
+                                          and '"Fullscreen (F F)"' in _src("src/core/locales/en.zig")
+                                          and '"Exit fullscreen (Esc or F F)"' in _src("src/core/locales/en.zig")),
         "fullscreen no longer seeks": '"seek ' not in _between(ft, "// Fullscreen toggle.", "if (has_playlist)"),
         # The old Esc label promised an action Esc does not perform.
         "close tooltip truthful": '"Close player (Esc)"' not in ft,

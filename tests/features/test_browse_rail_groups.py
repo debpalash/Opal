@@ -34,7 +34,10 @@ def test_browse_rail_groups():
             'lucide.@"chevron-down"' in dr and 'lucide.@"chevron-right"' in dr
         ),
         "flat source list removed": '"Asian Drama"' not in dr and '"Reading (OPDS)"' not in dr,
-        "compact labels": '"Drama"' in dr and '"Books"' in dr and '"Jellyfin"' in dr,
+        # Translatable labels come from the i18n table; brand names stay literal.
+        "compact labels": ('i18n.t(.nav_drama)' in dr and 'i18n.t(.nav_books)' in dr and '"Jellyfin"' in dr
+                           and '.nav_drama = "Drama"' in _src("src/core/locales/en.zig")
+                           and '.nav_books = "Books"' in _src("src/core/locales/en.zig")),
     }
 
     # Every source tab appears in the groupOf() switch (i.e. is grouped). We check

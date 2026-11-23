@@ -1564,7 +1564,10 @@ fn renderSourcePlugins() void {
         return;
     }
 
-    if (Advanced.open) renderSignedRepositories();
+    if (Advanced.open) {
+        renderSignedRepositories();
+        if (signed_repositories_extra) |hook| hook.render();
+    }
 
     const query = std.mem.sliceTo(&src_filter_buf, 0);
 
@@ -2445,6 +2448,19 @@ const SignedUi = struct {
 pub fn deinitSignedUi() void {
     if (SignedUi.snapshot) |s| s.deinit();
     SignedUi.snapshot = null;
+    if (signed_repositories_extra) |hook| hook.deinit();
+}
+
+/// Presentation drawn under the signed repositories (the community index,
+/// ui/addon_index_ui.zig). Installed by ui/shell.zig so services/ never
+/// imports ../ui (scripts/check_architecture.py).
+pub const PanelHook = struct { render: *const fn () void, deinit: *const fn () void };
+pub var signed_repositories_extra: ?PanelHook = null;
+
+/// The community index changed repositories or installs: reload the signed
+/// repository list (and rescan plugins) on the next frame.
+pub fn markSignedRepositoriesChanged() void {
+    SignedUi.changed.store(true, .release);
 }
 
 fn signedField(buf: []u8, placeholder: []const u8, id: usize) void {

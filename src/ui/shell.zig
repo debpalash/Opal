@@ -10,6 +10,7 @@
 const brands = @import("brands.zig");
 const page_controls = @import("browse_filters.zig");
 const std = @import("std");
+const i18n = @import("../core/i18n.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
 const theme = @import("theme.zig");
@@ -433,7 +434,7 @@ fn renderTopNav(compact: bool, narrow: bool) void {
         @import("browser_hub.zig").renderToolbar();
     } else {
         if (!compact) {
-            if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-left", "Back", false, state.app.router.canGoBack())) state.app.router.goBack();
+            if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-left", i18n.t(.common_back), false, state.app.router.canGoBack())) state.app.router.goBack();
             if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-right", "Forward", false, state.app.router.canGoForward())) state.app.router.goForward();
         }
         omnibox(narrow);
@@ -562,7 +563,7 @@ fn renderPlayerTopNav() void {
     });
     defer bar.deinit();
 
-    if (components.iconButtonOverlay(@src(), icons.tvg.lucide.@"chevron-left", "Back", false, true)) {
+    if (components.iconButtonOverlay(@src(), icons.tvg.lucide.@"chevron-left", i18n.t(.common_back), false, true)) {
         if (state.app.router.canGoBack()) state.app.router.goBack() else state.app.router.navigate(.home);
         dvui.refresh(null, @src(), null);
     }
@@ -691,7 +692,7 @@ fn pluginsMenu() void {
 /// Navigation lives in the sidebar; More groups actions and tools.
 fn renderSecondaryDestinations(compact: bool) void {
     const item_opts = dvui.Options{ .expand = .horizontal, .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary) };
-    if (compact and state.app.router.canGoBack() and dvui.menuItemLabel(@src(), "Back", .{}, item_opts) != null) {
+    if (compact and state.app.router.canGoBack() and dvui.menuItemLabel(@src(), i18n.t(.common_back), .{}, item_opts) != null) {
         closeOverflowMenu();
         state.app.router.goBack();
     }
@@ -1117,6 +1118,8 @@ pub fn renderPage(r: Route) !void {
         .plugins => {
             if (@import("profiles_ui.zig").blocksKid()) return;
             if (state.app.plugin_tab != .sources) pluginSubTabs();
+            const addon_index_ui = @import("addon_index_ui.zig");
+            @import("../services/plugins.zig").signed_repositories_extra = .{ .render = &addon_index_ui.render, .deinit = &addon_index_ui.deinit };
             @import("../services/plugins.zig").renderSection(state.app.plugin_tab);
         },
         // Agents run a PTY (forkpty), which iOS does not provide.
