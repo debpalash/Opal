@@ -77,6 +77,7 @@ fn probeNetwork(base: []const u8) ep.Probe {
     var headers: [8 * 1024]u8 = undefined;
     var url_buf: [260]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "{s}/", .{base}) catch return .{ .ok = false, .reason = "address too long" };
+    @import("../core/rate_limit.zig").acquireUrl(url, 1.0);
     const r = fetch.request(url, body, &headers, .{
         .timeout_secs = 8,
         .follow_redirects = false,

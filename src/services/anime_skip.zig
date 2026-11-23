@@ -110,6 +110,7 @@ const Fetch = struct {
         const resp_buf = alloc.allocator.alloc(u8, 64 * 1024) catch return;
         defer alloc.allocator.free(resp_buf);
 
+        @import("../core/rate_limit.zig").acquire("anime-skip", 2.0);
         const resp = http.fetch(ENDPOINT, resp_buf, .{
             .method = .POST,
             .payload = body,

@@ -21,6 +21,7 @@ const Transport = struct {
 
 fn fetchSource(url: []const u8, scratch: []u8, opts: rf.Opts) ?[]const u8 {
     var headers: [16 * 1024]u8 = undefined;
+    @import("../core/rate_limit.zig").acquireUrl(url, 1.0);
     const response = rf.request(url, scratch, &headers, opts);
     if (response.ok()) return response.body;
     var message: [160]u8 = undefined;

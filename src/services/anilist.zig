@@ -195,6 +195,7 @@ fn postMutation(payload: []const u8) Delivery {
     // Token rides curl's stdin config via the seam — never argv.
     var body: [4096]u8 = undefined;
     var hdrs: [4096]u8 = undefined;
+    @import("../core/rate_limit.zig").acquire("anilist", 1.5);
     const res = @import("reliable_fetch.zig").request(ANILIST_API, &body, &hdrs, .{
         .headers = &.{ .{ .name = "Content-Type", .value = "application/json" }, .{ .name = "Accept", .value = "application/json" } },
         .secret_headers = &.{.{ .name = "Authorization", .value = bearer }},
@@ -226,6 +227,7 @@ fn postMutation(payload: []const u8) Delivery {
 const CancelEpoch = @import("../core/bounded_process.zig").CancelEpoch;
 
 fn fetchPublicPayload(payload: []const u8, out: []u8, cancel_epoch: ?CancelEpoch) usize {
+    @import("../core/rate_limit.zig").acquire("anilist", 1.5);
     const body = @import("reliable_fetch.zig").fetch(ANILIST_API, out, .{
         .headers = &.{ .{ .name = "Content-Type", .value = "application/json" }, .{ .name = "Accept", .value = "application/json" } },
         .post_body = payload,

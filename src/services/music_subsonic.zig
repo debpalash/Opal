@@ -246,6 +246,7 @@ pub fn searchIntoWithCancellation(source: u8, query: []const u8, out: []pure.Mus
     const buffer = alloc.alloc(u8, 512 * 1024) catch return .{ .status = .failed };
     defer alloc.free(buffer);
     const headers = [_]std.http.Header{.{ .name = "Accept", .value = "application/json" }};
+    @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
     const body = if (pure.universalUsesCurl(response_kind)) blk: {
         var captured_headers: [4096]u8 = undefined;
         const response = reliable_fetch.request(url, buffer, &captured_headers, .{
@@ -792,6 +793,7 @@ fn youtubeMusicWorker(job: SearchJob) void {
     const request = yt_music.request(&request_buf, job.query[0..job.query_len], job.continuation[0..job.continuation_len]) orelse return;
     const buffer = alloc.alloc(u8, 3 * 1024 * 1024) catch return;
     defer alloc.free(buffer);
+    @import("../core/rate_limit.zig").acquireUrl(yt_music.endpoint, 2.0);
     const body = reliable_fetch.fetch(yt_music.endpoint, buffer, .{
         .post_body = request,
         .headers = &.{ .{ .name = "Content-Type", .value = "application/json" }, .{ .name = "X-YouTube-Client-Name", .value = "67" }, .{ .name = "X-YouTube-Client-Version", .value = yt_music.client_version } },
@@ -1257,6 +1259,7 @@ fn downloadCopiedSong(song: pure.MusicSong, source: u8) void {
 fn fetchBody(url: []const u8, cap: usize, accept: []const u8) ?[]u8 {
     const accept_header = [_]reliable_fetch.Header{.{ .name = "Accept", .value = accept }};
     const buf = alloc.alloc(u8, cap) catch return null;
+    @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
     const body = reliable_fetch.fetch(url, buf, .{
         .user_agent = agent,
         .headers = if (accept.len > 0) &accept_header else &.{},

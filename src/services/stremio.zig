@@ -59,6 +59,7 @@ pub fn fetchCatalog() void {
             const url = "https://stremio-addons.com/catalog.json";
             const buf = alloc.alloc(u8, 256 * 1024) catch return;
             defer alloc.free(buf);
+            @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
             const n = if (@import("reliable_fetch.zig").fetch(url, buf, .{ .keep_head_on_overflow = true, .timeout_secs = 15, .impersonate = false })) |b| b.len else 0;
             if (n == 0) logs.pushLog("error", "stremio", "Failed to fetch catalog", true);
 
@@ -336,6 +337,7 @@ pub fn servesStream(manifest_url: []const u8, media_type: []const u8, id: []cons
     const url = std.fmt.bufPrint(&url_buf, "{s}/manifest.json", .{pure.addonBase(manifest_url)}) catch return null;
     const buf = alloc.alloc(u8, 256 * 1024) catch return null;
     defer alloc.free(buf);
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 6, .max_response = buf.len }) orelse return null;
     const serves = pure.servesStream(alloc, body, media_type, id) orelse return null;
     capability_mutex.lock();
@@ -391,6 +393,7 @@ pub fn queryStreams(imdb_id: []const u8, media_type: []const u8) void {
                 // head is not parseable JSON.
                 const resp_buf = alloc.alloc(u8, @import("stremio_pure.zig").max_stream_response) catch continue;
                 defer alloc.free(resp_buf);
+                @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
                 const rn = if (@import("reliable_fetch.zig").fetch(url, resp_buf, .{ .timeout_secs = 10, .impersonate = false })) |b| b.len else 0;
 
                 if (rn < 10) continue;

@@ -166,6 +166,7 @@ fn worker(job: Job) void {
     var private_url: [8192]u8 = undefined;
     defer @memset(&private_url, 0);
     const request_url = if (job.source == .wallhaven) authenticatedWallhavenUrl(job.url.text(), &private_url) else job.url.text();
+    @import("../core/rate_limit.zig").acquireUrl(request_url, 1.0);
     const body = if (job.source != .gallery)
         @import("reliable_fetch.zig").fetch(request_url, buffer, .{ .timeout_secs = 8, .connect_timeout_secs = 3, .impersonate = false, .cancel_epoch = cancel, .secret_url = true, .user_agent = @import("../core/app_meta.zig").user_agent_with_url })
     else blk: {

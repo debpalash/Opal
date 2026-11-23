@@ -91,6 +91,10 @@ pub const Plugin = struct {
     // app-owned trust directory, not in the distributable plugin directory;
     // its name binds the plugin ID to a SHA-256 digest of the normalized tree.
     user_trusted: bool = false,
+    // Manifest `require` allow-list (sorted, validated) and the one-time user
+    // grant for it / `allow_unsafe`. See plugin_permissions_pure.zig.
+    requires: @import("plugin_permissions_pure.zig").Requires = .{},
+    permission_granted: bool = false,
 };
 
 // ── Global Plugin State ──
@@ -236,6 +240,12 @@ fn loadPluginAt(plugin_dir: []const u8, id: []const u8) ?Plugin {
     extractJsonString(json, "description", &plugin.description, &plugin.description_len);
     extractJsonString(json, "author", &plugin.author, &plugin.author_len);
     plugin.allow_unsafe = @import("plugins_pure.zig").manifestUnsafe(c_alloc, json) catch return null;
+    plugin.requires = @import("plugin_permissions_pure.zig").parseRequires(c_alloc, json) catch {
+        var log_buf: [160]u8 = undefined;
+        const msg = @import("opal-fmt").bufPrintZ(&log_buf, "Plugin {s} rejected: invalid \"require\" list", .{id}) catch "Plugin rejected: invalid require list";
+        logs.pushLog("error", "plugins", msg, true);
+        return null;
+    };
     if (plugin.name_len == 0) {
         plugin.name_len = @min(id.len, plugin.name.len);
         @memcpy(plugin.name[0..plugin.name_len], id[0..plugin.name_len]);
@@ -248,7 +258,9 @@ fn loadPluginAt(plugin_dir: []const u8, id: []const u8) ?Plugin {
     plugin.has_resolve = fileExists(plugin.path[0..plugin.path_len], "resolve");
     plugin.has_trending = fileExists(plugin.path[0..plugin.path_len], "trending");
     plugin.user_trusted = pluginContentApproved(&plugin);
-    plugin.enabled = true;
+    plugin.permission_granted = permissionGranted(&plugin);
+    // Plugins that ask for permissions stay disabled until the user grants them.
+    plugin.enabled = @import("plugin_permissions_pure.zig").permitted(&plugin.requires, plugin.allow_unsafe, plugin.permission_granted);
     plugin.loaded = true;
     return plugin;
 }
@@ -282,15 +294,7 @@ fn approvalMarkerPath(p: *const Plugin, out: []u8) ?[]const u8 {
 fn pluginContentApproved(p: *const Plugin) bool {
     var marker_buf: [800]u8 = undefined;
     const marker = approvalMarkerPath(p, &marker_buf) orelse return false;
-    const io = @import("../core/io_global.zig");
-    const file = io.cwdOpenFile(marker, .{
-        .allow_directory = false,
-        .follow_symlinks = false,
-    }) catch return false;
-    defer file.close(io.io());
-    const stat = file.stat(io.io()) catch return false;
-    if (stat.kind != .file) return false;
-    return true;
+    return markerExists(marker);
 }
 
 pub const TrustChange = enum { applied, unchanged, not_found, failed };
@@ -344,18 +348,69 @@ pub fn setContentTrust(id: []const u8, trusted: bool) TrustChange {
         io.deleteFileAbsolute(marker) catch return .failed;
         return if (!pluginContentApproved(&plugin)) .applied else .failed;
     }
+    createMarker(marker) catch return if (pluginContentApproved(&plugin)) .unchanged else .failed;
+    return if (pluginContentApproved(&plugin)) .applied else .failed;
+}
+
+/// Create an app-owned, owner-only marker file in `<config>/plugin-trust/`.
+fn createMarker(marker: []const u8) !void {
+    const io = @import("../core/io_global.zig");
     var cfg_buf: [512]u8 = undefined;
     var trust_dir_buf: [600]u8 = undefined;
-    const trust_dir = std.fmt.bufPrint(&trust_dir_buf, "{s}/plugin-trust", .{paths.configDir(&cfg_buf)}) catch return .failed;
-    io.cwdMakePath(trust_dir) catch return .failed;
+    const trust_dir = try std.fmt.bufPrint(&trust_dir_buf, "{s}/plugin-trust", .{paths.configDir(&cfg_buf)});
+    try io.cwdMakePath(trust_dir);
     const permissions = if (@import("builtin").os.tag == .windows)
         std.Io.File.Permissions.default_file
     else
         std.Io.File.Permissions.fromMode(0o600);
-    const file = io.createFileAbsolute(marker, .{ .exclusive = true, .permissions = permissions }) catch
-        return if (pluginContentApproved(&plugin)) .unchanged else .failed;
+    const file = try io.createFileAbsolute(marker, .{ .exclusive = true, .permissions = permissions });
     file.close(io.io());
-    return if (pluginContentApproved(&plugin)) .applied else .failed;
+}
+
+fn markerExists(marker: []const u8) bool {
+    const io = @import("../core/io_global.zig");
+    const file = io.cwdOpenFile(marker, .{ .allow_directory = false, .follow_symlinks = false }) catch return false;
+    defer file.close(io.io());
+    const stat = file.stat(io.io()) catch return false;
+    return stat.kind == .file;
+}
+
+/// One-time permission grant marker. Bound to the plugin id and its exact
+/// permission set (not its bytes), so content updates that keep the same
+/// `require` list keep the grant, and any new permission re-prompts.
+fn grantMarkerPath(p: *const Plugin, out: []u8) ?[]const u8 {
+    var digest: [32]u8 = undefined;
+    perms.grantDigest(p.id[0..p.id_len], p.allow_unsafe, &p.requires, &digest);
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    var cfg_buf: [512]u8 = undefined;
+    return std.fmt.bufPrint(out, "{s}/plugin-trust/{s}.grant", .{ paths.configDir(&cfg_buf), hex }) catch null;
+}
+
+fn permissionGranted(p: *const Plugin) bool {
+    if (!perms.needsGrant(&p.requires, p.allow_unsafe)) return false;
+    var marker_buf: [800]u8 = undefined;
+    const marker = grantMarkerPath(p, &marker_buf) orelse return false;
+    return markerExists(marker);
+}
+
+/// Grant or revoke the permissions the installed manifest requests. Plugins
+/// that request none report `.unchanged`: there is nothing to grant.
+pub fn setPermissionGrant(id: []const u8, grant: bool) TrustChange {
+    if (!@import("../core/source_config_pure.zig").validId(id)) return .not_found;
+    var dir_buf: [512]u8 = undefined;
+    const plugin = loadPluginAt(getPluginDir(&dir_buf), id) orelse return .not_found;
+    if (!perms.needsGrant(&plugin.requires, plugin.allow_unsafe)) return .unchanged;
+    if (permissionGranted(&plugin) == grant) return .unchanged;
+    var marker_buf: [800]u8 = undefined;
+    const marker = grantMarkerPath(&plugin, &marker_buf) orelse return .failed;
+    if (grant) {
+        createMarker(marker) catch return if (permissionGranted(&plugin)) .unchanged else .failed;
+    } else {
+        @import("../core/io_global.zig").deleteFileAbsolute(marker) catch return .failed;
+    }
+    // The scanned `plugins` snapshot is UI-thread state and is not touched
+    // here; every launch recomputes the gate from the trust store.
+    return if (permissionGranted(&plugin) == grant) .applied else .failed;
 }
 
 fn pluginDigest(p: *const Plugin, out: *[32]u8) bool {
@@ -382,8 +437,11 @@ fn pluginDigest(p: *const Plugin, out: *[32]u8) bool {
 // needs a per-spawn OS sandbox (macOS sandbox-exec / Linux
 // bubblewrap) — see TODO below.
 //
-// `require` is replaced with a deny-all hook (empty allow-list by
-// default; manifest opt-in for specific modules in a later pass).
+// `require` is replaced with a gate that admits only the modules the
+// manifest lists under `require` (plugin_permissions_pure.zig), resolved
+// from the plugin's own directory with native loaders removed. Anything
+// else is denied. A non-empty list (or `allow_unsafe`) also needs the
+// user's one-time permission grant before the plugin runs at all.
 //
 // NOTE: this only fires when the plugin executable is interpreted
 // by `lua` (detected via `.lua` suffix or a `lua` shebang). Native
@@ -392,18 +450,8 @@ fn pluginDigest(p: *const Plugin, out: *[32]u8) bool {
 //
 // macOS `sandbox-exec` and Linux `bwrap` wrap every spawn in
 // `runPluginCommand`. Windows has no equivalent tool in this install.
-// TODO(security): manifest `require` allow-list, and a one-time
-// consent prompt for `allow_unsafe = true` plugins.
-const LUA_SANDBOX_PRELUDE: []const u8 =
-    \\os.execute=nil os.remove=nil os.rename=nil os.exit=nil os.tmpname=nil os.getenv=nil
-    \\io.popen=nil io.open=nil io.input=nil io.output=nil io.lines=nil
-    \\if package then package.loadlib=nil package.path="" package.cpath="" package.preload={} end
-    \\if package then package.searchers=nil package.loaders=nil package.loaded={} end
-    \\package=nil debug=nil
-    \\dofile=nil loadfile=nil loadstring=nil load=nil
-    \\require=function(m) error("require denied: "..tostring(m)) end
-    \\
-;
+const perms = @import("plugin_permissions_pure.zig");
+const PRELUDE_CAP: usize = 4096;
 
 /// Detect whether `exec_path` points at a Lua script (by `.lua`
 /// suffix or a shebang line containing `lua`). Used to decide
@@ -421,19 +469,59 @@ fn detectLuaScript(exec_path: []const u8) bool {
 }
 
 /// Build an argv that runs `exec_path` under the sandboxed Lua VM:
-/// `lua -e <PRELUDE> -- <script> <extras...>`. Caller-supplied
-/// `out_argv` must have at least `4 + extras.len` slots.
+/// `lua -e <PRELUDE> <script> <extras...>`. Caller-supplied
+/// `out_argv` must have at least `4 + extras.len` slots. Null when the
+/// plugin's prelude cannot be built safely; the caller must not run it.
 fn buildSandboxedLuaArgv(
     out_argv: [][]const u8,
+    prelude_buf: *[PRELUDE_CAP]u8,
+    p: *const Plugin,
     exec_path: []const u8,
     extras: []const []const u8,
-) []const []const u8 {
+) ?[]const []const u8 {
+    const prelude = perms.buildPrelude(prelude_buf, p.path[0..p.path_len], &p.requires) orelse {
+        logs.pushLog("error", "plugins", "Plugin path cannot be sandboxed; not running it", true);
+        return null;
+    };
     out_argv[0] = "lua";
     out_argv[1] = "-e";
-    out_argv[2] = LUA_SANDBOX_PRELUDE;
+    out_argv[2] = prelude;
     out_argv[3] = exec_path;
     for (extras, 0..) |a, i| out_argv[4 + i] = a;
     return out_argv[0 .. 4 + extras.len];
+}
+
+pub const LaunchGate = struct {
+    mode: @import("plugins_pure.zig").RunMode,
+    trusted: bool,
+    granted: bool,
+};
+
+/// Recomputed in the worker immediately before spawn: content approval and the
+/// permission grant are both read from the app-owned trust store, never from
+/// the scan-time snapshot.
+fn launchGate(p: *const Plugin, is_lua: bool) LaunchGate {
+    const trusted = pluginContentApproved(p);
+    const granted = permissionGranted(p);
+    const ok = perms.permitted(&p.requires, p.allow_unsafe, granted);
+    return .{
+        .mode = @import("plugins_pure.zig").runMode(is_lua, p.allow_unsafe, trusted, ok),
+        .trusted = trusted,
+        .granted = granted,
+    };
+}
+
+fn logDenied(p: *const Plugin, gate: LaunchGate) void {
+    if (!gate.trusted) return logUntrustedNative(p);
+    var what_buf: [512]u8 = undefined;
+    const what = perms.describe(&p.requires, p.allow_unsafe, &what_buf);
+    var buf: [800]u8 = undefined;
+    const msg = @import("opal-fmt").bufPrintZ(
+        &buf,
+        "Plugin {s} needs permission ({s}). Grant it once from the host: POST /plugins action=grant-perms id={s} confirm=1",
+        .{ p.name[0..p.name_len], what, p.id[0..p.id_len] },
+    ) catch "Plugin needs a permission grant";
+    logs.pushLog("warn", "plugins", msg, false);
 }
 
 fn logSandboxed(name: []const u8) void {
@@ -507,21 +595,22 @@ fn runSearch(plugin: Plugin, query: []const u8, rows: []@import("plugins_pure.zi
     const exec = std.fmt.bufPrint(&exec_buf, "{s}/search", .{plugin.path[0..plugin.path_len]}) catch return .{ .outcome = .run_failed };
     const pp = @import("plugins_pure.zig");
     const is_lua = detectLuaScript(exec);
-    const trusted_now = pluginContentApproved(&plugin);
+    const gate = launchGate(&plugin, is_lua);
     const direct_argv = [_][]const u8{ exec, query };
     var sandbox_argv: [8][]const u8 = undefined;
-    const argv: []const []const u8 = switch (pp.runMode(is_lua, plugin.allow_unsafe, trusted_now)) {
+    var prelude_buf: [PRELUDE_CAP]u8 = undefined;
+    const argv: []const []const u8 = switch (gate.mode) {
         .sandbox_lua => blk: {
             const extras = [_][]const u8{query};
             logSandboxed(plugin.name[0..plugin.name_len]);
-            break :blk buildSandboxedLuaArgv(&sandbox_argv, exec, &extras);
+            break :blk buildSandboxedLuaArgv(&sandbox_argv, &prelude_buf, &plugin, exec, &extras) orelse return .{ .outcome = .not_approved };
         },
         .direct => blk: {
-            if (plugin.allow_unsafe and trusted_now) logUnsafeWarn(plugin.name[0..plugin.name_len]);
+            if (plugin.allow_unsafe) logUnsafeWarn(plugin.name[0..plugin.name_len]);
             break :blk &direct_argv;
         },
         .deny => {
-            logUntrustedNative(&plugin);
+            logDenied(&plugin, gate);
             return .{ .outcome = .not_approved };
         },
     };
@@ -689,26 +778,26 @@ pub fn runPluginSearch(query: []const u8) void {
             var exec_buf: [600]u8 = undefined;
             const exec = std.fmt.bufPrint(&exec_buf, "{s}/search", .{p.path[0..p.path_len]}) catch return;
 
-            const pp = @import("plugins_pure.zig");
             const is_lua = detectLuaScript(exec);
             // Trust is content-addressed and is intentionally recomputed in
             // the worker immediately before argv construction/spawn. The
             // scan-time UI flag is only a snapshot and never an authority.
-            const trusted_now = pluginContentApproved(&p);
-            switch (pp.runMode(is_lua, p.allow_unsafe, trusted_now)) {
+            const gate = launchGate(&p, is_lua);
+            switch (gate.mode) {
                 .sandbox_lua => {
                     var sandbox_argv: [8][]const u8 = undefined;
+                    var prelude_buf: [PRELUDE_CAP]u8 = undefined;
                     const extras = [_][]const u8{q};
-                    const argv = buildSandboxedLuaArgv(&sandbox_argv, exec, &extras);
+                    const argv = buildSandboxedLuaArgv(&sandbox_argv, &prelude_buf, &p, exec, &extras) orelse return;
                     logSandboxed(p.name[0..p.name_len]);
                     executeAndParse(p.path[0..p.path_len], argv);
                 },
                 .direct => {
-                    if (p.allow_unsafe and trusted_now) logUnsafeWarn(p.name[0..p.name_len]);
+                    if (p.allow_unsafe) logUnsafeWarn(p.name[0..p.name_len]);
                     const argv = [_][]const u8{ exec, q };
                     executeAndParse(p.path[0..p.path_len], &argv);
                 },
-                .deny => logUntrustedNative(&p),
+                .deny => logDenied(&p, gate),
             }
         }
     }.worker, .{ q_buf, qlen, active_plugin })) |t| @import("../core/workers.zig").release(t) else |_| {
@@ -729,22 +818,22 @@ pub fn runPluginTrending() void {
             var exec_buf: [600]u8 = undefined;
             const exec = std.fmt.bufPrint(&exec_buf, "{s}/trending", .{p.path[0..p.path_len]}) catch return;
 
-            const pp = @import("plugins_pure.zig");
             const is_lua = detectLuaScript(exec);
-            const trusted_now = pluginContentApproved(&p);
-            switch (pp.runMode(is_lua, p.allow_unsafe, trusted_now)) {
+            const gate = launchGate(&p, is_lua);
+            switch (gate.mode) {
                 .sandbox_lua => {
                     var sandbox_argv: [8][]const u8 = undefined;
-                    const argv = buildSandboxedLuaArgv(&sandbox_argv, exec, &.{});
+                    var prelude_buf: [PRELUDE_CAP]u8 = undefined;
+                    const argv = buildSandboxedLuaArgv(&sandbox_argv, &prelude_buf, &p, exec, &.{}) orelse return;
                     logSandboxed(p.name[0..p.name_len]);
                     executeAndParse(p.path[0..p.path_len], argv);
                 },
                 .direct => {
-                    if (p.allow_unsafe and trusted_now) logUnsafeWarn(p.name[0..p.name_len]);
+                    if (p.allow_unsafe) logUnsafeWarn(p.name[0..p.name_len]);
                     const argv = [_][]const u8{exec};
                     executeAndParse(p.path[0..p.path_len], &argv);
                 },
-                .deny => logUntrustedNative(&p),
+                .deny => logDenied(&p, gate),
             }
         }
     }.worker, .{active_plugin})) |t| @import("../core/workers.zig").release(t) else |_| {
@@ -888,21 +977,28 @@ fn runPluginResolveWith(plugin: Plugin, id: []const u8, episode: []const u8, res
             const is_lua = detectLuaScript(exec);
             const direct_argv = [_][]const u8{ exec, rid, rep };
             var sandbox_argv: [8][]const u8 = undefined;
+            var prelude_buf: [PRELUDE_CAP]u8 = undefined;
             const argv: []const []const u8 = blk: {
-                const trusted_now = pluginContentApproved(&p);
-                switch (pp.runMode(is_lua, p.allow_unsafe, trusted_now)) {
+                const gate = launchGate(&p, is_lua);
+                switch (gate.mode) {
                     .sandbox_lua => {
                         const extras = [_][]const u8{ rid, rep };
                         logSandboxed(p.name[0..p.name_len]);
-                        break :blk buildSandboxedLuaArgv(&sandbox_argv, exec, &extras);
+                        break :blk buildSandboxedLuaArgv(&sandbox_argv, &prelude_buf, &p, exec, &extras) orelse {
+                            completion.message = "This source cannot be sandboxed from its install folder.";
+                            return;
+                        };
                     },
                     .direct => {
-                        if (p.allow_unsafe and trusted_now) logUnsafeWarn(p.name[0..p.name_len]);
+                        if (p.allow_unsafe) logUnsafeWarn(p.name[0..p.name_len]);
                         break :blk &direct_argv;
                     },
                     .deny => {
-                        logUntrustedNative(&p);
-                        completion.message = "Review and approve this source in Settings before playing.";
+                        logDenied(&p, gate);
+                        completion.message = if (gate.trusted)
+                            "This source needs a one-time permission grant before it can run."
+                        else
+                            "Review and approve this source in Settings before playing.";
                         return;
                     },
                 }
@@ -1057,6 +1153,7 @@ fn runPluginResolveWith(plugin: Plugin, id: []const u8, episode: []const u8, res
                                             const max_img = 5 * 1024 * 1024;
                                             const tmp = a.alloc(u8, max_img) catch return;
                                             defer a.free(tmp);
+                                            @import("../core/rate_limit.zig").acquireUrl(u, 8.0);
                                             const body = @import("reliable_fetch.zig").fetch(u, tmp, .{
                                                 .user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
                                                 .referer = referer,
@@ -1316,6 +1413,7 @@ pub fn fetchPoster(item: *PluginResult) void {
                     // Use the bounded transport: a raw fixed-buffer pipe can
                     // stop reading at 512 KiB while curl is still writing,
                     // then deadlock forever in child.wait().
+                    @import("../core/rate_limit.zig").acquireUrl(url, 8.0);
                     break :blk @import("../core/http.zig").fetchImage(url, img_buf.?) orelse return;
                 };
 
@@ -1617,6 +1715,7 @@ fn suwaTestWorker(job: SuwaTestJob) void {
     };
     var response: [8192]u8 = undefined;
     var status: ?std.http.Status = null;
+    @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
     _ = @import("../core/http.zig").fetch(url, &response, .{ .timeout_secs = 6, .status_out = &status });
     const code: u32 = if (status) |value| @backingInt(value) else 0;
     if (code == 200) publishSuwaResult(job.generation, "Connected — server reachable") else {

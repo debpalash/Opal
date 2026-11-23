@@ -2098,6 +2098,7 @@ fn loadResume() usize {
 
 fn fetchReaderBody(url: []const u8, cap: usize, generation: u32, text: bool) ?[]u8 {
     const buf = alloc.alloc(u8, cap) catch return null;
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const body = reliable_fetch.fetch(url, buf, .{
         .user_agent = agent,
         .timeout_secs = 20,
@@ -2116,6 +2117,7 @@ fn fetchReaderBody(url: []const u8, cap: usize, generation: u32, text: bool) ?[]
 /// Fetch a JSON/API response through the shared bounded transport.
 fn fetchBody(url: []const u8, cap: usize) ?[]u8 {
     const buf = alloc.alloc(u8, cap) catch return null;
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const body = reliable_fetch.fetch(url, buf, .{
         .user_agent = agent,
         .timeout_secs = 20,
@@ -2144,6 +2146,7 @@ fn fetchBody(url: []const u8, cap: usize) ?[]u8 {
 /// search, Madara AJAX chapter lists) stay on `curlPost` — scrapeFetch is GET-only.
 fn scrapeHtml(url: []const u8, cap: usize) ?[]u8 {
     const buf = alloc.alloc(u8, cap) catch return null;
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const body = scrape.scrapeFetchWithCancellation(url, buf, browseEpoch()) orelse {
         alloc.free(buf);
         return null;
@@ -2165,6 +2168,7 @@ fn scrapeHtml(url: []const u8, cap: usize) ?[]u8 {
 /// chapter lists need both). Same heap-buffer discipline as `fetchBody`.
 fn curlPost(url: []const u8, body: []const u8, referer: []const u8, cap: usize) ?[]u8 {
     const buf = alloc.alloc(u8, cap) catch return null;
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const response = reliable_fetch.fetch(url, buf, .{
         .user_agent = agent,
         .referer = referer,

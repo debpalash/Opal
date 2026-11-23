@@ -755,6 +755,7 @@ fn browseEpoch() ?@import("../core/bounded_process.zig").CancelEpoch {
     return .{ .epoch32 = .{ .value = &search_gen, .expected = gen } };
 }
 fn fetchUrl(url: []const u8, dst: []u8) usize {
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const body = @import("reliable_fetch.zig").fetch(url, dst, .{
         .keep_head_on_overflow = true, // pre-seam behaviour: parse the head of an oversized body
         .user_agent = pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url),
@@ -777,6 +778,7 @@ fn fetchUrl(url: []const u8, dst: []u8) usize {
 /// challenged, so they stay on `fetchUrl`. POST endpoints (Madara admin-ajax)
 /// stay on `fetchPost` — scrapeFetch is GET-only.
 fn fetchMaybeUnblocked(url: []const u8, dst: []u8) usize {
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const body = scrape.scrapeFetchWithCancellation(url, dst, browseEpoch()) orelse return 0;
     return body.len;
 }
@@ -1303,6 +1305,7 @@ fn loadThemesiaPages(detail_url: []const u8) bool {
 /// fallbacks (admin-ajax.php + the newer `{mangaUrl}ajax/chapters`), both of
 /// which WordPress only answers to an `X-Requested-With: XMLHttpRequest` POST.
 fn fetchPost(url: []const u8, body: []const u8, dst: []u8) usize {
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const resp = @import("reliable_fetch.zig").fetch(url, dst, .{
         .keep_head_on_overflow = true, // pre-seam behaviour: parse the head of an oversized body
         .user_agent = pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url),
@@ -1728,6 +1731,7 @@ fn downloadSinglePage(i: usize, gen: u32) void {
     const max_img = 5 * 1024 * 1024;
     const tmp_buf = alloc.alloc(u8, max_img) catch return;
     defer alloc.free(tmp_buf);
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const body = @import("reliable_fetch.zig").fetch(url, tmp_buf, .{
         .user_agent = ua,
         .referer = if (referer.len > 0) referer else null,
@@ -2485,6 +2489,7 @@ fn fetchExpandedReadingHtml(id: []const u8, url: []const u8, out: []u8) usize {
     // This publisher rejects the generic browser UA but serves the named app
     // client. Keep its status handling on the common fetch seam.
     var headers: [2048]u8 = undefined;
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const result = @import("reliable_fetch.zig").request(url, out, &headers, .{
         .user_agent = @import("../core/app_meta.zig").user_agent_with_url,
         .timeout_secs = 15,
@@ -3524,6 +3529,7 @@ fn coverWorker(job: CoverJob) void {
     const url = thumbnailize(job.url[0..job.url_len], &url_buf);
     const tmp = alloc.alloc(u8, 4 * 1024 * 1024) catch return;
     defer alloc.free(tmp);
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const bytes = @import("reliable_fetch.zig").fetch(url, tmp, .{
         .timeout_secs = 10,
         .user_agent = pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url),
@@ -4976,6 +4982,7 @@ fn loadComicFury(profile: []const u8, gen: u32) bool {
     const body = alloc.alloc(u8, 2 * 1024 * 1024) catch return false;
     defer alloc.free(body);
     var headers: [2048]u8 = undefined;
+    @import("../core/rate_limit.zig").acquireUrl(page_url, 2.0);
     const response = @import("reliable_fetch.zig").request(page_url, body, &headers, .{ .timeout_secs = 12, .cancel_epoch = .{ .epoch32 = .{ .value = &state.app.comic.dl_gen, .expected = gen } } });
     const n = if (response.ok()) response.body.len else 0;
     if (n == 0 or workers.isQuitting() or state.app.comic.dl_gen.load(.acquire) != gen) return false;

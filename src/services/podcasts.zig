@@ -897,6 +897,7 @@ fn percentEncode(src: []const u8, dst: []u8) []const u8 {
 fn fetchSearchBody(url: []const u8, cap: usize, generation: u32) ?[]u8 {
     const buffer = alloc.alloc(u8, cap) catch return null;
     var headers: [16 * 1024]u8 = undefined;
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const response = reliable_fetch.request(url, buffer, &headers, .{
         .user_agent = agent,
         .timeout_secs = 10,
@@ -924,6 +925,7 @@ fn fetchPodcastFeed(url: []const u8, generation: u32, gate: *const LatestRequest
         const request = yt.buildChannelBrowseBody(id, &request_buf) orelse return null;
         const response = alloc.alloc(u8, 3 * 1024 * 1024) catch return null;
         defer alloc.free(response);
+        @import("../core/rate_limit.zig").acquireUrl(yt.BROWSE_URL, 2.0);
         if (reliable_fetch.fetch(yt.BROWSE_URL, response, .{
             .post_body = request,
             .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
@@ -946,6 +948,7 @@ fn fetchPodcastFeed(url: []const u8, generation: u32, gate: *const LatestRequest
         }
     }
     const buffer = alloc.alloc(u8, PODCAST_FEED_CAP) catch return null;
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const body = reliable_fetch.fetch(url, buffer, .{ .user_agent = agent, .timeout_secs = 8, .cancel_epoch = .{ .epoch32 = .{ .value = &gate.generation, .expected = generation } } }) orelse {
         alloc.free(buffer);
         return null;
@@ -958,6 +961,7 @@ fn fetchPodcastFeed(url: []const u8, generation: u32, gate: *const LatestRequest
 
 fn fetchBody(url: []const u8, cap: usize) ?[]u8 {
     const buf = alloc.alloc(u8, cap) catch return null;
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const body = reliable_fetch.fetch(url, buf, .{
         .user_agent = agent,
         .timeout_secs = 10,

@@ -136,6 +136,7 @@ fn doSearch(query: []const u8, lang: []const u8) void {
     var response_buf: [32768]u8 = undefined;
     var hdrs: [8192]u8 = undefined;
     // Error documents still parse (they yield zero results), as before.
+    @import("../core/rate_limit.zig").acquire("opensubtitles", 1.0);
     const res = rf.request(url_slice, &response_buf, &hdrs, .{
         .user_agent = USER_AGENT,
         .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
@@ -339,6 +340,7 @@ fn doDownload(file_id: i64) void {
     var resp_buf: [4096]u8 = undefined;
     var hdrs: [8192]u8 = undefined;
     // Error bodies carry a "message" we surface below, so read any status.
+    @import("../core/rate_limit.zig").acquire("opensubtitles", 1.0);
     const res = rf.request(API_BASE ++ "/download", &resp_buf, &hdrs, .{
         .user_agent = USER_AGENT,
         .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
@@ -378,6 +380,7 @@ fn doDownload(file_id: i64) void {
     const sub_path = @import("opal-fmt").bufPrintZ(&path_buf, "{s}/opal_sub_{d}.srt", .{ subs_dir, file_id }) catch return;
 
     const link_slice: []const u8 = link[0..@min(link.len, 511)];
+    @import("../core/rate_limit.zig").acquireUrl(link_slice, 1.0);
     if (!rf.download(link_slice, sub_path, .{ .user_agent = USER_AGENT, .timeout_secs = 15, .impersonate = false }).ok()) {
         state.showToast("Download failed");
         return;
@@ -505,6 +508,7 @@ fn doSubdlSearch(query: []const u8, lang: []const u8) void {
     };
     defer alloc.free(response_buf);
     var hdrs: [8192]u8 = undefined;
+    @import("../core/rate_limit.zig").acquire("subdl", 1.0);
     const res = rf.request(url, response_buf, &hdrs, .{
         .user_agent = USER_AGENT,
         .timeout_secs = 15,
@@ -622,6 +626,7 @@ fn doSubdlDownload(url_path: []const u8) void {
         state.showToast("Path error");
         return;
     };
+    @import("../core/rate_limit.zig").acquireUrl(url, 1.0);
     if (!rf.download(url, zip_path, .{ .user_agent = USER_AGENT, .timeout_secs = 25, .impersonate = false }).ok()) {
         state.showToast("Subtitle download failed");
         return;

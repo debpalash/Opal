@@ -238,6 +238,7 @@ fn fetchWorker(idx: usize) void {
         return;
     };
     defer alloc.free(body_buf);
+    @import("../core/rate_limit.zig").acquireUrl(url, 1.0);
     const body_len = if (@import("reliable_fetch.zig").fetch(url, body_buf, .{ .keep_head_on_overflow = true, .timeout_secs = 15, .impersonate = false })) |b| b.len else 0;
 
     if (body_len == 0) {

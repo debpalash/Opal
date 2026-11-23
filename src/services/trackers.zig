@@ -149,6 +149,7 @@ fn refreshWorker() void {
 
 /// Fetch one source and merge it into `list`. Returns entries added.
 fn fetchInto(url: []const u8, buf: []u8, list: *pure.List) usize {
+    @import("../core/rate_limit.zig").acquireUrl(url, 1.0);
     const body = @import("reliable_fetch.zig").fetch(url, buf, .{
         .timeout_secs = 20,
         // Plain text over a CDN — no fingerprint wall to impersonate past, and

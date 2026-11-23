@@ -738,6 +738,7 @@ fn fetchContinuation(gen: u32, chan_name: []const u8, chan_id: []const u8) usize
 
 /// One InnerTube POST. `out` must be heap-allocated (responses run ~300 KB–1 MB).
 fn innertubePost(url: []const u8, post_body: []const u8, out: []u8, generation: u32) ?[]const u8 {
+    @import("../core/rate_limit.zig").acquireUrl(url, 5.0);
     return @import("reliable_fetch.zig").fetch(url, out, .{
         .headers = &.{
             .{ .name = "Content-Type", .value = "application/json" },
@@ -829,6 +830,7 @@ fn fetchViaPiped(query: []const u8, gen: u32) bool {
 
         const buffer = alloc.alloc(u8, 512 * 1024) catch return false;
         defer alloc.free(buffer);
+        @import("../core/rate_limit.zig").acquireUrl(url, 5.0);
         const body = @import("../core/http.zig").fetch(url, buffer, .{
             .timeout_secs = 5,
             .max_response = buffer.len,
@@ -1132,6 +1134,7 @@ const ThumbRequest = struct {
 // when no proxy is enabled, with a bounded curl fallback for CDN TLS failures.
 fn fetchThumbnailBody(url: []const u8, buffer: []u8, cancel: ?bounded_process.CancelEpoch) ?[]const u8 {
     const dpi = @import("dpi_bypass.zig");
+    @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
     if (!(dpi.enabled() and dpi.isRunning())) {
         if (@import("../core/http.zig").fetchDirect(url, buffer, .{
             .timeout_secs = 3,
@@ -1774,6 +1777,7 @@ fn fireSuggest(query: []const u8) void {
 
             const buffer = alloc.alloc(u8, 64 * 1024) catch return;
             defer alloc.free(buffer);
+            @import("../core/rate_limit.zig").acquireUrl(url, 5.0);
             const body = @import("../core/http.zig").fetch(url, buffer, .{
                 .timeout_secs = 3,
                 .max_response = buffer.len,

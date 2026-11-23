@@ -233,6 +233,7 @@ pub fn request(id: []const u8, url: []const u8, body: []u8, headers: []u8, opts:
         var transport = opts.transport;
         const remaining_attempts = @max(1, count - attempt);
         transport.timeout_secs = @intCast(@max(1, @divTrunc(left, @as(i64, @intCast(remaining_attempts)) * 1000)));
+        @import("../core/rate_limit.zig").acquireUrl(target, 2.0);
         result = fetch.request(target, body, headers, transport);
         used_fallback = attempt > 0;
         if (cancelled(opts.transport)) result = .{ .failure = .cancelled };

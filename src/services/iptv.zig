@@ -761,6 +761,7 @@ pub fn playChannel(idx: usize) void {
 /// Fetch large playlists through the shared bounded, status-aware transport.
 fn fetchBody(url: []const u8, cap: usize) ?[]u8 {
     const buf = alloc.alloc(u8, cap) catch return null;
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const body = reliable_fetch.fetch(url, buf, .{
         .user_agent = agent,
         .timeout_secs = 30,

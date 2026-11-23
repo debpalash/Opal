@@ -106,6 +106,7 @@ pub fn close() void {
 /// GET `url` into `dst`, returning bytes read (0 on failure). std.http is avoided
 /// project-wide (SEGVs on some ISP TLS resets); curl matches comics.zig.
 fn curl(url: []const u8, dst: []u8) usize {
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const body = @import("reliable_fetch.zig").fetch(url, dst, .{ .keep_head_on_overflow = true, .timeout_secs = 25, .impersonate = false, .use_dpi_proxy = false }) orelse return 0;
     return body.len;
 }
@@ -113,6 +114,7 @@ fn curl(url: []const u8, dst: []u8) usize {
 /// POST `body` (JSON) to `url`, returning bytes read into `dst`. Used for the
 /// Suwayomi GraphQL calls that register a repo on the server.
 fn curlPost(url: []const u8, body: []const u8, dst: []u8) usize {
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const resp = @import("reliable_fetch.zig").fetch(url, dst, .{
         .keep_head_on_overflow = true, // pre-seam behaviour: parse the head of an oversized body
         .timeout_secs = 25,
@@ -160,6 +162,7 @@ fn curlCode(url: []const u8) u32 {
     const body = alloc.alloc(u8, 64 * 1024) catch return 0;
     defer alloc.free(body);
     var headers: [8 * 1024]u8 = undefined;
+    @import("../core/rate_limit.zig").acquireUrl(url, 2.0);
     const result = @import("reliable_fetch.zig").request(url, body, &headers, .{ .timeout_secs = 25, .impersonate = false, .use_dpi_proxy = false });
     return result.status;
 }

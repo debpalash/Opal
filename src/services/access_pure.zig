@@ -264,7 +264,8 @@ test "machine credential carries only the intended recovery capabilities" {
 /// the HTTP adapter; handlers never decide privilege from a confirmation flag.
 pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8) ?Capability {
     if (std.mem.eql(u8, path, "/plugins") and !std.mem.eql(u8, method, "GET")) {
-        if (std.mem.eql(u8, action, "approve-exec") or std.mem.eql(u8, action, "revoke-exec")) return .approve_executable;
+        if (std.mem.eql(u8, action, "approve-exec") or std.mem.eql(u8, action, "revoke-exec") or
+            std.mem.eql(u8, action, "grant-perms") or std.mem.eql(u8, action, "revoke-perms")) return .approve_executable;
         return .administer_host;
     }
     if (std.mem.eql(u8, path, "/addons/install")) return .approve_executable;
@@ -381,6 +382,9 @@ test "route privilege matrix protects host administration and executable trust" 
     for ([_]Principal{ .machine, .admin_session, .session }) |principal| {
         try std.testing.expectEqual(principal == .machine, allowsRoute(principal, "/plugins", "POST", "approve-exec"));
         try std.testing.expectEqual(principal == .machine, allowsRoute(principal, "/plugins", "POST", "revoke-exec"));
+        // Plugin permission grants (require allow-list, allow_unsafe) are host-only too.
+        try std.testing.expectEqual(principal == .machine, allowsRoute(principal, "/plugins", "POST", "grant-perms"));
+        try std.testing.expectEqual(principal == .machine, allowsRoute(principal, "/plugins", "POST", "revoke-perms"));
         try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/plugins", "POST", "install"));
         try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/local-library/action", "POST", "add-root"));
         try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/jellyfin/login", "POST", ""));

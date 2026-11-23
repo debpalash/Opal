@@ -391,6 +391,7 @@ pub fn authenticate() void {
 
             var resp_buf: [16384]u8 = undefined;
             var response_status: ?std.http.Status = null;
+            @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
             const resp = @import("../core/http.zig").fetch(url, &resp_buf, .{
                 .method = .POST,
                 .payload = body,
@@ -825,6 +826,7 @@ pub fn requestTranscodeRecovery(identity: []const u8, player_idx: usize) bool {
                     @memset(response_buf, 0);
                     alloc.free(response_buf);
                 }
+                @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
                 const response = @import("../core/http.zig").fetch(url, response_buf, .{
                     .method = .POST,
                     .payload = transcode_profile,
@@ -1069,6 +1071,7 @@ pub fn fetchPoster(item: *state.JfItem) void {
                 const used_cache = attempt == 0 and cached != null;
                 const img: []const u8 = if (used_cache) cached.? else blk: {
                     if (img_buf == null) img_buf = alloc.alloc(u8, 512 * 1024) catch return;
+                    @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
                     break :blk @import("../core/http.zig").fetch(url, img_buf.?, .{ .timeout_secs = 8 }) orelse return;
                 };
 
@@ -1241,6 +1244,7 @@ fn jfGet(url: []const u8) ?[]u8 {
     const resp_buf = alloc.alloc(u8, 256 * 1024) catch return null;
     defer alloc.free(resp_buf);
     var response_status: ?std.http.Status = null;
+    @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
     const resp = @import("../core/http.zig").fetch(url, resp_buf, .{
         .timeout_secs = 15,
         .accept = "application/json",
@@ -1413,6 +1417,7 @@ fn runUserDataMutation(request: UserDataMutation) void {
     };
     var response_buf: [4096]u8 = undefined;
     var status: ?std.http.Status = null;
+    @import("../core/rate_limit.zig").acquireUrl(url, 20.0);
     _ = @import("../core/http.zig").fetch(url, &response_buf, .{
         .method = if (request.enabled) .POST else .DELETE,
         .auth_header = auth,

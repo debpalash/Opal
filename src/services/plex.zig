@@ -307,6 +307,7 @@ fn httpGet(url: []const u8, post: bool, tok: []const u8, buf: []u8, status_out: 
         .{ .name = "X-Plex-Client-Identifier", .value = client_id },
         .{ .name = "X-Plex-Version", .value = @import("../core/app_meta.zig").version },
     };
+    @import("../core/rate_limit.zig").acquireUrl(url, 10.0);
     const body = @import("../core/http.zig").fetch(url, buf, .{
         .method = if (post) .POST else .GET,
         .timeout_secs = 15,

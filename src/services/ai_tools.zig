@@ -504,6 +504,7 @@ fn executeReadWebpage(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     // then keep the first MAX_TOOL_RESULT bytes like the old truncating read.
     const scratch = alloc.alloc(u8, 2 * 1024 * 1024) catch return null;
     defer alloc.free(scratch);
+    @import("../core/rate_limit.zig").acquire("jina-reader", 1.0);
     const body = @import("reliable_fetch.zig").fetch(jina_url, scratch, .{
         .timeout_secs = 10,
         .impersonate = false,
