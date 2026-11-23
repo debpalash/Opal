@@ -852,6 +852,10 @@ fn mobileBarButton(src: std.builtin.SourceLocation, id: usize, icon: []const u8,
         .border = dvui.Rect.all(0),
         .corners = dvui.CornerRect.all(theme.radius.sm),
         .gravity_y = 0.5,
+        // Outer margin 0: dvui's default button margin (4) overflowed the
+        // fixed-height row and pushed the icons ~4pt below the labels/track.
+        .margin = dvui.Rect.all(0),
+        .label = .{ .text = tooltip },
         .padding = dvui.Rect.all(ml.BAR_ICON_PAD),
         .min_size_content = .{ .w = ml.BAR_ICON, .h = ml.BAR_ICON },
         .max_size_content = .{ .w = ml.BAR_ICON, .h = ml.BAR_ICON },
@@ -886,6 +890,40 @@ fn renderMobileBar(active_p: *player.MediaPlayer, toggle_icon: []const u8, perce
     if (mobileBarButton(@src(), 4, icons.tvg.lucide.@"ellipsis-vertical", open_picker == .more, "Playback options", .more)) togglePicker(.more);
 }
 
+/// Touch seek over the full-height band (>= 44pt hit area). dvui.slider always
+/// draws a hollow ring knob we cannot restyle, so mobile owns the input and
+/// paints a solid accent dot itself. Returns true when the fraction changed.
+fn mobileSeekInput(fraction: *f32) bool {
+    const ml = @import("mobile_layout_pure.zig");
+    var hit = dvui.box(@src(), .{}, .{ .expand = .both, .min_size_content = .{ .w = 100, .h = ml.BAR_HEIGHT } });
+    defer hit.deinit();
+    const rs = hit.data().contentRectScale();
+    var changed = false;
+    for (dvui.events()) |*e| {
+        if (!dvui.eventMatch(e, .{ .id = hit.data().id, .r = rs.r })) continue;
+        if (e.evt != .mouse) continue;
+        const me = e.evt.mouse;
+        var p: ?dvui.Point.Physical = null;
+        if (me.action == .press and me.button.pointer()) {
+            dvui.captureMouse(hit.data(), e.num);
+            e.handle(@src(), hit.data());
+            p = me.p;
+        } else if (me.action == .motion and dvui.captured(hit.data().id)) {
+            e.handle(@src(), hit.data());
+            p = me.p;
+        } else if (me.action == .release and me.button.pointer() and dvui.captured(hit.data().id)) {
+            dvui.captureMouse(null, e.num);
+            dvui.dragEnd(me.button);
+            e.handle(@src(), hit.data());
+        }
+        if (p) |pp| {
+            fraction.* = ml.seekFraction(pp.x, rs.r.x, rs.r.w);
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 fn renderScrubber(
     active_p: *player.MediaPlayer,
     percent_pos: f64,
@@ -904,9 +942,12 @@ fn renderScrubber(
     // seek slider asks for track_h, and the rest are single-line labels — so
     // letting the row take its natural height cannot run away, and a later
     // type-ramp change can no longer clip it.
+    const mobile_bar = comptime @import("../core/platform_pure.zig").mobile;
+    // Mobile: fill the bar row vertically so labels, track and thumb share the
+    // icon buttons' centre line (a natural-height row sat at the top).
     var srow = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = 26 },
+        .expand = if (mobile_bar) .both else .horizontal,
+        .min_size_content = .{ .w = 0, .h = if (mobile_bar) @import("mobile_layout_pure.zig").BAR_HEIGHT else 26 },
         .padding = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = 0 },
     });
     defer srow.deinit();
@@ -1149,8 +1190,24 @@ fn renderScrubber(
         }
     }
 
-    // 5. Hover knob.
-    if (hovered) {
+    // 5. Knob. Desktop: small dot on hover. Mobile: always a solid accent dot,
+    // vertically centred on the track (a round box widget — painted rects here
+    // come out square).
+    if (mobile_bar) {
+        const ml = @import("mobile_layout_pure.zig");
+        const cr = track_overlay.data().contentRect();
+        const cx = ml.thumbCenterX(0, cr.w, played_frac, ml.THUMB_DIA);
+        var dot = dvui.box(@src(), .{}, .{
+            .rect = .{ .x = cx - ml.THUMB_DIA / 2, .y = ml.centeredTop(cr.h / 2, ml.THUMB_DIA), .w = ml.THUMB_DIA, .h = ml.THUMB_DIA },
+            .background = true,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+            .border = dvui.Rect.all(0),
+            .corners = dvui.CornerRect.all(100),
+            .padding = .{},
+            .margin = .{},
+        });
+        dot.deinit();
+    } else if (hovered) {
         const knob_px = 8 * px;
         fillRounded(
             footer_pure.markerAt(track_rect.x, track_rect.y, track_rect.w, track_rect.h, knob_px, knob_px, footer_pure.percentToFrac(percent_pos)),
@@ -1169,7 +1226,7 @@ fn renderScrubber(
     const invisible = theme.transparent;
     var slider_pct: f32 = @floatCast(percent_pos / 100.0);
     if (std.math.isNan(slider_pct)) slider_pct = 0.0;
-    if (dvui.slider(@src(), .{ .fraction = &slider_pct, .color_bar = invisible }, .{
+    if (if (mobile_bar) mobileSeekInput(&slider_pct) else dvui.slider(@src(), .{ .fraction = &slider_pct, .color_bar = invisible }, .{
         .expand = .both,
         .min_size_content = .{ .w = 100, .h = track_h },
         .color_fill = @import("color_compat.zig").wrap(invisible),
@@ -1611,6 +1668,17 @@ pub fn setTorrentFixtureForTest(name: ?[]const u8) void {
     } else TorrentStatusCache.tid = -1;
 }
 
+const ml_pure = @import("mobile_layout_pure.zig");
+
+/// Opacity (0..1) the player chrome should have right now; the mobile Back
+/// button uses it so it hides/fades with the transport bar.
+pub fn chromeOpacityNow() f32 {
+    if (!state.app.show_cell_overlay or state.app.active_player_idx >= state.app.players.items.len) return 0;
+    const p = state.app.players.items[state.app.active_player_idx];
+    const idle_ms = @import("../core/io_global.zig").milliTimestamp() - state.app.last_mouse_move_ms;
+    return ml_pure.chromeOpacity(idle_ms, p.cached_paused or pickerOpen(), ml_pure.CHROME_HIDE_MS, ml_pure.CHROME_FADE_MS);
+}
+
 pub fn renderLiquidGlassOverlay() void {
     if (!state.app.show_cell_overlay or state.app.players.items.len <= state.app.active_player_idx) return;
 
@@ -1640,21 +1708,14 @@ pub fn renderLiquidGlassOverlay() void {
     // the fade advances; paused → chrome_held so no fade.
     const idle_ms = now_ms - state.app.last_mouse_move_ms;
     const chrome_held = is_paused or pickerOpen();
-    const FADE_START_MS: i64 = 2500;
-    const FADE_LEN_MS: i64 = 220;
-    if (!chrome_held and idle_ms > FADE_START_MS + FADE_LEN_MS) return; // fully hidden
-    const chrome_vis: f32 = if (chrome_held or idle_ms <= FADE_START_MS)
-        1.0
-    else
-        1.0 - @min(@as(f32, 1.0), @as(f32, @floatFromInt(idle_ms - FADE_START_MS)) / @as(f32, @floatFromInt(FADE_LEN_MS)));
+    const chrome_vis = ml_pure.chromeOpacity(idle_ms, chrome_held, ml_pure.CHROME_HIDE_MS, ml_pure.CHROME_FADE_MS);
+    if (chrome_vis <= 0) return; // fully hidden
     // Self-drive the fade: main.zig only forces continuous repaints while idle
-    // < FADE_START_MS, and the mpv frame callback doesn't fire for audio-only /
+    // < hide threshold, and the mpv frame callback doesn't fire for audio-only /
     // buffering / still-image playback — so without this the overlay would render
-    // once at ~full opacity and FREEZE visible, never reaching the hidden early-
-    // return above. Requesting a frame through the fade window animates it out.
-    if (!chrome_held and idle_ms > FADE_START_MS and idle_ms <= FADE_START_MS + FADE_LEN_MS) {
-        dvui.refresh(null, @src(), null);
-    }
+    // once at ~full opacity and FREEZE visible. Requesting a frame through the
+    // fade window animates it out.
+    if (chrome_vis < 1.0) dvui.refresh(null, @src(), null);
     const prev_chrome_alpha = dvui.alpha(chrome_vis);
     defer dvui.alphaSet(prev_chrome_alpha);
 

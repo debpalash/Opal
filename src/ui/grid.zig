@@ -725,10 +725,21 @@ pub fn renderGrid() !void {
                         .{ .width = viewport.w, .height = viewport.h },
                         frame_mode,
                     );
+                    // Mobile: place the frame by an explicit centred rect inside the
+                    // pane (mpv's own letterbox), independent of min-size/gravity
+                    // layout, so bars are always symmetric and nothing can push or
+                    // crop the picture.
+                    const mobile_frame = comptime @import("../core/platform_pure.zig").mobile;
+                    const centred = @import("mobile_layout_pure.zig").centeredFrame(viewport.w, viewport.h, display.width, display.height);
                     var img_wd = dvui.image(@src(), .{
                         .source = .{ .texture = tex.* },
                         .shrink = .none,
-                    }, .{
+                    }, if (mobile_frame) .{
+                        .id_extra = i,
+                        .rect = .{ .x = centred.x, .y = centred.y, .w = centred.w, .h = centred.h },
+                        .min_size_content = .{ .w = centred.w, .h = centred.h },
+                        .max_size_content = .{ .w = centred.w, .h = centred.h },
+                    } else .{
                         .id_extra = i,
                         .min_size_content = .{ .w = display.width, .h = display.height },
                         .gravity_x = 0.5,

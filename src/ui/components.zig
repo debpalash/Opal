@@ -806,11 +806,31 @@ fn iconButtonExColors(
         .corners = tk.rad_sm,
         .min_size_content = theme.iconSize(.md),
         .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
+        .label = if (tooltip.len > 0) .{ .text = tooltip } else null,
     });
     if (tooltip.len > 0) {
         tip(src, wd, tooltip);
     }
     return clicked;
+}
+
+/// Player-chrome icon button with a full-size touch target (`touch` x `touch`
+/// logical pt, no outer margin) and an accessible label. Mobile Back button.
+pub fn iconButtonTouch(src: std.builtin.SourceLocation, icon: []const u8, label: []const u8, touch: f32, glyph: f32) bool {
+    const pad = @max(0, (touch - glyph) / 2);
+    return dvui.buttonIcon(src, "iconButtonTouch", icon, .{}, .{}, .{
+        .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+        .color_fill_hover = @import("color_compat.zig").wrap(theme.playerGlass(42)),
+        .color_fill_press = @import("color_compat.zig").wrap(theme.playerGlass(64)),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
+        .border = dvui.Rect.all(0),
+        .margin = dvui.Rect.all(0),
+        .corners = tk.rad_sm,
+        .min_size_content = .{ .w = glyph, .h = glyph },
+        .max_size_content = .{ .w = glyph, .h = glyph },
+        .padding = dvui.Rect.all(pad),
+        .label = .{ .text = label },
+    });
 }
 
 /// Small status pill — info / success / warn / err. Semantic text on its
