@@ -435,6 +435,17 @@ pub fn isSafeLink(url: []const u8) bool {
 /// A local comic archive route opened in the reader: `cbz:<abs path>` ending
 /// in `.cbz`. Only this explicit prefix routes to the archive reader, so a
 /// scraped `file://` link or a bare path can never open a host file.
+/// A local path (CLI arg, drag-drop, file association) that should open in
+/// the comic reader rather than mpv: an absolute `.cbz` path the reader's
+/// `cbz:` route accepts.
+pub fn isLocalComicArchive(path: []const u8) bool {
+    var buf: [520]u8 = undefined;
+    if (path.len + 4 > buf.len) return false;
+    @memcpy(buf[0..4], "cbz:");
+    @memcpy(buf[4 .. 4 + path.len], path);
+    return localArchivePath(buf[0 .. 4 + path.len]) != null;
+}
+
 pub fn localArchivePath(route: []const u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, route, "cbz:")) return null;
     const path = route[4..];
@@ -715,4 +726,13 @@ test "missing and corrupt pages map to placeholders" {
     try testing.expectEqual(PageStatus.preparing, pageStatus(true, false, false));
     try testing.expectEqual(PageStatus.downloading, pageStatus(false, false, false));
     try testing.expectEqualStrings("is missing", pageStatusLabel(.missing));
+}
+
+test "local comic archives route to the reader, not mpv" {
+    try std.testing.expect(isLocalComicArchive("/home/u/Comics/Saga 01.cbz"));
+    try std.testing.expect(isLocalComicArchive("/Users/u/Downloads/ISSUE.CBZ"));
+    try std.testing.expect(!isLocalComicArchive("relative/book.cbz"));
+    try std.testing.expect(!isLocalComicArchive("/home/u/clip.mkv"));
+    try std.testing.expect(!isLocalComicArchive("https://x/y.cbz"));
+    try std.testing.expect(!isLocalComicArchive("/bad\x00.cbz"));
 }

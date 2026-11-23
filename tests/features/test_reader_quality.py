@@ -191,3 +191,18 @@ console.log(JSON.stringify(bad));
     if bad:
         return "fail", "web reader diverges from reader_pure: " + ", ".join(bad)
     return "pass", "web spread pairing, RTL order, stepping, keys and zoom match reader_pure"
+
+
+@test("Local .cbz files open in the reader from drop, CLI and file association", "Reader")
+def test_local_cbz_open_routes():
+    pure = _src("src/services/reader_pure.zig")
+    browser = _src("src/services/browser.zig")
+    main = _src("src/main.zig")
+    checks = {
+        "pure route check is tested": "pub fn isLocalComicArchive(" in pure and 'test "local comic archives route to the reader, not mpv"' in pure,
+        "loadContent (CLI/forwarded/file assoc) routes .cbz to the reader":
+            'if (@import("reader_pure.zig").isLocalComicArchive(url)) {\n        @import("comics.zig").loadCbzFile(url);' in browser,
+        "drag-drop routes .cbz before mpv": 'isLocalComicArchive(fpath)) {\n                    @import("services/comics.zig").loadCbzFile(fpath);' in main,
+    }
+    bad = [k for k, ok in checks.items() if not ok]
+    return ("fail", ", ".join(bad)) if bad else ("pass", "drop, CLI and forwarded opens send absolute .cbz paths to loadCbzFile")

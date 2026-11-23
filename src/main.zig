@@ -1444,6 +1444,10 @@ fn appFrame() !dvui.App.Result {
                     @import("services/search.zig").addTorrentFileToEngine(fpath);
                     logs.pushLog("info", "open", "Loaded dropped .torrent", false);
                     state.showToast("Adding torrent...");
+                } else if (@import("services/reader_pure.zig").isLocalComicArchive(fpath)) {
+                    @import("services/comics.zig").loadCbzFile(fpath);
+                    state.navigateToTab(.Comics);
+                    state.showToast("Opening comic...");
                 } else {
                     const active = state.app.players.items[state.app.active_player_idx];
                     _ = c.mpv.mpv_set_option_string(active.mpv_ctx, "start", "0");
