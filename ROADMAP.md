@@ -42,7 +42,7 @@ marked **unverified** until checked on a real device.
 - [ ] Voice/mic → assistant moment jumps
 
 ### P2 — Breadth
-- [ ] Live TV guide: opt-in M3U/XMLTV import, channel mapping, now/next, search,
+- [x] Live TV guide: opt-in M3U/XMLTV import, channel mapping, now/next, search,
       favorites; time zones/DST, stale guide, dead-stream feedback
 - [ ] Reading quality: bounded decoded-image memory, neighbour-page cache, RTL,
       spread/scroll, zoom, resume by server + chapter ID, untrusted archive paths
