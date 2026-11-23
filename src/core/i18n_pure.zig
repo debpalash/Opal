@@ -138,6 +138,18 @@ pub fn negotiate(available: []const []const u8, raw: []const u8) usize {
     return localeChain(available, tag, &chain_buf)[0];
 }
 
+/// The system locale source: the first of LC_ALL / LC_MESSAGES / LANG that
+/// names a real locale, else the platform preference (macOS AppleLanguages,
+/// e.g. "es-ES"; apps launched from Finder have no LANG). `C`/`POSIX`/empty
+/// env values count as unset so a bare `LANG=C` shell still follows the OS.
+pub fn pickSystemLocale(env: []const ?[]const u8, platform: []const u8) []const u8 {
+    var buf: [32]u8 = undefined;
+    for (env) |maybe| if (maybe) |v| {
+        if (normalize(v, &buf).len > 0) return v;
+    };
+    return platform;
+}
+
 pub fn shippingTags() [locale_count][]const u8 {
     var out: [locale_count][]const u8 = undefined;
     for (locales, 0..) |l, i| out[i] = l.tag;
@@ -227,6 +239,20 @@ test "locale negotiation normalizes POSIX and browser tags" {
     try std.testing.expectEqual(@as(usize, 1), negotiate(&tags, "ES"));
     try std.testing.expectEqual(@as(usize, 0), negotiate(&tags, "fr_FR.UTF-8"));
     try std.testing.expectEqual(@as(usize, 0), negotiate(&tags, ""));
+}
+
+test "macOS Finder launch with no LANG follows the platform language" {
+    const tags = shippingTags();
+    // Finder launch: no env at all.
+    try std.testing.expectEqualStrings("es-ES", pickSystemLocale(&.{ null, null, null }, "es-ES"));
+    try std.testing.expectEqual(@as(usize, 1), negotiate(&tags, pickSystemLocale(&.{ null, null, null }, "es-ES")));
+    // LANG=C / empty LC_ALL do not mask the OS preference.
+    try std.testing.expectEqualStrings("es-419", pickSystemLocale(&.{ "", null, "C.UTF-8" }, "es-419"));
+    // A real env locale wins over the platform, in LC_ALL > LC_MESSAGES > LANG order.
+    try std.testing.expectEqualStrings("pt_BR.UTF-8", pickSystemLocale(&.{ null, "pt_BR.UTF-8", "es_ES.UTF-8" }, "es"));
+    try std.testing.expectEqualStrings("en_US.UTF-8", pickSystemLocale(&.{ "en_US.UTF-8", "es_ES", null }, "es"));
+    // Nothing anywhere: English.
+    try std.testing.expectEqual(@as(usize, 0), negotiate(&tags, pickSystemLocale(&.{ null, null, null }, "")));
 }
 
 test "shipping tables resolve every key and Spanish overrides English" {
