@@ -223,6 +223,21 @@ pub fn renderNetworkTab() void {
         });
     }
 
+    // ── Browser extraction opt-in ──
+    // OFF by default (extraction_policy_pure.zig). When a scraper page is
+    // blocked, retry it through the paired browser, then the anti-detect
+    // engine. Same key as /api/settings `extraction_browser_opt_in`.
+    {
+        const before = state.app.extraction_browser_opt_in;
+        components.toggleRow(
+            @src(),
+            "Retry blocked pages in a browser",
+            "When a source page is blocked, reload it through your paired browser or Opal's built-in one. Off means plain requests only.",
+            &state.app.extraction_browser_opt_in,
+        );
+        if (before != state.app.extraction_browser_opt_in) state.markConfigDirty();
+    }
+
     // ── Reading server (OPDS) — Komga / Kavita / Calibre-Web / LANraragi ──
     // Mirrors the Jellyfin connection surface: catalog URL + Basic-auth creds +
     // a Test Connection button (opds.connect fetches the root feed).

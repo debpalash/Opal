@@ -49,6 +49,7 @@ def test_no_browser_without_opt_in():
     build = _src("build.zig")
     sap = _src("src/services/settings_api_pure.zig")
     remote = _src("src/services/remote.zig")
+    net_ui = _src("src/ui/settings/network.zig")
 
     checks = {
         "opt-in defaults off": "extraction_browser_opt_in: bool = false" in state,
@@ -57,6 +58,9 @@ def test_no_browser_without_opt_in():
         "opt-in persisted": 'setKey("extraction_browser_opt_in"' in cfg,
         "opt-in settable from settings API": '"extraction_browser_opt_in"' in sap
             and "state.app.extraction_browser_opt_in = v;" in remote,
+        "opt-in toggle in Settings > Network": re.search(
+            r"toggleRow\([^;]*&state\.app\.extraction_browser_opt_in", net_ui, re.S) is not None
+            and "before != state.app.extraction_browser_opt_in) state.markConfigDirty()" in net_ui,
         "policy registered": 'b.path("src/services/extraction_policy_pure.zig")' in build,
         "policy tests": 'test "no opt-in: no browser tier' in policy
             and 'test "opt-in order is paired browser then anti-detect engine"' in policy,
