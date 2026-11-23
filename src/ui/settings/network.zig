@@ -55,6 +55,35 @@ pub fn renderNetworkTab() void {
         }
     }
 
+    // Transfer policy (#204): queue cap, disk guard and seeding goals.
+    {
+        const tp = @import("../../services/transfer_policy_pure.zig");
+        settingRow("Max active downloads", 3101, @src());
+        const ma_names = [_][]const u8{ "Unlimited", "1", "2", "3", "5" };
+        if (components.segment(@src(), &ma_names, tp.presetIndex(state.app.torrent_max_active, &tp.max_active_presets))) |i| {
+            state.app.torrent_max_active = tp.max_active_presets[i];
+            state.markConfigDirty();
+        }
+        settingRow("Keep free disk space", 3102, @src());
+        const rv_names = [_][]const u8{ "Off", "256 MB", "1 GB", "5 GB" };
+        if (components.segment(@src(), &rv_names, tp.presetIndex(state.app.torrent_reserve_mb, &tp.reserve_mb_presets))) |i| {
+            state.app.torrent_reserve_mb = tp.reserve_mb_presets[i];
+            state.markConfigDirty();
+        }
+        settingRow("Stop seeding at ratio", 3103, @src());
+        const sr_names = [_][]const u8{ "Never", "1.0", "1.5", "2.0" };
+        if (components.segment(@src(), &sr_names, tp.presetIndex(state.app.torrent_seed_ratio_x100, &tp.seed_ratio_presets))) |i| {
+            state.app.torrent_seed_ratio_x100 = tp.seed_ratio_presets[i];
+            state.markConfigDirty();
+        }
+        settingRow("Stop seeding after", 3104, @src());
+        const sm_names = [_][]const u8{ "Never", "1 h", "6 h", "24 h" };
+        if (components.segment(@src(), &sm_names, tp.presetIndex(state.app.torrent_seed_minutes, &tp.seed_minutes_presets))) |i| {
+            state.app.torrent_seed_minutes = tp.seed_minutes_presets[i];
+            state.markConfigDirty();
+        }
+    }
+
     sectionHeader(if (@import("../../services/native_browser.zig").supported) "Source browser engine" else "Browser engine", if (@import("../../services/native_browser.zig").supported) "Used by sources that need a browser to fetch pages. The browser page uses the built-in macOS browser." else "Used for web pages. Installation downloads about 200 MB; the selected engine starts on the next browser open.", 33, @src());
     {
         const browser = @import("../../services/browser.zig");

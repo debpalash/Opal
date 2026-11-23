@@ -233,6 +233,34 @@ pub fn renderGeneralTab() void {
             .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
         });
     }
+    // ── TheTVDB ── (fallback for anime/obscure shows when TMDB has no match or
+    // incomplete seasons; user-supplied key only, stored as a secret.)
+    sectionHeader("TheTVDB", "Fallback metadata for anime and obscure shows", 16, @src());
+    settingRow("API Key", 160, @src());
+    {
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.tvdb_api_key }, .placeholder = "Optional — your own thetvdb.com v4 key", .password_char = "•" }, .{
+            .id_extra = 162,
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 300, .h = 20 },
+            .color_fill = @import("../color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_border = @import("../color_compat.zig").wrap(theme.colors.border_subtle),
+            .color_text = @import("../color_compat.zig").wrap(theme.colors.text_primary),
+            .border = dvui.Rect.all(1),
+            .corners = theme.dims.rad_sm,
+        });
+        const tvdb_changed = te.text_changed;
+        te.deinit();
+        state.app.tvdb_api_key_len = std.mem.indexOfScalar(u8, &state.app.tvdb_api_key, 0) orelse state.app.tvdb_api_key.len;
+        if (tvdb_changed) state.markConfigDirty();
+        _ = dvui.label(@src(), "{s}", .{if (state.app.tvdb_api_key_len > 0)
+            "Key set — TheTVDB fills shows and seasons TMDB is missing."
+        else
+            "Leave blank to disable. No key ships with Opal."}, .{
+            .id_extra = 163,
+            .color_text = @import("../color_compat.zig").wrap(theme.colors.text_tertiary),
+            .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
+        });
+    }
     sectionHeader("Plugins", "Manage sources and content plugins", 9, @src());
     {
         var links = dvui.flexbox(@src(), .{}, .{ .expand = .horizontal });
