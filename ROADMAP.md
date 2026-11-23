@@ -141,7 +141,7 @@ marked **unverified** until checked on a real device.
 
 ### 4.2 — Remote Access & Casting
 - [x] Web remote control (extend existing web/ UI)
-- [x] Chromecast/DLNA support (via catt)
+- [x] Chromecast/DLNA support (native Cast v2 + UPnP AVTransport; AirPlay via pyatv)
 - [ ] Transcoding pipeline (FFmpeg → serve to other devices — future)
 
 ### 4.3 — Multi-User & Profiles
@@ -221,8 +221,8 @@ marked **unverified** until checked on a real device.
       single peer for now)
 
 ### 6.4 — Reach
-- [ ] Real casting pipeline (Chromecast/DLNA) + a phone "couch-mode" cast-picker
-      on the existing remote API
+- [x] Real casting pipeline (Chromecast/DLNA) + a phone "couch-mode" cast-picker
+      on the existing remote API (fake-receiver tested; real devices unverified)
 
 ---
 
@@ -261,7 +261,8 @@ Unchecked capabilities below are not claims of complete verification.
       tested constraint parser
 - [ ] Moment search inside media ("the scene where they plan the heist") over
       subtitle/transcript cues → play at that second
-- [ ] Assistant + voice tools for semantic search and moment jumps
+- [x] Assistant + voice tools for semantic search and moment jumps ("jump to the
+      scene where ..." seeks, with a which-one follow-up; real microphone unverified)
 
 ### 7.2 — Perception (media understanding)
 - [ ] Intro / credits detection for any series (cross-episode audio
@@ -275,7 +276,7 @@ Unchecked capabilities below are not claims of complete verification.
 ### 7.4 — Continuum (play anywhere)
 - [ ] On-demand direct-play / remux / HW transcode to browsers and phones
 - [ ] One-tap handoff to a paired device at the exact second; "bring it here"
-- [ ] Phone couch-mode cast picker over the real casting pipeline
+- [x] Phone couch-mode cast picker over the real casting pipeline (real devices unverified)
 
 ### 7.5 — Babel (every language, every file)
 - [ ] Live captions: ahead-of-playhead whisper transcription of anything playing

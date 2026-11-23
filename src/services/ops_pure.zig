@@ -351,8 +351,8 @@ pub const ops = [_]Op{
     .{ .name = "player_info", .summary = "Full state of the active player: position, volume, speed, subtitle delay, chapters, audio and subtitle tracks (ids for player_audio_track and player_subtitle_track), subtitle search results and audio outputs. Answers 'no player' when nothing is loaded.", .tier = .read, .method = .GET, .path = "/player" },
 
     // ── Cast: scanning is a background job, then read the devices ──
-    .{ .name = "cast_scan", .summary = "Scan the local network for Chromecast (needs catt) and AirPlay (needs pyatv) devices. Takes a few seconds; read cast_devices afterwards.", .tier = .read, .method = .GET, .path = "/cast/scan" },
-    .{ .name = "cast_devices", .summary = "Cast devices found so far (name, ip, protocol chromecast or airplay, needs_pairing), whether a scan is running, whether something is casting, and the AirPlay pairing progress (phase idle, starting, awaiting_pin, verifying, paired or failed, with a message). Starts a scan when none are known yet.", .tier = .read, .method = .GET, .path = "/cast/devices" },
+    .{ .name = "cast_scan", .summary = "Scan the local network for Chromecast (mDNS), DLNA / UPnP TVs (SSDP) and AirPlay (needs pyatv) devices. Takes a few seconds; read cast_devices afterwards.", .tier = .read, .method = .GET, .path = "/cast/scan" },
+    .{ .name = "cast_devices", .summary = "Cast devices found so far (name, ip, protocol chromecast, dlna or airplay, needs_pairing), whether a scan is running, whether something is casting, and the AirPlay pairing progress (phase idle, starting, awaiting_pin, verifying, paired or failed, with a message). Starts a scan when none are known yet.", .tier = .read, .method = .GET, .path = "/cast/devices" },
 
     // ── Live torrents (downloads_list covers direct downloads; these are the torrent sessions) ──
     .{
@@ -462,13 +462,25 @@ pub const ops = [_]Op{
     },
     .{
         .name = "cast_start",
-        .summary = "Cast what is playing now to a Chromecast or AirPlay device from cast_devices. Local files work; localhost stream URLs are refused because the receiver cannot reach them. Local playback keeps going; stop with cast_stop.",
+        .summary = "Cast what is playing now, from its current position, to a Chromecast, DLNA or AirPlay device from cast_devices. Local files are served to the receiver over a signed per-stream link; localhost stream URLs are refused because the receiver cannot reach them. Local playback keeps going; control it with cast_control, read cast_status, stop with cast_stop.",
         .tier = .playback,
         .method = .POST,
         .path = "/cast/start",
         .params = &.{.{ .name = "device", .kind = .integer, .desc = "Zero-based position in cast_devices.", .required = true, .wire = "idx", .min = 0, .max = 15 }},
     },
-    .{ .name = "cast_stop", .summary = "Stop casting to the Chromecast or AirPlay device.", .tier = .playback, .method = .POST, .path = "/cast/stop" },
+    .{ .name = "cast_stop", .summary = "Stop casting to the Chromecast, DLNA or AirPlay device.", .tier = .playback, .method = .POST, .path = "/cast/stop" },
+    .{
+        .name = "cast_control",
+        .summary = "Remote-control the active Chromecast or DLNA cast: play, pause, toggle, stop, seek (to pos seconds), forward or back (30 s). AirPlay casts only support stop.",
+        .tier = .playback,
+        .method = .POST,
+        .path = "/cast/control",
+        .params = &.{
+            .{ .name = "action", .kind = .choice, .desc = "What to do on the TV.", .required = true, .choices = &.{ "play", "pause", "toggle", "stop", "seek", "forward", "back" } },
+            .{ .name = "pos", .kind = .number, .desc = "Seek target in seconds (seek only).", .min = 0, .max = 360000 },
+        },
+    },
+    .{ .name = "cast_status", .summary = "What the cast receiver is doing: casting, state (playing, paused, buffering, idle), position and duration in seconds, the device and title, and the last receiver error.", .tier = .read, .method = .GET, .path = "/cast/status" },
     .{
         .name = "cast_pair_start",
         .summary = "Pair with an AirPlay device from cast_devices (needed when needs_pairing is true; newer Apple TVs refuse casts until paired). The TV then shows a 4-digit PIN: watch the pairing object in cast_devices for phase awaiting_pin, then send it with cast_pair_pin. pyatv keeps the credentials for later casts.",

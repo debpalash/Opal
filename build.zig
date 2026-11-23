@@ -763,6 +763,30 @@ fn buildSupported(b: *std.Build) void {
     b.getInstallStep().dependOn(&install_mcp.step);
     b.step("opal-mcp", "Build only the opal-mcp bridge (no GUI dependencies)").dependOn(&install_mcp.step);
 
+    // Test tool: drives the native casting client (cast_net.zig) against
+    // loopback fake receivers only (tests/features/test_cast_native.py).
+    const cast_probe = addBoundExecutable(b, .{
+        .name = "opal-cast-probe",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cast_probe_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.step("cast-probe", "Build the loopback-only native casting probe used by the cast integration tests").dependOn(&b.addInstallArtifact(cast_probe, .{}).step);
+
+    // Test tool: feeds a transcript through the assistant's scene-jump path
+    // (tests/features/test_scene_jump.py).
+    const scene_probe = addBoundExecutable(b, .{
+        .name = "opal-scene-jump-probe",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/scene_jump_probe_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.step("scene-jump-probe", "Build the transcript-driven scene-jump probe used by the voice feature test").dependOn(&b.addInstallArtifact(scene_probe, .{}).step);
+
     // Dev probe for the live-caption chunk pipeline (not installed).
     const babel_live = addBoundExecutable(b, .{
         .name = "babel-live",
@@ -2142,6 +2166,19 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_cast_pure).step);
+
+    // Native casting wire formats: Cast v2 framing / payloads / sender state
+    // machine / mDNS, and DLNA SSDP / description / SOAP / HTTP framing.
+    inline for (.{ "src/services/cast_v2_pure.zig", "src/services/dlna_pure.zig", "src/services/scene_jump_pure.zig" }) |cast_src| {
+        const t = addBoundTest(b, .{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(cast_src),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
 
     // Zero-key Cinemeta catalog response splitting and stable fallback ids.
     const test_cinemeta_pure = addBoundTest(b, .{

@@ -385,6 +385,23 @@ button:disabled{cursor:not-allowed}
 .cast-pair-entry{display:flex;align-items:center;gap:8px}
 .cast-pair-entry[hidden]{display:none}
 .cast-pair-entry input{width:6ch;text-align:center;letter-spacing:.2em;font-variant-numeric:tabular-nums}
+.cast-remote{margin-top:12px;padding:12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--rad-sm);
+  display:flex;flex-direction:column;gap:8px}
+.cast-remote[hidden]{display:none}
+.cast-remote-now{display:flex;flex-direction:column;gap:2px}
+.cast-remote-now small{color:var(--text-3)}
+.cast-remote input[type=range]{width:100%}
+.cast-remote-btns{display:flex;justify-content:center;align-items:center;gap:12px}
+.cast-remote-btns button{min-width:56px;min-height:48px;border-radius:999px;border:1px solid var(--border);background:var(--bg-surface);color:var(--text-1)}
+.cast-remote-btns .cast-big{min-width:96px;min-height:56px;background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:650}
+#cast-end{align-self:center}
+/* Couch mode: the picker and remote fill the phone screen, thumb-sized. */
+.cast-panel.couch{position:fixed;inset:0;z-index:60;margin:0;border-radius:0;overflow:auto;
+  padding:max(16px,env(safe-area-inset-top)) 16px max(16px,env(safe-area-inset-bottom))}
+.cast-panel.couch .cast-devices{grid-template-columns:1fr}
+.cast-panel.couch .cast-device{min-height:64px;font-size:17px;justify-content:center}
+.cast-panel.couch .cast-remote-btns button{min-width:72px;min-height:64px;font-size:17px}
+.cast-panel.couch .cast-remote-btns .cast-big{min-width:120px;min-height:72px}
 .player-tools{margin-top:10px;padding:14px;background:var(--bg-surface);border:1px solid var(--border);
   border-radius:var(--rad);max-height:min(62vh,680px);overflow:auto;overscroll-behavior:contain}
 .player-tools-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}

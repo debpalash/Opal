@@ -235,14 +235,14 @@ async function loadCastDevices(){
     const devices = d.devices || [];
     $('cast-hint').textContent = d.scanning
       ? 'Scanning your network…'
-      : devices.length ? `${devices.length} device${devices.length === 1 ? '' : 's'} found` : 'No Chromecast or AirPlay devices found.';
+      : devices.length ? `${devices.length} device${devices.length === 1 ? '' : 's'} found` : 'No Chromecast, DLNA or AirPlay devices found on this network.';
     $('cast-stop').hidden = !d.casting;
     $('cast-devices').innerHTML = devices.map((x, i) => `
       <div class="cast-item">
         <button type="button" class="cast-device ${d.active === i ? 'active' : ''}" data-i="${i}"
           aria-pressed="${d.active === i ? 'true' : 'false'}">
           <span>${esc(x.name || 'Cast device')}</span>
-          <small><span class="cast-proto">${x.protocol === 'airplay' ? 'AirPlay' : 'Chromecast'}</span> ${esc(x.ip || '')}</small>
+          <small><span class="cast-proto">${x.protocol === 'airplay' ? 'AirPlay' : x.protocol === 'dlna' ? 'DLNA' : 'Chromecast'}</span> ${esc(x.ip || '')}</small>
           ${x.needs_pairing ? '<small class="cast-needs-pair">Needs pairing</small>' : ''}
         </button>
         ${x.protocol === 'airplay' ? `<button type="button" class="text-btn cast-pair-btn" data-i="${i}"
@@ -261,26 +261,71 @@ async function loadCastDevices(){
       const device = devices[+b.dataset.i];
       try {
         await api('/cast/start?idx=' + b.dataset.i);
-        toast('Casting to ' + (device?.name || 'device'));
+        toast('Casting to ' + (device?.name || 'device')); setTimeout(loadCastStatus, 1500);
       } catch (e) { toast(e.message || 'Could not cast'); }
       castPolls = 0; loadCastDevices();
     });
     // The server times a pairing out, so polling while it runs always ends.
     if (castPairActive(pairing)) castWatch = setTimeout(loadCastDevices, 1000);
     else if (d.scanning && castPolls++ < 20) castWatch = setTimeout(loadCastDevices, 900);
-  } catch { $('cast-hint').textContent = 'Could not scan — install catt (Chromecast) or pyatv (AirPlay) on the Opal machine.'; }
+  } catch { $('cast-hint').textContent = 'Could not scan the network from the Opal machine.'; }
 }
 $('b-cast').onclick = () => {
   const open = $('cast-panel').hidden;
   setCastOpen(open);
-  if (open) { castPolls = 0; loadCastDevices(); }
+  if (open) { castPolls = 0; loadCastDevices(); loadCastStatus(); }
 };
 $('cast-scan').onclick = async () => {
   castPolls = 0; $('cast-hint').textContent = 'Scanning your network…';
   await api('/cast/scan').catch(()=>{}); loadCastDevices();
 };
 $('cast-stop').onclick = async () => {
-  await api('/cast/stop').catch(()=>{}); toast('Casting stopped'); loadCastDevices();
+  await api('/cast/stop').catch(()=>{}); toast('Casting stopped'); loadCastDevices(); loadCastStatus();
+};
+
+// Couch mode: the cast picker plus a remote for what the TV is playing
+// (/cast/status, /cast/control). Chromecast and DLNA take play/pause/seek;
+// AirPlay casts can only be stopped.
+const castProtoName = p => ({airplay:'AirPlay', dlna:'DLNA', chromecast:'Chromecast'}[p] || 'Cast');
+const castStateText = s => ({playing:'Playing', paused:'Paused', buffering:'Loading', idle:'Stopped'}[s] || '');
+let castRemoteWatch = null, castSeeking = false;
+async function loadCastStatus(){
+  clearTimeout(castRemoteWatch);
+  let s;
+  try { s = await api('/cast/status'); } catch { return; }
+  const live = !!(s.casting && s.device);
+  $('cast-remote').hidden = !live;
+  if (live) {
+    const controllable = s.device.protocol !== 'airplay';
+    $('cast-remote-title').textContent = s.title || 'Casting';
+    $('cast-remote-device').textContent = (s.device.name || 'Cast device') + ' (' + castProtoName(s.device.protocol) + ')';
+    $('cast-state').textContent = s.last_error || castStateText(s.state);
+    $('cast-toggle').textContent = s.state === 'playing' || s.state === 'buffering' ? 'Pause' : 'Play';
+    ['cast-toggle', 'cast-back', 'cast-fwd', 'cast-seek'].forEach(id => { $(id).hidden = !controllable; });
+    $('cast-pos').textContent = fmt(s.position);
+    $('cast-dur').textContent = s.duration > 0 ? fmt(s.duration) : '--:--';
+    if (!castSeeking && s.duration > 0) { $('cast-seek').max = Math.round(s.duration); $('cast-seek').value = Math.round(s.position); }
+  }
+  if (live && !$('cast-panel').hidden) castRemoteWatch = setTimeout(loadCastStatus, 2000);
+}
+async function castControl(action, pos){
+  try { await api('/cast/control?action=' + action + (pos == null ? '' : '&pos=' + encodeURIComponent(pos))); }
+  catch (e) { toast(e.message || 'The TV did not respond'); }
+  loadCastStatus();
+}
+$('cast-toggle').onclick = () => castControl('toggle');
+$('cast-back').onclick = () => castControl('back');
+$('cast-fwd').onclick = () => castControl('forward');
+$('cast-end').onclick = async () => { await castControl('stop'); toast('Casting stopped'); loadCastDevices(); };
+$('cast-seek').oninput = () => { castSeeking = true; $('cast-pos').textContent = fmt(+$('cast-seek').value); };
+$('cast-seek').onchange = async () => { const v = +$('cast-seek').value; await castControl('seek', v); castSeeking = false; };
+$('cast-couch').onclick = () => {
+  const on = !$('cast-panel').classList.contains('couch');
+  $('cast-panel').classList.toggle('couch', on);
+  $('cast-couch').setAttribute('aria-pressed', on ? 'true' : 'false');
+  $('cast-couch').textContent = on ? 'Done' : 'Couch mode';
+  if (on && $('cast-panel').hidden) { setCastOpen(true); castPolls = 0; loadCastDevices(); }
+  loadCastStatus();
 };
 
 // One rich player snapshot powers the whole advanced deck. The server exposes

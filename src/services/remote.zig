@@ -4016,6 +4016,7 @@ fn apiPartyCast(stream: std.Io.net.Stream, api_path: []const u8, query: []const 
         sendJson(stream, "{\"ok\":true,\"action\":\"cast_stop\"}");
         return;
     }
+    if (@import("remote_cast_api.zig").handle(stream, api_path, query)) return;
     // AirPlay pairing: start runs `atvremote ... pair` on a worker (the TV
     // then shows a PIN), pin feeds it the PIN, cancel kills it. Progress is
     // the "pairing" object in /cast/devices.

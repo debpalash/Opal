@@ -1,12 +1,10 @@
-//! Pure cast helpers: parse `catt scan` / `atvscript scan` output, build the
-//! argv for each tool, and vet the media URL. cast.zig routes through these so
-//! the tested logic is the shipped logic.
+//! Pure cast helpers shared by every protocol: the device model, media-source
+//! classification and URLs for the receiver, plus the AirPlay (pyatv) tool
+//! parsing and argv. Chromecast (Cast v2) and DLNA (UPnP AVTransport) are
+//! native: their wire formats live in cast_v2_pure.zig and dlna_pure.zig.
+//! cast.zig routes through these so the tested logic is the shipped logic.
 //!
-//! Tool syntax (verified against catt 0.13.0 and pyatv 0.18.0 sources):
-//!   catt scan                      -> "Scanning Chromecasts..." then
-//!                                     "<host> - <name> - <manufacturer> <model>"
-//!   catt -d <ip> cast <url>        (-d takes NAME_OR_IP)
-//!   catt -d <ip> stop
+//! pyatv syntax (verified against pyatv 0.18.0 sources):
 //!   atvscript scan                 -> one JSON object:
 //!     {"result":"success","devices":[{"name","address","identifier",
 //!      "all_identifiers","device_info",{..},"services":[{"protocol","port"}]}]}
@@ -33,7 +31,10 @@
 
 const std = @import("std");
 
-pub const Protocol = enum { chromecast, airplay };
+const cv2 = @import("cast_v2_pure.zig");
+const dlna = @import("dlna_pure.zig");
+
+pub const Protocol = enum { chromecast, airplay, dlna };
 
 pub const max_devices = 16;
 
@@ -47,9 +48,15 @@ pub const CastDevice = struct {
     name_len: usize = 0,
     ip: [46]u8 = std.mem.zeroes([46]u8),
     ip_len: usize = 0,
-    /// Tool-specific target: catt `-d` value (the IP) / pyatv `--id` identifier.
-    ident: [64]u8 = std.mem.zeroes([64]u8),
+    /// Stable identity: Chromecast mDNS id (else ip:port), pyatv `--id`
+    /// identifier, DLNA UDN (else the control URL).
+    ident: [96]u8 = std.mem.zeroes([96]u8),
     ident_len: usize = 0,
+    /// Chromecast: the Cast v2 TLS port (8009 unless mDNS says otherwise).
+    port: u16 = 0,
+    /// DLNA: absolute AVTransport control URL.
+    control: [512]u8 = std.mem.zeroes([512]u8),
+    control_len: usize = 0,
 
     pub fn nameSlice(self: *const CastDevice) []const u8 {
         return self.name[0..@min(self.name_len, self.name.len)];
@@ -59,6 +66,9 @@ pub const CastDevice = struct {
     }
     pub fn identSlice(self: *const CastDevice) []const u8 {
         return self.ident[0..@min(self.ident_len, self.ident.len)];
+    }
+    pub fn controlSlice(self: *const CastDevice) []const u8 {
+        return self.control[0..@min(self.control_len, self.control.len)];
     }
     /// Same physical target (protocol + tool identifier).
     pub fn sameTarget(self: *const CastDevice, other: *const CastDevice) bool {
@@ -78,45 +88,6 @@ pub fn makeDevice(protocol: Protocol, name: []const u8, ip: []const u8, ident: [
     setField(&d.ip, &d.ip_len, ip);
     setField(&d.ident, &d.ident_len, ident);
     return d;
-}
-
-fn looksLikeIp(s: []const u8) bool {
-    if (s.len == 0) return false;
-    for (s) |ch| {
-        if (!(std.ascii.isHex(ch) or ch == '.' or ch == ':')) return false;
-    }
-    return std.mem.indexOfScalar(u8, s, '.') != null or std.mem.indexOfScalar(u8, s, ':') != null;
-}
-
-/// Append devices parsed from `catt scan` stdout to `out[count..]`; returns
-/// the new count. Accepts the real "<ip> - <name> - <model>" lines and the
-/// older "<name> - <ip>[:port]" form; banner / blank lines are skipped.
-pub fn parseCattScan(text: []const u8, out: []CastDevice, count: usize) usize {
-    var n = count;
-    var lines = std.mem.splitScalar(u8, text, '\n');
-    while (lines.next()) |raw| {
-        if (n >= out.len) break;
-        const line = std.mem.trim(u8, raw, " \t\r");
-        const dash = std.mem.indexOf(u8, line, " - ") orelse continue;
-        const first = std.mem.trim(u8, line[0..dash], " ");
-        const rest = line[dash + 3 ..];
-        var name: []const u8 = undefined;
-        var ip: []const u8 = undefined;
-        if (looksLikeIp(first)) {
-            ip = first;
-            const end = std.mem.indexOf(u8, rest, " - ") orelse rest.len;
-            name = std.mem.trim(u8, rest[0..end], " ");
-        } else {
-            name = first;
-            const r = std.mem.trim(u8, rest, " ");
-            ip = if (std.mem.lastIndexOfScalar(u8, r, ':')) |col| r[0..col] else r;
-            if (!looksLikeIp(ip)) continue;
-        }
-        if (name.len == 0 or ip.len == 0) continue;
-        out[n] = makeDevice(.chromecast, name, ip, ip);
-        n += 1;
-    }
-    return n;
 }
 
 fn str(v: std.json.Value, key: []const u8) []const u8 {
@@ -161,7 +132,6 @@ pub fn parseAtvscriptScan(gpa: std.mem.Allocator, text: []const u8, out: []CastD
     return n;
 }
 
-pub const catt_scan_argv = [_][]const u8{ "catt", "scan" };
 pub const atv_scan_argv = [_][]const u8{ "atvscript", "scan" };
 
 /// Fixed-capacity argv whose slices borrow from the device, the URL and
@@ -181,32 +151,20 @@ fn argvOf(parts: []const []const u8) Argv {
     return a;
 }
 
-/// argv to start casting `url` to `dev`. AirPlay needs "play_url=<url>" as one
-/// argument, written into `arg_buf`; null when it does not fit.
+/// argv to start casting `url` to an AirPlay `dev` ("play_url=<url>" is one
+/// argument, written into `arg_buf`); null when it does not fit or `dev` is
+/// not AirPlay (Chromecast and DLNA are native, see cast_net.zig).
 pub fn castArgv(dev: *const CastDevice, url: []const u8, arg_buf: []u8) ?Argv {
-    return switch (dev.protocol) {
-        .chromecast => argvOf(&.{ "catt", "-d", dev.identSlice(), "cast", url }),
-        .airplay => blk: {
-            const arg = std.fmt.bufPrint(arg_buf, "play_url={s}", .{url}) catch break :blk null;
-            break :blk argvOf(&.{ "atvremote", "--id", dev.identSlice(), arg });
-        },
-    };
+    if (dev.protocol != .airplay) return null;
+    const arg = std.fmt.bufPrint(arg_buf, "play_url={s}", .{url}) catch return null;
+    return argvOf(&.{ "atvremote", "--id", dev.identSlice(), arg });
 }
 
-/// argv for an explicit stop command, or null when stopping is done by ending
-/// the cast process (AirPlay: pyatv's stop() just closes the play_url session).
-pub fn stopArgv(dev: *const CastDevice) ?Argv {
-    return switch (dev.protocol) {
-        .chromecast => argvOf(&.{ "catt", "-d", dev.identSlice(), "stop" }),
-        .airplay => null,
-    };
-}
-
-/// argv to pair with an AirPlay device (null for Chromecast: catt needs no
-/// pairing). "--remote-name" is the name the TV lists the pairing under.
+/// argv to pair with an AirPlay device (null for Chromecast and DLNA, which
+/// need no pairing). "--remote-name" is the name the TV lists the pairing under.
 pub fn pairArgv(dev: *const CastDevice) ?Argv {
     return switch (dev.protocol) {
-        .chromecast => null,
+        .chromecast, .dlna => null,
         .airplay => argvOf(&.{ "atvremote", "--id", dev.identSlice(), "--protocol", "airplay", "--remote-name", "Opal", "pair" }),
     };
 }
@@ -375,62 +333,156 @@ pub fn isLoopbackUrl(url: []const u8) bool {
 
 pub const msg_no_media = "No video loaded to cast";
 pub const msg_loopback = "Can't cast a localhost stream: the receiver can't reach this machine's loopback address. Cast a local file or a network URL instead.";
+pub const msg_unsupported = "This source can't be cast: only local files and http(s) streams can be sent to a TV";
 pub const msg_no_device = "Unknown cast device. Scan again.";
 pub const msg_url_too_long = "URL too long to cast";
+pub const msg_no_session = "Nothing is being cast";
+pub const msg_no_lan = "No network address the receiver can reach; is this machine on the same network as the TV?";
+pub const msg_control_unsupported = "AirPlay casts can only be stopped from here";
 
-/// Why `url` cannot be cast, or null when it can. Local file paths are fine:
-/// catt and pyatv both serve them over HTTP themselves.
-pub fn castRefusal(url: []const u8) ?[]const u8 {
-    if (url.len == 0) return msg_no_media;
-    if (isLoopbackUrl(url)) return msg_loopback;
-    return null;
+pub const SourceKind = enum { local_file, network, refused };
+
+pub const Source = struct {
+    kind: SourceKind,
+    /// local_file: absolute path; network: the URL; refused: the reason.
+    text: []const u8,
+};
+
+/// How the receiver gets `url`: a local file is served to it through a
+/// signed stream session; an http(s) URL on the network it fetches itself.
+/// Loopback URLs and non-http schemes (magnet:, ytdl:, ...) are refused.
+pub fn classifySource(url: []const u8) Source {
+    if (url.len == 0) return .{ .kind = .refused, .text = msg_no_media };
+    if (std.mem.startsWith(u8, url, "file://")) {
+        const path = url["file://".len..];
+        if (path.len > 0 and path[0] == '/') return .{ .kind = .local_file, .text = path };
+        return .{ .kind = .refused, .text = msg_unsupported };
+    }
+    if (url[0] == '/') return .{ .kind = .local_file, .text = url };
+    if (std.ascii.startsWithIgnoreCase(url, "http://") or std.ascii.startsWithIgnoreCase(url, "https://")) {
+        if (isLoopbackUrl(url)) return .{ .kind = .refused, .text = msg_loopback };
+        return .{ .kind = .network, .text = url };
+    }
+    return .{ .kind = .refused, .text = msg_unsupported };
 }
 
-/// "chromecast" / "airplay" for JSON.
+/// Why `url` cannot be cast, or null when it can.
+pub fn castRefusal(url: []const u8) ?[]const u8 {
+    const s = classifySource(url);
+    return if (s.kind == .refused) s.text else null;
+}
+
+/// MIME type a receiver expects for `name` (a path or URL; query ignored).
+pub fn contentTypeFor(name: []const u8) []const u8 {
+    const end = std.mem.indexOfAny(u8, name, "?#") orelse name.len;
+    const base = name[0..end];
+    const slash = std.mem.lastIndexOfScalar(u8, base, '/') orelse 0;
+    const dot = std.mem.lastIndexOfScalar(u8, base, '.') orelse return "video/mp4";
+    if (dot < slash) return "video/mp4";
+    const ext = base[dot + 1 ..];
+    const table = [_]struct { []const u8, []const u8 }{
+        .{ "m3u8", "application/x-mpegURL" }, .{ "mpd", "application/dash+xml" },
+        .{ "mp4", "video/mp4" },              .{ "m4v", "video/mp4" },
+        .{ "mov", "video/quicktime" },        .{ "mkv", "video/x-matroska" },
+        .{ "webm", "video/webm" },            .{ "avi", "video/x-msvideo" },
+        .{ "ts", "video/mp2t" },              .{ "mp3", "audio/mpeg" },
+        .{ "m4a", "audio/mp4" },              .{ "aac", "audio/aac" },
+        .{ "flac", "audio/flac" },            .{ "ogg", "audio/ogg" },
+        .{ "opus", "audio/ogg" },             .{ "wav", "audio/wav" },
+    };
+    for (table) |e| if (std.ascii.eqlIgnoreCase(ext, e[0])) return e[1];
+    return "video/mp4";
+}
+
+/// What a Chromecast's Default Media Receiver decodes, in stream_pure caps
+/// words: a stream session remuxes / transcodes anything else to fMP4 HLS.
+pub const chromecast_caps = "h264,aac,mp3,opus,mp4,webm,hls";
+
+/// URL the receiver fetches a stream-session entry from. The token in the
+/// path authorizes exactly this session (stream_session.handlePublic).
+pub fn streamUrl(buf: []u8, host: []const u8, port: u16, sid: []const u8, token: []const u8, entry: []const u8) ?[]const u8 {
+    if (host.len == 0 or sid.len == 0 or token.len == 0) return null;
+    return std.fmt.bufPrint(buf, "http://{s}:{d}/api/stream/{s}/{s}/{s}", .{ host, port, sid, token, entry }) catch null;
+}
+
+/// True for a request path the cast media listener may serve: only signed
+/// stream-session paths, `/api/stream/<sid>/<token>/<name>`.
+pub fn castServePath(path: []const u8) bool {
+    const prefix = "/api/stream/";
+    if (!std.mem.startsWith(u8, path, prefix)) return false;
+    var it = std.mem.splitScalar(u8, path[prefix.len..], '/');
+    var parts: usize = 0;
+    while (it.next()) |p| {
+        if (p.len == 0 or std.mem.eql(u8, p, "..") or std.mem.eql(u8, p, ".")) return false;
+        parts += 1;
+    }
+    return parts == 3;
+}
+
+pub const Control = enum {
+    play,
+    pause,
+    toggle,
+    stop,
+    seek,
+    forward,
+    back,
+
+    pub fn parse(s: []const u8) ?Control {
+        return std.meta.stringToEnum(Control, s);
+    }
+};
+
+pub const skip_secs: f64 = 30;
+
+/// Absolute seek target for a seek-type control, clamped to [0, duration]
+/// (duration 0 = unknown, no upper clamp). Null for non-seek controls or a
+/// seek without a finite position.
+pub fn seekTarget(c: Control, pos: ?f64, current: f64, duration: f64) ?f64 {
+    const raw: f64 = switch (c) {
+        .seek => blk: {
+            const p = pos orelse return null;
+            if (!std.math.isFinite(p)) return null;
+            break :blk p;
+        },
+        .forward => current + skip_secs,
+        .back => current - skip_secs,
+        else => return null,
+    };
+    var t = @max(raw, 0);
+    if (duration > 0) t = @min(t, duration);
+    return t;
+}
+
+pub fn fromChromecast(f: *const cv2.Found) CastDevice {
+    var ident_buf: [96]u8 = undefined;
+    const ident = if (f.id.len > 0) f.id.slice() else (std.fmt.bufPrint(&ident_buf, "{s}:{d}", .{ f.ipSlice(), f.port }) catch f.ipSlice());
+    var d = makeDevice(.chromecast, if (f.name.len > 0) f.name.slice() else "Chromecast", f.ipSlice(), ident);
+    d.port = f.port;
+    return d;
+}
+
+pub fn fromRenderer(r: *const dlna.Renderer) CastDevice {
+    const ident = if (r.udn_len > 0) r.udnSlice() else r.controlSlice();
+    var d = makeDevice(.dlna, r.nameSlice(), urlHost(r.controlSlice()), ident);
+    setField(&d.control, &d.control_len, r.controlSlice());
+    return d;
+}
+
+/// Hosts the cast-probe test tool may talk to: loopback only, so a test can
+/// never reach a real TV, speaker or Chromecast.
+pub fn isLoopbackHost(host: []const u8) bool {
+    return std.mem.startsWith(u8, host, "127.") or std.ascii.eqlIgnoreCase(host, "localhost");
+}
+
+/// "chromecast" / "airplay" / "dlna" for JSON.
 pub fn protocolName(p: Protocol) []const u8 {
     return @tagName(p);
 }
 
-/// Toast for a scan where neither tool could be launched.
-pub const msg_install = "Casting needs catt (pip install catt) for Chromecast or pyatv (pip install pyatv) for AirPlay";
-
 // ── tests ────────────────────────────────────────────────────────────────
 
 const testing = std.testing;
-
-test "catt scan: real catt 0.13 output (ip - name - model) with banner" {
-    var out: [max_devices]CastDevice = undefined;
-    const text =
-        \\Scanning Chromecasts...
-        \\192.168.1.20 - Living Room TV - Google Inc. Chromecast Ultra
-        \\192.168.1.31 - Kitchen speaker - Google Inc. Google Home
-        \\
-    ;
-    const n = parseCattScan(text, &out, 0);
-    try testing.expectEqual(@as(usize, 2), n);
-    try testing.expectEqualStrings("Living Room TV", out[0].nameSlice());
-    try testing.expectEqualStrings("192.168.1.20", out[0].ipSlice());
-    try testing.expectEqualStrings("192.168.1.20", out[0].identSlice());
-    try testing.expectEqual(Protocol.chromecast, out[0].protocol);
-    try testing.expectEqualStrings("Kitchen speaker", out[1].nameSlice());
-}
-
-test "catt scan: legacy name - ip:port form and garbage lines" {
-    var out: [max_devices]CastDevice = undefined;
-    const n = parseCattScan("Den - 10.0.0.5:8009\r\nnot a device line\nError - something bad\n", &out, 0);
-    try testing.expectEqual(@as(usize, 1), n);
-    try testing.expectEqualStrings("Den", out[0].nameSlice());
-    try testing.expectEqualStrings("10.0.0.5", out[0].ipSlice());
-}
-
-test "catt scan: respects capacity and appends after existing count" {
-    var out: [2]CastDevice = undefined;
-    out[0] = makeDevice(.airplay, "x", "1.1.1.1", "id");
-    const n = parseCattScan("1.2.3.4 - A - m\n1.2.3.5 - B - m\n", &out, 1);
-    try testing.expectEqual(@as(usize, 2), n);
-    try testing.expectEqualStrings("A", out[1].nameSlice());
-    try testing.expectEqual(Protocol.airplay, out[0].protocol);
-}
 
 test "atvscript scan: keeps AirPlay devices, skips speakers without airplay" {
     var out: [max_devices]CastDevice = undefined;
@@ -460,14 +512,8 @@ test "atvscript scan: failure result, bad JSON and empty input add nothing" {
     try testing.expectEqual(@as(usize, 0), parseAtvscriptScan(testing.allocator, "{\"result\":\"success\",\"devices\":[{\"name\":\"n\",\"identifier\":\"\",\"services\":[{\"protocol\":\"airplay\",\"port\":7000}]}]}", &out, 0));
 }
 
-test "castArgv: catt targets by IP, atvremote by identifier with play_url=" {
+test "castArgv: atvremote by identifier with play_url=; native protocols have none" {
     var buf: [256]u8 = undefined;
-    const cc = makeDevice(.chromecast, "TV", "192.168.1.20", "192.168.1.20");
-    const a = castArgv(&cc, "https://x.test/v.mp4", &buf).?;
-    const want_cc = [_][]const u8{ "catt", "-d", "192.168.1.20", "cast", "https://x.test/v.mp4" };
-    try testing.expectEqual(want_cc.len, a.slice().len);
-    for (want_cc, a.slice()) |w, g| try testing.expectEqualStrings(w, g);
-
     const ap = makeDevice(.airplay, "ATV", "10.0.0.2", "AA:BB");
     const b = castArgv(&ap, "/Users/me/Movies/a b.mkv", &buf).?;
     const want_ap = [_][]const u8{ "atvremote", "--id", "AA:BB", "play_url=/Users/me/Movies/a b.mkv" };
@@ -476,15 +522,10 @@ test "castArgv: catt targets by IP, atvremote by identifier with play_url=" {
 
     var tiny: [8]u8 = undefined;
     try testing.expect(castArgv(&ap, "https://x.test/v.mp4", &tiny) == null);
-}
-
-test "stopArgv: catt stop for Chromecast, process end for AirPlay" {
     const cc = makeDevice(.chromecast, "TV", "192.168.1.20", "192.168.1.20");
-    const s = stopArgv(&cc).?;
-    const want = [_][]const u8{ "catt", "-d", "192.168.1.20", "stop" };
-    for (want, s.slice()) |w, g| try testing.expectEqualStrings(w, g);
-    const ap = makeDevice(.airplay, "ATV", "10.0.0.2", "AA:BB");
-    try testing.expect(stopArgv(&ap) == null);
+    try testing.expect(castArgv(&cc, "https://x.test/v.mp4", &buf) == null);
+    const dl = makeDevice(.dlna, "TV", "192.168.1.21", "uuid:1");
+    try testing.expect(castArgv(&dl, "https://x.test/v.mp4", &buf) == null);
 }
 
 test "castRefusal: loopback URLs refused, LAN/internet URLs and local paths allowed" {
@@ -498,7 +539,78 @@ test "castRefusal: loopback URLs refused, LAN/internet URLs and local paths allo
     try testing.expect(castRefusal("http://192.168.1.4:41595/x") == null);
     try testing.expect(castRefusal("https://example.com/127.0.0.1.mp4") == null);
     try testing.expect(castRefusal("/Users/me/Movies/a.mkv") == null);
+    try testing.expectEqualStrings(msg_unsupported, castRefusal("magnet:?xt=urn:btih:abc").?);
+    try testing.expectEqualStrings(msg_unsupported, castRefusal("file://relative").?);
 }
+
+test "classifySource: local files are served, network URLs pass through" {
+    const a = classifySource("file:///Users/me/a.mkv");
+    try testing.expectEqual(SourceKind.local_file, a.kind);
+    try testing.expectEqualStrings("/Users/me/a.mkv", a.text);
+    try testing.expectEqual(SourceKind.local_file, classifySource("/srv/x.mp4").kind);
+    const n = classifySource("HTTPS://cdn.example/v.m3u8");
+    try testing.expectEqual(SourceKind.network, n.kind);
+    try testing.expectEqualStrings("HTTPS://cdn.example/v.m3u8", n.text);
+    try testing.expectEqual(SourceKind.refused, classifySource("http://127.0.0.1:41595/stream").kind);
+}
+
+test "contentTypeFor by extension, query ignored" {
+    try testing.expectEqualStrings("application/x-mpegURL", contentTypeFor("http://h/api/stream/s/t/index.m3u8"));
+    try testing.expectEqualStrings("video/x-matroska", contentTypeFor("/a/B.MKV"));
+    try testing.expectEqualStrings("audio/mpeg", contentTypeFor("https://h/song.mp3?sig=1.mp4"));
+    try testing.expectEqualStrings("video/mp4", contentTypeFor("http://h/direct"));
+    try testing.expectEqualStrings("video/mp4", contentTypeFor("http://h.example/direct"));
+}
+
+test "streamUrl and castServePath agree on the signed path" {
+    var buf: [256]u8 = undefined;
+    const u = streamUrl(&buf, "192.168.1.5", 50123, "abcd", "tok.sig", "index.m3u8").?;
+    try testing.expectEqualStrings("http://192.168.1.5:50123/api/stream/abcd/tok.sig/index.m3u8", u);
+    try testing.expect(castServePath(u["http://192.168.1.5:50123".len..]));
+    try testing.expect(streamUrl(&buf, "", 1, "a", "b", "c") == null);
+    try testing.expect(!castServePath("/api/stream/abcd/index.m3u8")); // no token
+    try testing.expect(!castServePath("/api/stream/abcd/../x/y"));
+    try testing.expect(!castServePath("/api/status"));
+    try testing.expect(!castServePath("/api/stream/a//b"));
+}
+
+test "Control.parse and seekTarget clamps" {
+    try testing.expectEqual(Control.pause, Control.parse("pause").?);
+    try testing.expect(Control.parse("rm -rf") == null);
+    try testing.expectEqual(@as(?f64, 754), seekTarget(.seek, 754, 0, 0));
+    try testing.expectEqual(@as(?f64, 100), seekTarget(.seek, 754, 0, 100));
+    try testing.expectEqual(@as(?f64, 40), seekTarget(.forward, null, 10, 0));
+    try testing.expectEqual(@as(?f64, 0), seekTarget(.back, null, 10, 0));
+    try testing.expect(seekTarget(.seek, null, 10, 0) == null);
+    try testing.expect(seekTarget(.seek, std.math.inf(f64), 10, 0) == null);
+    try testing.expect(seekTarget(.pause, 5, 10, 0) == null);
+}
+
+test "fromChromecast / fromRenderer build native devices" {
+    var f = cv2.Found{ .port = 8009 };
+    f.name.set("Living Room");
+    f.id.set("abc123");
+    @memcpy(f.ip[0..11], "192.168.1.9");
+    f.ip_len = 11;
+    const d = fromChromecast(&f);
+    try testing.expectEqual(Protocol.chromecast, d.protocol);
+    try testing.expectEqualStrings("abc123", d.identSlice());
+    try testing.expectEqual(@as(u16, 8009), d.port);
+    const r = dlna.parseDescription("<root><device><friendlyName>TV</friendlyName><UDN>uuid:9</UDN><serviceList><service><serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType><controlURL>/avt</controlURL></service></serviceList></device></root>", "http://192.168.1.30:7676/d.xml").?;
+    const t = fromRenderer(&r);
+    try testing.expectEqual(Protocol.dlna, t.protocol);
+    try testing.expectEqualStrings("192.168.1.30", t.ipSlice());
+    try testing.expectEqualStrings("http://192.168.1.30:7676/avt", t.controlSlice());
+    try testing.expectEqualStrings("uuid:9", t.identSlice());
+}
+
+test "isLoopbackHost guards the probe tool" {
+    try testing.expect(isLoopbackHost("127.0.0.1"));
+    try testing.expect(isLoopbackHost("localhost"));
+    try testing.expect(!isLoopbackHost("192.168.1.20"));
+    try testing.expect(!isLoopbackHost("224.0.0.251"));
+}
+
 
 test "sameTarget compares protocol and identifier" {
     const a = makeDevice(.chromecast, "A", "1.2.3.4", "1.2.3.4");
