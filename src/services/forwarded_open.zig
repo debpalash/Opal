@@ -40,6 +40,31 @@ pub fn pushBrowser(queue_only: bool, url: []const u8, title: []const u8, art: []
 }
 
 /// Call under the player's owner boundary; snapshot the FIFO before dispatch.
+/// Queue a Live TV channel (by catalog stream URL) for the UI thread. The UI
+/// side re-reads the catalog row, so the per-channel User-Agent / Referer come
+/// from the playlist, never from the remote caller.
+pub fn pushLiveTv(url: []const u8, title: []const u8) bool {
+    if (url.len == 0) return false;
+    const player = @import("../player/player.zig");
+    if (!player.openTriggerArmed()) player.openTriggerNow();
+    state.app.remote_open_lock.lock();
+    defer state.app.remote_open_lock.unlock();
+    if (state.app.remote_open_count >= state.REMOTE_OPEN_QUEUE_CAP) return false;
+    const slot = &state.app.remote_open_queue[(state.app.remote_open_head + state.app.remote_open_count) % state.REMOTE_OPEN_QUEUE_CAP];
+    setField(&slot.path, &slot.path_len, url);
+    setField(&slot.kind, &slot.kind_len, "livetv");
+    setField(&slot.title, &slot.title_len, title);
+    slot.art_len = 0;
+    slot.referer_len = 0;
+    slot.origin_len = 0;
+    slot.user_agent_len = 0;
+    slot.subtitle_len = 0;
+    state.app.remote_open_count += 1;
+    state.app.remote_open_ready.store(true, .release);
+    state.wakeUi();
+    return true;
+}
+
 pub fn drain() void {
     var first = true;
     while (true) {
@@ -105,6 +130,16 @@ pub fn drain() void {
             q.addToQueue(url, title, "browser");
             logs.pushLog("info", "queue", "Queued from paired browser", false);
             state.showToast("Queued in Opal");
+            continue;
+        }
+        if (std.mem.eql(u8, kind, "livetv")) {
+            if (@import("iptv_catalog.zig").findByUrl(url)) |row| {
+                @import("iptv.zig").playRecord(row);
+                state.showToast("Playing live channel");
+            } else {
+                logs.pushLog("warn", "open", "Live TV channel no longer in the catalog", false);
+            }
+            first = false;
             continue;
         }
         if (std.mem.eql(u8, kind, "browser")) {

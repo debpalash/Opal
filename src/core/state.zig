@@ -1224,7 +1224,8 @@ pub const AppState = struct {
         filter_quality: u8 = 0,
         sort_mode: u8 = 0,
         // Quick-filter view: 0 = All (network), 1 = Favorites, 2 = Recent (both
-        // loaded from the iptv_channels table — services/iptv_store.zig).
+        // loaded from the iptv_channels table — services/iptv_store.zig),
+        // 3 = programme Guide (ui/live_tv_guide.zig).
         quick_filter: u8 = 0,
     } = .{},
 

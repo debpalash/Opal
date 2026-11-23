@@ -107,8 +107,8 @@ pub fn isFavorite(url: []const u8) bool {
 
 fn upsert(kind: Kind, c: *const pure.IptvChannel) void {
     const stmt = db.prepare(
-        "INSERT OR REPLACE INTO iptv_channels(kind,url_hash,name,url,logo,quality,category,country,user_agent,referrer,ts) " ++
-            "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,strftime('%s','now'))",
+        "INSERT OR REPLACE INTO iptv_channels(kind,url_hash,name,url,logo,quality,category,country,user_agent,referrer,chan_id,ts) " ++
+            "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,strftime('%s','now'))",
     ) orelse return;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, kind.str());
@@ -121,6 +121,7 @@ fn upsert(kind: Kind, c: *const pure.IptvChannel) void {
     db.bindText(stmt, 8, c.country[0..c.country_len]);
     db.bindText(stmt, 9, c.user_agent[0..c.user_agent_len]);
     db.bindText(stmt, 10, c.referrer[0..c.referrer_len]);
+    db.bindText(stmt, 11, c.chan_id[0..c.chan_id_len]);
     _ = db.step(stmt);
 }
 
@@ -161,7 +162,7 @@ pub fn recordRecent(c: *const pure.IptvChannel) void {
 /// Load rows of `kind` (newest first) into `out`; returns the count filled.
 pub fn loadInto(kind: Kind, out: []pure.IptvChannel) usize {
     const stmt = db.prepare(
-        "SELECT name,url,logo,quality,category,country,user_agent,referrer " ++
+        "SELECT name,url,logo,quality,category,country,user_agent,referrer,chan_id " ++
             "FROM iptv_channels WHERE kind=?1 ORDER BY ts DESC LIMIT ?2",
     ) orelse return 0;
     defer db.finalize(stmt);
@@ -179,6 +180,7 @@ pub fn loadInto(kind: Kind, out: []pure.IptvChannel) usize {
         db.copyColumn(stmt, 5, c.country[0..], &c.country_len);
         db.copyColumn(stmt, 6, c.user_agent[0..], &c.user_agent_len);
         db.copyColumn(stmt, 7, c.referrer[0..], &c.referrer_len);
+        db.copyColumn(stmt, 8, c.chan_id[0..], &c.chan_id_len);
         n += 1;
     }
     return n;

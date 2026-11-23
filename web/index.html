@@ -358,6 +358,28 @@
       <input id="tv-q" placeholder="Search live channels…" autocapitalize="off">
       <button id="tv-go">Go</button>
     </div>
+    <div class="chips" id="tv-views" role="tablist" aria-label="Live TV view">
+      <button type="button" role="tab" data-tv-view="channels" class="on" aria-selected="true">Channels</button>
+      <button type="button" role="tab" data-tv-view="favorites" aria-selected="false">Favorites</button>
+      <button type="button" role="tab" data-tv-view="programmes" aria-selected="false">Programmes</button>
+    </div>
+    <details class="acc-group" id="tv-guide">
+      <summary>Programme guide</summary>
+      <div class="hint" id="tv-guide-status">Off. Import an XMLTV guide to see what is on.</div>
+      <div class="search-row">
+        <input id="tv-guide-src" placeholder="XMLTV guide URL (.xml / .xml.gz) or file path" autocapitalize="off" autocomplete="off">
+        <button id="tv-guide-import" type="button">Import</button>
+      </div>
+      <button class="quick-btn" id="tv-guide-refresh" type="button">Refresh</button>
+      <button class="quick-btn" id="tv-guide-clear" type="button">Remove guide</button>
+      <div class="search-row">
+        <input id="tv-map-channel" placeholder="Playlist channel name" autocapitalize="off" autocomplete="off">
+        <input id="tv-map-guide" placeholder="Guide channel id" list="tv-map-suggest" autocapitalize="off" autocomplete="off">
+        <datalist id="tv-map-suggest"></datalist>
+        <button id="tv-map-save" type="button">Map</button>
+      </div>
+      <div id="tv-guide-maps"></div>
+    </details>
     <div class="hint" id="tv-hint">Live TV — search or browse the channel catalog.</div>
     <div id="tv-results"></div>
     <button id="tv-more" class="btn-more" style="display:none">Load more</button>

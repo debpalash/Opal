@@ -87,7 +87,16 @@ const map_alloc = std.heap.c_allocator;
 var fav_set: std.AutoHashMapUnmanaged(i64, void) = .{};
 var fav_dirty: bool = true;
 
+/// Set by the remote API thread when it toggles a favourite; the UI thread
+/// folds it into fav_dirty (a plain bool it alone owns).
+var fav_dirty_remote: std.atomic.Value(bool) = .init(false);
+
+pub fn noteFavoritesChanged() void {
+    fav_dirty_remote.store(true, .release);
+}
+
 fn ensureFavSet() void {
+    if (fav_dirty_remote.swap(false, .acq_rel)) fav_dirty = true;
     if (!fav_dirty) return;
     iptv_store.loadFavHashes(map_alloc, &fav_set);
     fav_dirty = false;
@@ -112,10 +121,21 @@ fn loadQuickView() void {
     win_base = 0;
 }
 
-/// Switch quick-filter view (All / Favorites / Recent) and repopulate.
+/// Quick-filter id of the programme-guide view (ui/live_tv_guide.zig).
+const GUIDE_VIEW: u8 = 3;
+/// The guide view's renderer, injected by ui/drawer.zig (services may not
+/// import new UI modules). UI-thread only.
+pub var guide_view: ?*const fn () void = null;
+/// Bumped each time the Guide chip is selected so the view reloads its cards.
+pub var guide_view_epoch: u32 = 0;
+
+/// Switch quick-filter view (All / Favorites / Recent / Guide) and repopulate.
 fn selectQuickFilter(qf: u8) void {
     state.app.iptv.quick_filter = qf;
-    if (qf == 0) {
+    if (qf == GUIDE_VIEW) {
+        // The programme guide is its own view; no channel grid to load.
+        guide_view_epoch +%= 1;
+    } else if (qf == 0) {
         // Back to the network view — re-run with the current filters/search.
         applyFilters();
     } else {
@@ -683,8 +703,23 @@ fn ensureWindow(first: usize, last: usize) bool {
 /// player pane and bottom bar.
 pub fn playChannel(idx: usize) void {
     if (idx >= state.app.iptv.result_count) return;
-    const ch = &state.app.iptv.results[idx];
-    const src = ch.url[0..ch.url_len];
+    // Snapshot the row by value: a concurrent re-search can overwrite
+    // results[] mid-frame, so nothing handed to the player aliases it.
+    playRecord(state.app.iptv.results[idx]);
+}
+
+/// Stream health of a channel URL (shared probe cache) — the guide view and
+/// the remote API surface dead streams with it.
+pub fn channelHealth(url: []const u8) pure.Health {
+    return healthOf(url);
+}
+
+/// Play a channel record (a catalog row, favourite or guide hit) with its own
+/// per-channel request headers. UI-THREAD ONLY (the remote API goes through
+/// forwarded_open.pushLiveTv, which lands here via the open queue).
+pub fn playRecord(snap: pure.IptvChannel) void {
+    const ch = &snap;
+    const src = ch.url[0..@min(ch.url_len, ch.url.len)];
     if (src.len == 0) return;
 
     // Dead-stream guard: if the last probe marked this URL dead, tell the user
@@ -706,10 +741,17 @@ pub fn playChannel(idx: usize) void {
     @memcpy(name_buf[0..nlen], ch.name[0..nlen]);
 
     // Subtitle: "1080p · HLS" — quality (when present) + an HLS tag for m3u8.
-    var sub_buf: [64]u8 = undefined;
+    // With a programme guide loaded, lead with what is on air now.
+    var sub_buf: [160]u8 = undefined;
     var sw = std.Io.Writer.fixed(&sub_buf);
     var wrote = false;
+    const guide_now: ?@import("epg.zig").Slot = if (@import("epg.zig").nowNextFor(ch, io.timestamp())) |info| info.now else null;
+    if (guide_now) |slot| {
+        sw.writeAll(@import("epg_pure.zig").utf8Prefix(slot.titleSlice(), 96)) catch {};
+        wrote = true;
+    }
     if (ch.quality_len > 0) {
+        if (wrote) sw.writeAll(" · ") catch {};
         sw.writeAll(ch.quality[0..@min(ch.quality_len, ch.quality.len)]) catch {};
         wrote = true;
     }
@@ -747,10 +789,9 @@ pub fn playChannel(idx: usize) void {
 
     @import("browser.zig").loadContentDirectMetaHeaders(url_buf[0..ulen], "", name_buf[0..nlen], sub, ua_buf[0..ualen], &hdrs);
     // Record into recents (a display snapshot incl. play hints, so it replays
-    // with the right headers). Snapshot the row by value first — recordRecent
-    // must not read the live results[] row a re-fetch could rewrite.
-    var snap = state.app.iptv.results[idx];
-    iptv_store.recordRecent(&snap);
+    // with the right headers). `snap` is already a by-value copy, so
+    // recordRecent never reads a live results[] row a re-fetch could rewrite.
+    iptv_store.recordRecent(ch);
     logs.pushLog("info", "iptv", "Streaming live TV channel", false);
 }
 
@@ -887,6 +928,13 @@ pub fn renderContent() void {
     if (state.app.iptv.quick_filter == 0) loadPopularOnce();
 
     renderToolbar();
+    // Programme-guide upkeep (first cache load, rolling window, daily
+    // re-download) — one atomic load per frame between minutes.
+    @import("epg.zig").tick();
+    if (state.app.iptv.quick_filter == GUIDE_VIEW) {
+        if (guide_view) |render_guide| render_guide();
+        return;
+    }
 
     if (state.app.iptv.fetch_error) {
         _ = dvui.label(@src(), "Failed to fetch — check your connection", .{}, .{
@@ -1042,6 +1090,7 @@ fn renderToolbar() void {
         .{ .id = 0, .label = "All", .icon = icons.tvg.lucide.tv },
         .{ .id = 1, .label = "Favorites", .icon = icons.tvg.lucide.star },
         .{ .id = 2, .label = "Recent", .icon = icons.tvg.lucide.history },
+        .{ .id = GUIDE_VIEW, .label = "Guide", .icon = icons.tvg.lucide.@"calendar-clock" },
     };
     if (row.menu(@src(), .{ .items = &chips, .selected = state.app.iptv.quick_filter })) |id| {
         if (id != state.app.iptv.quick_filter) selectQuickFilter(@intCast(id));
@@ -1232,7 +1281,15 @@ fn renderCard(i: usize, card_w: f32) void {
     var row = media_card.actionRow();
     defer row.deinit();
     var safe_meta: [96]u8 = undefined;
-    media_card.rowText(if (wrote) safeUtf8Buf(meta_buf[0..mw.end], &safe_meta) else "", card_w - 30, .secondary);
+    // With a programme guide loaded, the row shows what is on air instead of
+    // the static meta (same single line, so the card pitch never changes).
+    const on_air: ?@import("epg.zig").Slot = if (@import("epg.zig").nowNextFor(ch, io.timestamp())) |info| info.now else null;
+    if (on_air) |slot| {
+        var now_buf: [140]u8 = undefined;
+        const now_text = std.fmt.bufPrint(&now_buf, "Now: {s}", .{slot.titleSlice()}) catch slot.titleSlice();
+        var safe_now: [140]u8 = undefined;
+        media_card.rowText(safeUtf8Buf(now_text, &safe_now), card_w - 30, .accent);
+    } else media_card.rowText(if (wrote) safeUtf8Buf(meta_buf[0..mw.end], &safe_meta) else "", card_w - 30, .secondary);
     media_card.spacer();
     const faved = isFav(url);
     if (media_card.iconAction(@src(), icons.tvg.lucide.star, if (faved) "Remove favorite" else "Favorite", i, faved)) {

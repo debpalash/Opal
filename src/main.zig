@@ -1059,6 +1059,7 @@ pub fn appDeinit() void {
     // before the allocator and process disappear.
     @import("services/plugins.zig").deinitSignedUi();
     @import("services/link_health.zig").deinit();
+    @import("services/epg.zig").deinit();
     @import("core/db.zig").deinit();
 
     // Release the process-global keep-alive HTTP client (pooled connections)

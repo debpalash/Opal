@@ -16,8 +16,8 @@ const p = @import("iptv_pure.zig");
 /// Column order shared by the page query and the row reader below. A mismatch
 /// between the two is the classic "everything shifts one column" bug, so both
 /// sides reference THIS list rather than repeating literals.
-pub const COLS = "name,url,logo,category,country,quality,user_agent,referrer";
-pub const COL_COUNT = 8;
+pub const COLS = "name,url,logo,category,country,quality,user_agent,referrer,chan_id";
+pub const COL_COUNT = 9;
 
 /// The page SELECT, minus the WHERE clause (which is composed at bind time from
 /// whichever filters are active). `order` is appended verbatim by the caller.

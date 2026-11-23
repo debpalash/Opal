@@ -279,6 +279,9 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
         "/setup/tvdb",
         "/settings",             "/settings/toggle",    "/source/add",
         "/source/config",        "/livetv/sources",     "/rss/manage",
+        // Programme guide import makes this host fetch a URL or read a local
+        // file; refresh repeats it and clear drops the user's opt-in.
+        "/livetv/guide/import",  "/livetv/guide/refresh", "/livetv/guide/clear",
         "/local-library/action", "/jellyfin/login",     "/jellyfin/disconnect",
         "/abs/login",            "/abs/logout",         "/opds/connect",
         "/opds/disconnect",      "/plex/connect",       "/plex/disconnect",
@@ -370,6 +373,22 @@ pub fn allowsRoute(principal: Principal, path: []const u8, method: []const u8, a
     if (browserOnlyRoute(path)) return false;
     const capability = routeCapability(path, method, action) orelse return true;
     return allows(principal, capability);
+}
+
+test "programme guide import is host-admin; reading the guide and mapping channels is open" {
+    for ([_]Principal{ .machine, .admin_session, .session }) |principal| {
+        for ([_][]const u8{ "/livetv/guide/import", "/livetv/guide/refresh", "/livetv/guide/clear" }) |route| {
+            try std.testing.expectEqual(principal != .session, allowsRoute(principal, route, "POST", ""));
+        }
+        for ([_][]const u8{ "/livetv/guide", "/livetv/programmes", "/livetv/guide/channels", "/livetv/nownext" }) |route| {
+            try std.testing.expect(allowsRoute(principal, route, "GET", ""));
+        }
+        for ([_][]const u8{ "/livetv/map", "/livetv/favorite", "/livetv/play" }) |route| {
+            try std.testing.expect(allowsRoute(principal, route, "POST", ""));
+        }
+    }
+    try std.testing.expect(!allowsRoute(.browser, "/livetv/guide/import", "POST", ""));
+    try std.testing.expect(!allowsRoute(.browser, "/livetv/play", "POST", ""));
 }
 
 test "household profile management is admin-only, listing is open to sessions" {

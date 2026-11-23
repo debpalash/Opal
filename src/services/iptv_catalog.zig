@@ -83,8 +83,8 @@ fn writeChannels(source_id: []const u8, channels: []const pure.IptvChannel, forc
     }
     const sql =
         "INSERT OR IGNORE INTO iptv_catalog" ++
-        "(source_id,url_hash,name,name_lc,url,logo,category,country,quality,user_agent,referrer,nsfw,quality_tier)" ++
-        " VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)";
+        "(source_id,url_hash,name,name_lc,url,logo,category,country,quality,user_agent,referrer,nsfw,quality_tier,chan_id)" ++
+        " VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)";
     const stmt = db.prepare(sql) orelse {
         return 0;
     };
@@ -118,6 +118,7 @@ fn writeChannels(source_id: []const u8, channels: []const pure.IptvChannel, forc
         db.bindText(stmt, 11, ch.referrer[0..ch.referrer_len]);
         db.bindInt(stmt, 12, if (is_adult) 1 else 0);
         db.bindInt(stmt, 13, @intCast(cpure.qualityTier(ch.quality[0..ch.quality_len])));
+        db.bindText(stmt, 14, ch.chan_id[0..ch.chan_id_len]);
         if (db.step(stmt) != db.c.SQLITE_DONE) return 0;
         if (db.get()) |handle| if (db.c.sqlite3_changes(handle) > 0) {
             inserted += 1;
@@ -331,7 +332,56 @@ fn readRow(stmt: ?*db.Stmt) pure.IptvChannel {
     copyCol(stmt, 5, &c.quality, &c.quality_len);
     copyCol(stmt, 6, &c.user_agent, &c.user_agent_len);
     copyCol(stmt, 7, &c.referrer, &c.referrer_len);
+    copyCol(stmt, 8, &c.chan_id, &c.chan_id_len);
     return c;
+}
+
+/// The catalog row for a stream URL (any source), or null. Remote play and
+/// favourite look a channel up by URL so its per-channel request headers and
+/// guide id come from the catalog, never from the caller.
+pub fn findByUrl(url: []const u8) ?pure.IptvChannel {
+    if (url.len == 0) return null;
+    write_mutex.lock();
+    defer write_mutex.unlock();
+    const stmt = db.prepare(cpure.SELECT_PAGE ++ " WHERE url_hash=?1 AND url=?2 LIMIT 1") orelse return null;
+    defer db.finalize(stmt);
+    db.bindInt64(stmt, 1, store.urlHash(url));
+    db.bindText(stmt, 2, url);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return null;
+    return readRow(stmt);
+}
+
+/// First catalog channel carrying guide id `chan_id` (case-insensitive), or
+/// null — programme search results resolve back to a playable channel here.
+pub fn findByChanId(chan_id: []const u8, nsfw_allowed: bool) ?pure.IptvChannel {
+    if (chan_id.len == 0) return null;
+    write_mutex.lock();
+    defer write_mutex.unlock();
+    const sql = if (nsfw_allowed)
+        cpure.SELECT_PAGE ++ " WHERE chan_id=?1 COLLATE NOCASE LIMIT 1"
+    else
+        cpure.SELECT_PAGE ++ " WHERE chan_id=?1 COLLATE NOCASE AND nsfw = 0 LIMIT 1";
+    const stmt = db.prepare(sql) orelse return null;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, chan_id);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return null;
+    return readRow(stmt);
+}
+
+/// First catalog channel whose lowercased name equals `name_lc`, or null.
+pub fn findByNameLc(name_lc: []const u8, nsfw_allowed: bool) ?pure.IptvChannel {
+    if (name_lc.len == 0) return null;
+    write_mutex.lock();
+    defer write_mutex.unlock();
+    const sql = if (nsfw_allowed)
+        cpure.SELECT_PAGE ++ " WHERE name_lc=?1 LIMIT 1"
+    else
+        cpure.SELECT_PAGE ++ " WHERE name_lc=?1 AND nsfw = 0 LIMIT 1";
+    const stmt = db.prepare(sql) orelse return null;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, name_lc);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return null;
+    return readRow(stmt);
 }
 
 fn copyCol(stmt: ?*db.Stmt, col: c_int, dst: []u8, len: *usize) void {
