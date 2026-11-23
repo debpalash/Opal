@@ -199,9 +199,7 @@ def test_catalog_unique():
 
 @test("Model Picker UI Wired", "AI Models")
 def test_picker_wired():
-    s = os.path.join(PROJECT_DIR, "src/ui/settings.zig")
-    with open(s) as f:
-        c = f.read()
+    c = _src("src/ui/settings.zig")
     if "MODEL_CATALOG" in c and "selectModelByIndex" in c:
         return "pass", "picker iterates catalog + selects"
     return "fail", "picker not wired in settings"
@@ -446,7 +444,7 @@ def test_omdb_enrichment():
     tmdb = read("src/services/tmdb.zig") or ""
     if 'onDetailOpen' not in tmdb or 'ratingsLabel' not in tmdb:
         return "fail", "tmdb.zig not wired to omdb trigger/render"
-    settings = read("src/ui/settings.zig") or ""
+    settings = _src("src/ui/settings.zig")
     if "omdb_api_key" not in settings or "omdbapi.com" not in settings:
         return "fail", "settings.zig missing OMDb key field"
     # Registered as a unit-test in build.zig.
@@ -522,7 +520,7 @@ def test_local_taste_engine():
         problems.append("suggestions not feeding the For You rail")
     if "taste_enabled" not in read("src/ui/home.zig"):
         problems.append("For You rail not gated on the toggle")
-    settings_src = read("src/ui/settings.zig")
+    settings_src = _src("src/ui/settings.zig")
     if "taste_enabled" not in settings_src or "clearTasteData" not in settings_src:
         problems.append("settings toggle / Clear taste data missing")
     if "taste_suggestions" not in read("src/core/config.zig"):

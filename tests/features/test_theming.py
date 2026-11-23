@@ -84,9 +84,7 @@ def test_palette_button():
 
 @test("Settings Theme Picker", "Theming")
 def test_settings_picker():
-    settings_file = os.path.join(PROJECT_DIR, "src/ui/settings.zig")
-    with open(settings_file) as f:
-        content = f.read()
+    content = _src("src/ui/settings.zig")
     if "ThemePreset" in content and "setPreset" in content:
         return "pass", "Theme picker in settings"
     return "fail", "No theme picker in settings"

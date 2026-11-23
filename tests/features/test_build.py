@@ -201,7 +201,7 @@ def test_copyright_attribution():
     missing = []
     stale = []
     for path in surfaces:
-        src = open(os.path.join(PROJECT_DIR, path)).read()
+        src = _src(path)
         if "Palash Deb" not in src:
             missing.append(path)
         if "Opal contributors" in src:

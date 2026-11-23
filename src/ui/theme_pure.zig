@@ -7,6 +7,70 @@ pub const duration = struct {
     pub const slow: f32 = 320;
 };
 
+// Layout tokens. Shared by every theme preset (colors vary per preset; the
+// geometry does not). theme.zig re-exports these as theme.spacing /
+// theme.radius / theme.font_size.
+
+/// Spacing — 4px-based scale.
+pub const spacing = struct {
+    pub const xxs: f32 = 2; // hairline gaps: icon-to-badge, stacked meta lines
+    pub const xs: f32 = 4;
+    pub const sm: f32 = 8;
+    pub const md: f32 = 12;
+    pub const lg: f32 = 16;
+    pub const xl: f32 = 24;
+    pub const xxl: f32 = 32;
+    pub const xxxl: f32 = 48; // hero/empty-state breathing room
+};
+
+/// Corner radii. Softer scale (was 2/3/6/8/12). Rule of thumb: controls
+/// (buttons, inputs, segments, rows) = sm; cards/posters/tooltips = md;
+/// floating bars, dialogs, popovers = lg; hero sheets = xl. Nested shapes use
+/// one step smaller than their container so inner/outer curves stay concentric.
+pub const radius = struct {
+    pub const xs: f32 = 3;
+    pub const sm: f32 = 5;
+    pub const md: f32 = 7;
+    pub const lg: f32 = 10;
+    pub const xl: f32 = 14;
+    pub const pill: f32 = 999;
+};
+
+/// Type ramp — COMPACT, in dvui logical units (dvui's own default body is 10;
+/// the backend multiplies by the display's content scale). Most of the app
+/// used to render at the dvui default 10 while components.zig used 13 — two
+/// visibly different "body" sizes side by side. Unified DOWN to the compact
+/// end: a media player's chrome should stay quiet at 1x scale.
+pub const font_size = struct {
+    pub const micro: f32 = 9;
+    pub const small: f32 = 10;
+    pub const body: f32 = 11;
+    pub const subtitle: f32 = 13; // card titles, dialog subheads
+    pub const title: f32 = 15; // section/page headings (dvui font_heading)
+    pub const headline: f32 = 18; // detail-page titles
+    pub const display: f32 = 22; // hero titles (dvui font_title)
+};
+
+fn expectAscending(steps: []const f32) !void {
+    for (steps[1..], steps[0 .. steps.len - 1]) |v, prev| try std.testing.expect(v > prev);
+}
+
+test "spacing is the 4px scale, ascending" {
+    const steps = [_]f32{ spacing.xxs, spacing.xs, spacing.sm, spacing.md, spacing.lg, spacing.xl, spacing.xxl, spacing.xxxl };
+    try expectAscending(&steps);
+    for (steps[1..]) |v| try std.testing.expectEqual(@as(f32, 0), @mod(v, 4));
+    try std.testing.expectEqual(@as(f32, 2), spacing.xxs);
+}
+
+test "radius steps ascend so nested shapes can step down one" {
+    try expectAscending(&.{ radius.xs, radius.sm, radius.md, radius.lg, radius.xl, radius.pill });
+}
+
+test "font_size ramp ascends and body sits at the compact 11" {
+    try expectAscending(&.{ font_size.micro, font_size.small, font_size.body, font_size.subtitle, font_size.title, font_size.headline, font_size.display });
+    try std.testing.expectEqual(@as(f32, 11), font_size.body);
+}
+
 /// Cubic ease-in-out over a normalized t in [0,1].
 pub fn easeInOut(t: f32) f32 {
     const x = std.math.clamp(t, 0.0, 1.0);

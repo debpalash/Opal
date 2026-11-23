@@ -165,7 +165,7 @@ def test_typography_unified():
         return "fail", "dvui heading/title fonts not routed through tokens"
     if "NotoSans-Regular.ttf" not in th or "NotoSans-Bold.ttf" not in th:
         return "fail", "regular/bold font sources are incomplete"
-    if "body: f32 = 11" not in th:
+    if "pub const font_size = tp.font_size;" not in th or "body: f32 = 11" not in _src("src/ui/theme_pure.zig"):
         return "fail", "type ramp is not the compact one (body should be 11)"
     return "pass", "embedded Noto Sans + compact ramp drive dvui/component fonts"
 
@@ -372,7 +372,7 @@ def test_subdl_provider():
     cfg = open(os.path.join(PROJECT_DIR, "src/core/config.zig")).read()
     pure = open(os.path.join(PROJECT_DIR, "src/services/subtitles_pure.zig")).read()
     svc = open(os.path.join(PROJECT_DIR, "src/services/subtitles.zig")).read()
-    ui = open(os.path.join(PROJECT_DIR, "src/ui/settings.zig")).read()
+    ui = _src("src/ui/settings.zig")
 
     # Key plumbing: fixed buffer in state, persisted both ways in config.
     if "subdl_api_key" not in state or "subdl_api_key_len" not in state:
@@ -456,7 +456,7 @@ def test_sub_picker_keyless_results():
     # only APPENDS an opensubtitles.com section; without one the hint is a
     # subtle one-liner, never a blocking banner.
     footer = open(os.path.join(PROJECT_DIR, "src/ui/footer.zig")).read()
-    settings = open(os.path.join(PROJECT_DIR, "src/ui/settings.zig")).read()
+    settings = _src("src/ui/settings.zig")
     if "pub fn renderSubPicker" not in footer:
         return "fail", "footer lost renderSubPicker"
     picker = footer.split("pub fn renderSubPicker")[1].split("\npub fn ")[0]
@@ -523,7 +523,7 @@ def test_nsfw_settings_only():
     # The NSFW filter is toggled from Settings ONLY — browse/search tabs must not
     # carry their own toggle. They still HONOR the global flag (that's tested
     # elsewhere), but must never FLIP it.
-    settings = open(os.path.join(PROJECT_DIR, "src/ui/settings.zig")).read()
+    settings = _src("src/ui/settings.zig")
     if 'toggleRow(@src(), "NSFW Filter"' not in settings:
         return "fail", "Settings lost the NSFW Filter toggle (the only intended control)"
 

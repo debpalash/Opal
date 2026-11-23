@@ -454,7 +454,7 @@ def test_storage_page_itemised():
     # (%APPDATA%\opal) and Linux ($XDG_CONFIG_HOME), carried no size, and
     # ignored everything else. A real install measured 1.3 GB while the page
     # reported 0.3 MB (models 715M, venv 248M, Suwayomi jar 166M, db 113M).
-    ui = _read("src/ui/settings.zig")
+    ui = _src("src/ui/settings.zig")
     svc = _read("src/core/storage_usage.zig")
     if not svc:
         return "fail", "core/storage_usage.zig missing"
@@ -481,7 +481,7 @@ def test_storage_scan_is_async():
     # opens the cache dir and stats every file — a filesystem walk per frame.
     # Walking a multi-GB tree that way would stall the UI outright.
     svc = _read("src/core/storage_usage.zig")
-    ui = _read("src/ui/settings.zig")
+    ui = _src("src/ui/settings.zig")
     m = _re.search(r"pub fn scanAsync\(\) void \{(.*?)\n\}", svc, _re.S)
     if not m:
         return "fail", "storage_usage has no scanAsync()"

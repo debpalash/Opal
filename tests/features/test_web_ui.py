@@ -457,7 +457,7 @@ def test_desktop_webui_settings_tab():
         "tab in enum": "WebUi" in st and "pub const SettingsTab = enum" in st,
         "sidebar row": '.tab = .WebUi, .label = "Web UI"' in sg,
         "title + dispatch": '.tab = .WebUi, .label = "Web UI"' in sg
-            and ".WebUi => renderWebUiTab()" in sg
+            and ".WebUi => webui_tab.renderWebUiTab()" in sg
             and "fn renderWebUiTab() void" in sg,
         "searchable": '.WebUi => &.{ "Web UI"' in sg,
         # The old toggle moved rather than being duplicated — two switches for
