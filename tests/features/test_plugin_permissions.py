@@ -48,3 +48,18 @@ def test_plugin_prelude_runtime():
     if r.returncode != 0:
         return "fail", (r.stderr or r.stdout)[-400:]
     return "pass", "listed plugin modules load; unlisted, reserved and native modules are denied"
+
+
+@test("Native Plugins view offers a themed one-time permission grant", "Security")
+def test_native_grant_prompt():
+    src = _src("src/services/plugins.zig")
+    pure = _src("src/services/plugin_permissions_pure.zig")
+    checks = {
+        "pure prompt rule": "pub fn showGrantPrompt(" in pure and 'test "grant prompt shows only' in pure,
+        "UI routes through the pure rule": "perms_pure.showGrantPrompt(&ap.requires, ap.allow_unsafe, ap.permission_granted)" in src,
+        "themed button grants and rescans": 'components.actionButton(@src(), "Allow once for this plugin", .primary' in src
+                                            and "setPermissionGrant(ap.id[0..ap.id_len], true)" in src,
+        "prompt names what is granted": "perms_pure.describe(&ap.requires, ap.allow_unsafe" in src,
+    }
+    bad = [k for k, ok in checks.items() if not ok]
+    return ("fail", ", ".join(bad)) if bad else ("pass", "ungranted plugins show a themed Allow prompt naming their requires/full access")

@@ -94,6 +94,12 @@ pub fn needsGrant(requires: *const Requires, allow_unsafe: bool) bool {
     return requires.count > 0 or allow_unsafe;
 }
 
+/// Whether the native Plugins view should show the one-time grant prompt
+/// for a plugin: it asks for something and the user hasn't granted it yet.
+pub fn showGrantPrompt(requires: *const Requires, allow_unsafe: bool, granted: bool) bool {
+    return needsGrant(requires, allow_unsafe) and !granted;
+}
+
 /// Whether the plugin may run at all as far as permissions go.
 pub fn permitted(requires: *const Requires, allow_unsafe: bool, granted: bool) bool {
     return !needsGrant(requires, allow_unsafe) or granted;
@@ -302,4 +308,14 @@ test "describe lists modules and full access" {
     try std.testing.expectEqualStrings("require a.b, json; full access (no Lua sandbox)", describe(&r, true, &buf));
     const empty: Requires = .{};
     try std.testing.expectEqualStrings("", describe(&empty, false, &buf));
+}
+
+test "grant prompt shows only for ungranted plugins that ask for something" {
+    const none = Requires{};
+    try std.testing.expect(!showGrantPrompt(&none, false, false));
+    try std.testing.expect(showGrantPrompt(&none, true, false));
+    try std.testing.expect(!showGrantPrompt(&none, true, true));
+    const one = try parseRequires(std.testing.allocator, "{\"require\":[\"json\"]}");
+    try std.testing.expect(showGrantPrompt(&one, false, false));
+    try std.testing.expect(!showGrantPrompt(&one, false, true));
 }

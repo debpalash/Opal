@@ -2047,6 +2047,35 @@ fn renderContentPlugins() void {
             }
         }
 
+        // One-time permission grant (manifest `require` / `allow_unsafe`).
+        if (active_plugin < plugin_count) {
+            const ap = &plugins[active_plugin];
+            const perms_pure = @import("plugin_permissions_pure.zig");
+            if (perms_pure.showGrantPrompt(&ap.requires, ap.allow_unsafe, ap.permission_granted)) {
+                var grant_box = dvui.box(@src(), .{ .dir = .vertical }, .{
+                    .expand = .horizontal,
+                    .color_fill = .{ .color = theme.colors.bg_elevated },
+                    .color_border = .{ .color = theme.colors.border_subtle },
+                    .border = dvui.Rect.all(1),
+                    .corners = theme.dims.rad_sm,
+                    .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
+                    .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
+                });
+                defer grant_box.deinit();
+                var desc_buf: [512]u8 = undefined;
+                const desc = perms_pure.describe(&ap.requires, ap.allow_unsafe, &desc_buf);
+                var line_buf: [640]u8 = undefined;
+                const line = std.fmt.bufPrint(&line_buf, "This plugin stays off until you allow: {s}. Only allow plugins you trust.", .{desc}) catch "This plugin needs permission before it can run.";
+                components.bodyText(@src(), @import("../core/text.zig").safeUtf8(line), theme.colors.text_primary);
+                if (components.actionButton(@src(), "Allow once for this plugin", .primary, 8600)) {
+                    switch (setPermissionGrant(ap.id[0..ap.id_len], true)) {
+                        .applied, .unchanged => scanned = false,
+                        else => logs.pushLog("error", "plugins", "Could not save the plugin permission grant", true),
+                    }
+                }
+            }
+        }
+
         // Search bar
         {
             var search_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
