@@ -682,3 +682,24 @@ def test_web_theme_presets():
     if "function applyTheme" not in core or "syncThemeFromDesktop()" not in core:
         bad.append("core.js does not apply the desktop preset")
     return ("fail", "; ".join(bad[:6])) if bad else ("pass", f"{len(blocks)} CSS preset blocks match theme.zig")
+
+
+@test("Downloads Wanted list and Assistant models use aligned, shared row layouts", "Theming")
+def test_wanted_and_models_layout():
+    w = _src("src/ui/wanted_ui.zig")
+    wp = _src("src/services/wanted_pure.zig")
+    ai = _src("src/ui/settings/ai.zig")
+    checks = {
+        "wanted labels/ellipsis are pure + tested": all(t in wp for t in ("pub fn statusText(", "pub fn fitTitle(", "pub fn isDone(",
+                                                                    'test "wanted row labels are short and pluralised"')),
+        "wanted rows: expanding title, pill, icon actions": "pure.fitTitle(&fit, r.title[0..r.title_len], 56)" in w
+            and "components.statusPill(text," in w and 'components.iconButton(@src(), icons.tvg.lucide.x, "Remove from Wanted"' in w,
+        "finished rows fold under Done (N)": "done_open" in w and '"Done ({d})"' in w and '"Clear done"' in w,
+        "no hard 40-byte title chop": "@min(r.title_len, 40)" not in w,
+        "every model row uses modelCard": ai.count("modelCard(") >= 4 and "fn parakeetModelRow" in ai
+            and 'components.statusPill("Not installed"' not in ai,
+        "backend chips align left": "dvui.flexbox(@src(), .{ .justify_content = .start }" in ai,
+        "install buttons are themed": "components.actionButton(src, label, .primary" in ai,
+    }
+    bad = [k for k, ok in checks.items() if not ok]
+    return ("fail", ", ".join(bad)) if bad else ("pass", "Wanted: title|pill|icons columns, Done group; Models: one card for every row")
