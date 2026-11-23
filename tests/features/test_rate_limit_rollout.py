@@ -35,6 +35,7 @@ EXEMPT = {
     "src/services/suwayomi_server.zig": _LOOPBACK + " (bundled Suwayomi on localhost) plus its one-time JAR download",
     "src/services/handoff.zig": "one request per user action to a paired LAN peer device",
     "src/services/library_sync.zig": "paired LAN peer sync, paged by the peer's own cursor",
+    "src/services/offline.zig": "offline copies from the user's own paired Opal server, one transfer at a time (transfer_busy)",
     "src/services/download_engine.zig": "bulk transfer engine; bandwidth is governed by the download_rate_limit dial",
     "src/services/browser.zig": _ONE_SHOT + " (browser file download)",
     "src/services/browser_privacy.zig": _ONE_SHOT + " (pinned uBOL release)",

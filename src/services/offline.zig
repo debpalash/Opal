@@ -611,7 +611,7 @@ fn transferWorker(job: Job) void {
     const out = transfer(&job, &msg);
     postResult(id, out.outcome, out.total, msg[0..out.msg_len]);
     // Wake the UI loop so tick applies the result promptly.
-    @import("dvui").refresh(null, @src(), null);
+    @import("../core/state.zig").wakeUi();
 }
 
 const TransferOut = struct { outcome: Outcome, total: u64 = 0, msg_len: usize = 0 };
