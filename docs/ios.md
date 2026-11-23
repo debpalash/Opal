@@ -25,6 +25,19 @@ Python engines, voice CLIs, Jackett, agents/PTY), the LAN web server and DPI
 bypass. Sources that need them report unavailable at runtime. Downloads go to
 `Documents/Downloads`, which is visible in the Files app.
 
+## Offline downloads
+
+Downloads > Offline saves files from your desktop Opal to the device. Pair it
+first under Settings > Web UI > Device sync (the desktop's address and API
+token). Files go to `Downloads/Offline` and count against the storage limit
+you pick in the panel. An interrupted transfer resumes with an HTTP Range
+request, and a finished file is checked against the server's size before it
+can be played. Watch progress from offline playback is sent to the desktop's
+`/api/offline/progress` when it is reachable. The record with the higher
+per-item version wins, and a tie goes to the later write. The rules live in
+`src/services/offline_pure.zig`. Device behaviour has not been verified on
+hardware.
+
 ## Install a release IPA
 
 Each release attaches `Opal-X.Y.Z-ios.ipa`. It is **unsigned** and carries no

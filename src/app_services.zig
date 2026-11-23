@@ -56,8 +56,12 @@ pub fn tickServices() void {
     @import("services/transfer_policy.zig").publishConfig();
     @import("services/wanted.zig").tick();
     @import("services/library_sync.zig").tick();
+    // Download for offline: queue, transfer results, progress capture + sync.
+    @import("services/offline.zig").tick();
     @import("services/recall_index.zig").tick();
     if (!mobile) {
+        // Offline progress pushed by paired devices -> this host's history.
+        @import("services/offline_server.zig").tick();
         @import("services/agent_tasks.zig").tick();
         @import("services/operator.zig").tick();
     }

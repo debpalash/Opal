@@ -173,7 +173,7 @@ marked **unverified** until checked on a real device.
 - [x] Android preview APK (shared desktop app in an SDL3 host)
 - [ ] Android client (stream from Opal server)
 - [ ] iOS client
-- [ ] Offline sync (download for mobile playback)
+- [x] Offline sync (download for mobile playback): Downloads > Offline saves files from the paired server with Range resume, size checks, a storage limit and version + last-writer progress sync
 
 ---
 

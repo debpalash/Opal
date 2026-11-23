@@ -87,6 +87,7 @@ from features import (  # noqa: F401
     test_anilist_sync,
     test_simkl_sync,
     test_scrobble_bus,
+    test_mobile_offline,
     test_manga_heancms,
     test_manga_themesia,
     test_manga_catalog,

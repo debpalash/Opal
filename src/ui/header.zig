@@ -162,11 +162,6 @@ pub fn renderHeader() void {
     });
     defer header_hbox.deinit();
 
-    // TODO(drag-handle): dvui has no public hint to mark a main-window
-    // region as the OS drag area. The title cluster below would be a good
-    // candidate once a platform path lands (NSWindow setMovableByWindowBackground
-    // on macOS, _NET_WM_MOVERESIZE on X11, etc.).
-
     // ════════════════════════════════════════
     // ZONE 1 — Left: logo + title
     // ════════════════════════════════════════
@@ -190,6 +185,10 @@ pub fn renderHeader() void {
         // Title: now-playing basename, secondary by default; primary
         // when media is active (the closest stand-in for "premium" we have).
         renderTitleLabel();
+
+        // Logo + title hold no controls, so the cluster is the window's drag
+        // handle (SDL hit-test, titlebar_hit_pure) on every desktop OS.
+        @import("titlebar.zig").setHeaderDragRect(left.data().borderRectScale().r);
     }
 
     // ════════════════════════════════════════
