@@ -2001,6 +2001,7 @@ fn renderContentGallery(pending: *?ResultAction) void {
     };
     const selected = &content_projection.groups[visible[selected_position]];
     gallery_selection = selected.identity;
+    if (@import("../core/ui_restore_scroll.zig").hook(.search_results, result_scroll.scrollMax(.vertical), result_scroll.viewport.y)) |y| result_scroll.scrollToOffset(.vertical, y);
     var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &result_scroll }, .{ .expand = .both, .background = true, .color_fill = .{ .color = theme.colors.bg_app } });
     defer scroll.deinit();
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = dvui.Rect.all(theme.spacing.md) });

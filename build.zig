@@ -2179,6 +2179,17 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_tmdb_pure).step);
 
+    // UI-position restore across restarts: snapshot framing, staleness, enum/id
+    // validation and scroll settling (ui/ui_restore.zig routes through it).
+    const test_ui_restore_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/ui_restore_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_ui_restore_pure).step);
+
     // Cast: catt / atvscript scan parsing, catt / atvremote argv, loopback-URL refusal.
     const test_cast_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{

@@ -905,6 +905,7 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
         return;
     }
 
+    if (@import("../core/ui_restore_scroll.zig").hook(.tmdb_gallery, gallery_si.scrollMax(.vertical), gallery_si.viewport.y)) |y| gallery_si.scrollToOffset(.vertical, y);
     var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &gallery_si }, .{ .expand = .both, .background = true, .color_fill = .{ .color = theme.colors.bg_surface } });
     defer scroll.deinit();
 
@@ -3472,6 +3473,7 @@ fn renderTvDetail() void {
     // This is the page's only scrolling region. Uniform row geometry lets us
     // render just the visible rows instead of rebuilding a whole long season
     // every frame.
+    if (@import("../core/ui_restore_scroll.zig").hook(.tv_episodes, tv_episode_si.scrollMax(.vertical), tv_episode_si.viewport.y)) |y| tv_episode_si.scrollToOffset(.vertical, y);
     var episode_scroll = dvui.scrollArea(@src(), .{
         .scroll_info = &tv_episode_si,
         .horizontal = .none,
