@@ -601,3 +601,35 @@ def test_eztv_three_day_calendar():
     if missing:
         return "fail", "3-day calendar wiring broken: " + ", ".join(missing[:4])
     return "pass", "Yesterday/Today/Tomorrow rails, tz-aware bucketing via tested pure fns"
+
+@test("Restart restores UI position (page, search, Settings, TV detail, scroll)", "Page Shell")
+def test_ui_restore_wiring():
+    result = subprocess.run([sys.executable, os.path.join(PROJECT_DIR, "scripts", "zig-test.py"), "src/core/ui_restore_pure.zig"],
+                            cwd=PROJECT_DIR, capture_output=True, text=True, timeout=180)
+    if result.returncode:
+        return "fail", result.stderr[-1500:]
+    glue = _src("src/ui/ui_restore.zig")
+    scroll = _src("src/core/ui_restore_scroll.zig")
+    main = _src("src/main.zig")
+    deinit = main.split("pub fn appDeinit() void {", 1)[1]
+    dev = _src("dev.sh")
+    checks = {
+        "pure test registered": "src/core/ui_restore_pure.zig" in _src("build.zig"),
+        "glue routes through pure decode/plan/encode": all(f"pure.{fn}(" in glue for fn in ("decode", "plan", "encode", "shouldPersist"))
+            and "pure.scrollStep(" in scroll,
+        "restores once after config load": "config_loaded.load(.acquire)" in glue and "restore_done" in glue,
+        "frame tick wired (launch target blocks restore)": "ui_restore.zig\").tick(cli_arg_count > 0)" in main,
+        "captured before the worker drain": "captureOnQuit()" in deinit
+            and deinit.index("captureOnQuit()") < deinit.index("beginShutdownAndDrain"),
+        "incognito never persists": "incognito_mode" in glue,
+        "scroll state stays out of the UI layer": "@import(\"dvui\")" not in scroll and "/ui/" not in scroll,
+        "search results scroll hooked": "hook(.search_results, result_scroll." in _src("src/services/search.zig"),
+        "TMDB gallery + episode scroll hooked": all(h in _src("src/services/tmdb.zig") for h in (
+            "hook(.tmdb_gallery, gallery_si.", "hook(.tv_episodes, tv_episode_si.")),
+        "dev.sh marks dev reloads": "export OPAL_DEV_RELOAD=1" in dev and "OPAL_DEV_RELOAD" in glue,
+        "dev.sh incremental with fallback": "-fincremental" in dev and "is_source_error" in dev and "--no-incremental" in dev,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "UI restore wiring broken: " + ", ".join(missing)
+    return "pass", "pure policy tests + capture/restore/scroll hooks + dev.sh reload/incremental wiring"

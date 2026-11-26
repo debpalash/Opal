@@ -5,10 +5,17 @@
 #   - Rebuild. On failure, keep old binary running (zero downtime).
 #   - On success, kill old, launch new.
 #   - Session restore preserves player state across restarts.
+#   - OPAL_DEV_RELOAD=1 tells the app this is a dev reload, so it restores the
+#     full UI position (page, search, Settings section, TV detail, scroll) no
+#     matter how long the last run lasted (ui/ui_restore.zig).
+#   - Rebuilds try Zig incremental compilation (-fincremental). If it bails
+#     (unsupported linker/backend, C or build.zig changes), the same change is
+#     rebuilt normally; a compiler panic turns incremental off for the session.
 #
 # Usage:  ./dev.sh              # Debug
 #         ./dev.sh -r           # ReleaseFast
 #         ./dev.sh -v           # Verbose (full build output)
+#         ./dev.sh -n           # No incremental (plain `zig build` every time)
 #         ./dev.sh -- <args>    # Pass args through to the binary
 
 IFS=$'\n\t'
@@ -16,11 +23,13 @@ IFS=$'\n\t'
 # ── Flags ──────────────────────────────────────────────────────
 OPTIMIZE=""
 VERBOSE=0
+INCREMENTAL=1
 PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -r|--release) OPTIMIZE="-Doptimize=fast"; shift ;;
         -v|--verbose) VERBOSE=1; shift ;;
+        -n|--no-incremental) INCREMENTAL=0; shift ;;
         --) shift; PASSTHROUGH=("$@"); break ;;
         *) PASSTHROUGH+=("$1"); shift ;;
     esac
@@ -90,6 +99,45 @@ cleanup() {
 }
 trap cleanup INT TERM
 
+# Marks every app launched from here as a dev reload (see header).
+export OPAL_DEV_RELOAD=1
+
+# ── Build ──────────────────────────────────────────────────────
+# A real Zig compile error ("file.zig:L:C: error:") is the user's to fix — a
+# plain rebuild would only fail again, slower. Any other incremental failure
+# is the compiler/linker bailing, so retry the same change without it.
+is_source_error() { grep -Eq '\.zig:[0-9]+:[0-9]+: error:' <<<"$1"; }
+
+# Runs one build; sets `out` (captured output) and `rc`. Verbose streams it too.
+zig_build() {
+    if (( VERBOSE )); then
+        echo
+        local log
+        log=$(mktemp "${TMPDIR:-/tmp}/opal-dev-build.XXXXXX")
+        ${ZIG:-zig} build $OPTIMIZE "$@" 2>&1 | tee "$log"
+        rc=${PIPESTATUS[0]}
+        out=$(cat "$log"); rm -f "$log"
+    else
+        out=$(${ZIG:-zig} build $OPTIMIZE "$@" 2>&1)
+        rc=$?
+    fi
+}
+
+run_build() {
+    if (( INCREMENTAL )); then
+        zig_build -fincremental
+        if [[ $rc -eq 0 ]] || is_source_error "$out"; then return; fi
+        (( VERBOSE )) || echo
+        if grep -q "panic" <<<"$out"; then
+            INCREMENTAL=0
+            warn "incremental compilation crashed the compiler here; plain builds for this session (-n skips the attempt)"
+        else
+            warn "incremental build bailed; rebuilding normally"
+        fi
+    fi
+    zig_build
+}
+
 # ── Build + launch ─────────────────────────────────────────────
 build_and_launch() {
     BUILD_N=$((BUILD_N + 1))
@@ -105,15 +153,7 @@ build_and_launch() {
     printf "%b[%s]%b %b◆%b build #%d … " \
         "$C_DIM" "$(date +%H:%M:%S)" "$C_RST" "$C_CYAN" "$C_RST" "$BUILD_N"
 
-    if (( VERBOSE )); then
-        echo
-        ${ZIG:-zig} build $OPTIMIZE
-        rc=$?
-        out=""
-    else
-        out=$(${ZIG:-zig} build $OPTIMIZE 2>&1)
-        rc=$?
-    fi
+    run_build
 
     if date +%s%N 2>/dev/null | grep -q N; then
         t1=$(date +%s)
@@ -159,6 +199,8 @@ printf "%b╔══════════════════════�
 printf "%b║  Opal Dev Server                           ║%b\n" "$C_MAGENTA" "$C_RST"
 printf "%b║  watcher: %-32s ║%b\n" "$C_MAGENTA" "$WATCHER" "$C_RST"
 printf "%b║  mode:    %-32s ║%b\n" "$C_MAGENTA" "${OPTIMIZE:-Debug}" "$C_RST"
+if (( INCREMENTAL )); then INCR_STR="on (auto fallback)"; else INCR_STR="off"; fi
+printf "%b║  incr:    %-32s ║%b\n" "$C_MAGENTA" "$INCR_STR" "$C_RST"
 OLD_IFS="$IFS"; IFS=' '; PATHS_STR="${WATCH_PATHS[*]}"; IFS="$OLD_IFS"
 printf "%b║  paths:   %-32s ║%b\n" "$C_MAGENTA" "$PATHS_STR" "$C_RST"
 printf "%b╚════════════════════════════════════════════╝%b\n" "$C_MAGENTA" "$C_RST"

@@ -907,6 +907,8 @@ pub fn appDeinit() void {
     }
 
     @import("core/config.zig").captureCloseSession();
+    // First, before any slow teardown: dev.sh SIGKILLs 0.5 s after SIGTERM.
+    if (comptime !@import("build_options").headless) @import("ui/ui_restore.zig").captureOnQuit();
     const workers = @import("core/workers.zig");
     workers.armShutdownDeadline(5_000);
     // A prepared player is not in state.app.players yet; dispose it explicitly
@@ -1395,6 +1397,11 @@ fn appFrame() !dvui.App.Result {
             }
         }
     }
+
+    // Restart-like-reload: put the user back on the page / search / Settings
+    // section / TV detail / scroll they left (once, after config loads), then
+    // keep the on-disk snapshot current. Policy: core/ui_restore_pure.zig.
+    if (comptime !@import("build_options").headless) @import("ui/ui_restore.zig").tick(cli_arg_count > 0);
 
     // Process dropped files. The atomic ready bit makes the idle frame path a
     // single acquire-load instead of a mutex round trip. Snapshot under the
