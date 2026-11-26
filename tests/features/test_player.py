@@ -1059,6 +1059,35 @@ def test_torrent_guard():
     return "pass", "watchdog inspects every file list, persists blocked info-hashes, refuses them on add, marks finished files"
 
 
+@test("Fake/exe torrents never reach lists or episode playback", "Security")
+def test_fake_torrents_filtered_from_episodes():
+    resolver = _src("src/services/resolver.zig")
+    tmdb = _src("src/services/tmdb.zig")
+    player = _src("src/player/player.zig")
+    guard = _src("src/services/torrent_guard.zig")
+    risk = _src("src/services/torrent_risk_pure.zig")
+    tpure = _src("src/services/tmdb_pure.zig")
+    push = section_of(resolver, "fn pushInto(", "\n}\n")
+    cache = section_of(resolver, "fn deserializeInto(", "\n}\n")
+    pick = section_of(tmdb, "fn smartPlayEpisode(", "\n}\n")
+    retry = section_of(tmdb, "fn retryEpisodeSourceWith(", "\n}\n")
+    checks = {
+        "pure row policy tested": "pub fn rowRejected(" in risk and 'test "rowRejected' in risk,
+        "dropped at insert": "if (rowRejected(&item)) return false;" in push,
+        "dropped from cached results": "if (rowRejected(&it)) continue;" in cache,
+        "late blocklist clears listed rows": "dropRejectedRows()" in guard and "pub fn dropRejectedRows()" in resolver,
+        "auto-pick skips rejected": "!resolver.rowRejected(it)" in pick,
+        "attempts matched by info-hash": "pub fn sameEpisodeSource(" in tpure and 'test "sameEpisodeSource' in tpure
+            and "tmdb_pure.sameEpisodeSource(" in retry and "tmdb_pure.sameEpisodeSource(" in pick,
+        "refused torrent skips to next source": player.count("skipRejectedEpisodeTorrent(p)") >= 3
+            and "pub fn skipRejectedEpisodeSource(" in tmdb,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "exe/scam rows dropped at insert + cache + late blocklist; episode play skips refused torrents at once"
+
+
 def section_of(source, begin, end):
     start = source.index(begin)
     return source[start:source.index(end, start + len(begin))]

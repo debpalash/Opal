@@ -107,6 +107,17 @@ pub fn assessMagnet(url: []const u8) Assessment {
     return .{};
 }
 
+/// Whether a search row is dropped before anything can list, rank, auto-play
+/// or queue it. Only torrent transports are judged: words like "password" or
+/// "keygen" in a YouTube or music title say nothing about a payload. A fake
+/// episode used to stay in the list as a disabled "Blocked" row, and episode
+/// auto-play could still pick it and stall on the refusal.
+pub fn rowRejected(torrent_transport: bool, name: []const u8, url: []const u8, size_bytes: f64) bool {
+    if (!torrent_transport) return false;
+    if (assessText(name, size_bytes).risk == .block) return true;
+    return assessMagnet(url).risk == .block;
+}
+
 /// U+202A-202E and U+2066-2069 (see media_ext.hasBidiControl; duplicated
 /// because this test module cannot import across src/core).
 fn hasBidiControl(name: []const u8) bool {
@@ -259,4 +270,14 @@ test "Nov 2024 Lumma fake-episode carriers block (zipx archive, scr payload)" {
     try std.testing.expectEqual(Risk.block, assess("Show S02E05 1080p WEB H264-GROUP.zipx", 0).risk);
     try std.testing.expectEqual(Risk.block, assess("Show S02E05 1080p WEB.scr", 0).risk);
     try std.testing.expectEqual(Risk.block, assess("Show S02E05 1080p \u{2066}vkm.exe", 0).risk);
+}
+
+test "rowRejected drops fake episodes from every torrent transport, never other media" {
+    const exe_magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Show.S01E03.1080p.WEB.H264-MeGusta.exe";
+    try std.testing.expect(rowRejected(true, "Show S01E03 1080p WEB H264-MeGusta.exe", "https://x.org/t/1", 0));
+    try std.testing.expect(rowRejected(true, "Show S01E03 1080p WEB H264-MeGusta", exe_magnet, 0));
+    try std.testing.expect(rowRejected(true, "Show S01E03 1080p WEB\nShow.S01E03.MeGusta.exe", "magnet:?xt=urn:btih:00", 0));
+    try std.testing.expect(rowRejected(true, "Show S01E03 1080p WEB x264", "magnet:?xt=urn:btih:00", 900 * 1024));
+    try std.testing.expect(!rowRejected(true, "Show S01E03 1080p WEB x264-GROUP", "magnet:?xt=urn:btih:00&dn=Show.S01E03.mkv", 0));
+    try std.testing.expect(!rowRejected(false, "Password (2019) official trailer", "https://youtube.com/watch?v=x", 0));
 }

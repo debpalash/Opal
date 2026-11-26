@@ -412,6 +412,33 @@ pub fn episodeRetryDecision(attempts: usize, same_source: bool, resolving: bool)
     return if (attempts < 3) .retry else .manual;
 }
 
+/// Whether the source a player loaded is the smart-play attempt that picked
+/// it. The player keeps a 2048-byte copy of the magnet while the attempt keeps
+/// all of it, so a long tracker list never compared equal and a failed or
+/// blocked episode torrent stalled instead of falling to the next source.
+/// The same info-hash is the same torrent, whatever the trackers or dn.
+pub fn sameEpisodeSource(attempted: []const u8, loaded: []const u8) bool {
+    if (loaded.len == 0) return false;
+    if (std.mem.eql(u8, attempted, loaded)) return true;
+    const vt = @import("virustotal_pure.zig");
+    var a_buf: [40]u8 = undefined;
+    var b_buf: [40]u8 = undefined;
+    const a = vt.infoHashFromMagnet(attempted, &a_buf) orelse return false;
+    const b = vt.infoHashFromMagnet(loaded, &b_buf) orelse return false;
+    return std.mem.eql(u8, a, b);
+}
+
+test "sameEpisodeSource matches a truncated or re-trackered magnet by info-hash" {
+    const full = "magnet:?xt=urn:btih:0123456789ABCDEF0123456789abcdef01234567&dn=Show.S01E03&tr=udp%3A%2F%2Fa&tr=udp%3A%2F%2Fb";
+    try std.testing.expect(sameEpisodeSource(full, full));
+    try std.testing.expect(sameEpisodeSource(full, full[0..70]));
+    try std.testing.expect(sameEpisodeSource(full, "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"));
+    try std.testing.expect(!sameEpisodeSource(full, "magnet:?xt=urn:btih:1123456789abcdef0123456789abcdef01234567"));
+    try std.testing.expect(!sameEpisodeSource(full, ""));
+    try std.testing.expect(sameEpisodeSource("https://cdn.example/ep.m3u8", "https://cdn.example/ep.m3u8"));
+    try std.testing.expect(!sameEpisodeSource("https://cdn.example/ep.m3u8", "https://cdn.example/other.m3u8"));
+}
+
 /// A failed smart-play attempt's torrent is released only if that attempt
 /// created it: transfer ids are never reused and only grow, so an id at or
 /// above the session's next id when the attempt started is the attempt's own.

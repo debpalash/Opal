@@ -2648,6 +2648,18 @@ fn spawnEpisodeResolve(generation: u64) void {
 
 /// Bounded fallback, never retry the same URL or take over unrelated media.
 pub fn retryEpisodeSource(url: []const u8) bool {
+    return retryEpisodeSourceWith(url, "Stream failed. Trying another source…");
+}
+
+/// A torrent refused at metadata time (an executable inside, or no playable
+/// media) moves straight to the next source instead of sitting on the refusal
+/// until the 30 s startup watchdog. False when no smart-play episode attempt
+/// owns `url`; the caller's own refusal toast stands then.
+pub fn skipRejectedEpisodeSource(url: []const u8) bool {
+    return retryEpisodeSourceWith(url, "Skipped a fake or unplayable torrent. Trying another source…");
+}
+
+fn retryEpisodeSourceWith(url: []const u8, toast: []const u8) bool {
     episode_mutex.lock();
     defer episode_mutex.unlock();
     if (attempt_count == 0 or attempt_started_ms == 0) return false;
@@ -2658,7 +2670,7 @@ pub fn retryEpisodeSource(url: []const u8) bool {
         }
     }
     const index = attempt_count - 1;
-    const decision = tmdb_pure.episodeRetryDecision(attempt_count, std.mem.eql(u8, url, attempted_urls[index][0..attempted_lens[index]]), episode_play_pending.load(.acquire));
+    const decision = tmdb_pure.episodeRetryDecision(attempt_count, tmdb_pure.sameEpisodeSource(attempted_urls[index][0..attempted_lens[index]], url), episode_play_pending.load(.acquire));
     if (decision == .ignore) return false;
     attempt_started_ms = 0;
     attempt_ready = false;
@@ -2672,7 +2684,7 @@ pub fn retryEpisodeSource(url: []const u8) bool {
     state.app.playing_episode.armed = true;
     state.app.playing_episode.active = false;
     spawnEpisodeResolve(episode_generation.load(.acquire));
-    state.showToast("Stream failed. Trying another source…");
+    state.showToast(toast);
     return true;
 }
 
@@ -2681,7 +2693,7 @@ pub fn retryEpisodeSource(url: []const u8) bool {
 fn markAbandoned(index: usize) void {
     for (state.app.players.items) |p| {
         if (!p.is_torrent or p.source_url_len == 0) continue;
-        if (!std.mem.eql(u8, p.source_url[0..p.source_url_len], attempted_urls[index][0..attempted_lens[index]])) continue;
+        if (!tmdb_pure.sameEpisodeSource(attempted_urls[index][0..attempted_lens[index]], p.source_url[0..p.source_url_len])) continue;
         if (!tmdb_pure.attemptOwnsTorrent(p.current_torrent_id, attempt_first_tid[index])) return;
         for (&abandoned_tids) |*slot| {
             if (slot.* == p.current_torrent_id) return;
@@ -2727,7 +2739,7 @@ pub fn checkEpisodeStartup() void {
         const p = if (state.app.active_player_idx < state.app.players.items.len) state.app.players.items[state.app.active_player_idx] else null;
         if (p) |player| {
             const source = if (player.is_torrent and player.source_url_len > 0) player.source_url[0..player.source_url_len] else player.current_url[0..player.current_url_len];
-            if (!std.mem.eql(u8, source, attempted_urls[attempt_count - 1][0..attempted_lens[attempt_count - 1]])) {
+            if (!tmdb_pure.sameEpisodeSource(attempted_urls[attempt_count - 1][0..attempted_lens[attempt_count - 1]], source)) {
                 attempt_started_ms = 0;
             } else if (player.last_seen_pos > 0 and !player.is_loading and !player.cached_paused_for_cache) {
                 attempt_ready = true;
@@ -2869,9 +2881,12 @@ fn smartPlayEpisode(query: []const u8, generation: u64) void {
             const n = @min(resolver.result_count, cands.len);
             for (0..n) |ci| {
                 const it = &resolver.results[ci];
-                var playable = (it.source == .stremio or it.source == .torrent) and it.url_len > 0;
+                // A torrent blocklisted after the list filled (its file list
+                // held an executable) is never auto-picked again, nor is a
+                // retried source listed again under another URL.
+                var playable = (it.source == .stremio or it.source == .torrent) and it.url_len > 0 and !resolver.rowRejected(it);
                 for (0..attempt_count) |a| {
-                    if (std.mem.eql(u8, it.url[0..it.url_len], attempted_urls[a][0..attempted_lens[a]])) playable = false;
+                    if (tmdb_pure.sameEpisodeSource(attempted_urls[a][0..attempted_lens[a]], it.url[0..it.url_len])) playable = false;
                 }
                 cands[ci] = .{
                     .playable = playable,
