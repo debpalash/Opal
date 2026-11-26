@@ -45,6 +45,9 @@ pub const StreamOptions = struct {
     terminate_grace_ms: i64 = 500,
     max_output_bytes: usize = 16 * 1024 * 1024,
     cwd: ?[]const u8 = null,
+    /// Full replacement environment (see io_global.environMap); null inherits.
+    /// Only read during start(), so it must outlive that call, not the child.
+    env_map: ?*std.process.Environ.Map = null,
     stdin_behavior: io.Child.StdIo = .Ignore,
     stderr_behavior: io.Child.StdIo = .Ignore,
     cancel_epoch: ?CancelEpoch = null,
@@ -449,6 +452,7 @@ pub const StreamProcess = struct {
         self.child.stdout_behavior = .Pipe;
         self.child.stderr_behavior = self.options.stderr_behavior;
         self.child.cwd = self.options.cwd;
+        self.child.env_map = self.options.env_map;
         self.child.new_process_group = true;
         self.child.spawn() catch {
             // A spawn failure has not created any process resources, so the

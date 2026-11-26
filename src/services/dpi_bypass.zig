@@ -159,6 +159,31 @@ pub fn proxyArgs() ?[]const []const u8 {
     return argv_store[0..];
 }
 
+// ── Search-engine plumbing ──────────────────────────────────────────────────
+//
+// proxyArgs() only covers curl run from the Zig side (TMDB, images). The torrent
+// engines are a separate process (python3 engines/nova2.py) doing their own
+// HTTP, so with the sidecar running they still connected DIRECTLY and were
+// filtered exactly as before: "DPI bypass is on and most sources return
+// nothing". helpers.py already honours `qbt_socks_proxy`; nothing set it.
+
+/// Environment for a spawned nova2: the inherited environment plus
+/// `qbt_socks_proxy`. Null when the proxy is not in use OR the copy fails —
+/// callers then spawn with the inherited environment (an unproxied search beats
+/// no search). The map owns its strings; `deinit()` it after spawning.
+pub fn engineEnv(gpa: std.mem.Allocator) ?std.process.Environ.Map {
+    if (!pure.shouldProxy(enabled(), isRunning())) return null;
+    var url_buf: [40]u8 = undefined;
+    const url = pure.engineSocksUrl(&url_buf, PORT);
+    if (url.len == 0) return null;
+    var map = io.environMap(gpa) catch return null;
+    map.put(pure.engine_proxy_env, url) catch {
+        map.deinit();
+        return null;
+    };
+    return map;
+}
+
 /// Exercise the production proxy route against an already-running local test proxy.
 pub fn useRunningProxyForTest(value: bool) void {
     if (!@import("builtin").is_test) @compileError("test fixture only");
