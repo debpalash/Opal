@@ -367,6 +367,14 @@ pub fn flushPositionSavesForShutdown(timeout_ms: i64) void {
 
 var next_player_lifetime_id: std.atomic.Value(u64) = .init(1);
 
+/// A torrent refused at metadata time (executable inside, no playable media)
+/// hands an episode smart-play to its next source right away. True when that
+/// took over, so the caller drops its own dead-end toast.
+fn skipRejectedEpisodeTorrent(p: *const MediaPlayer) bool {
+    if (!p.allow_source_fallback or p.source_url_len == 0) return false;
+    return @import("../services/tmdb.zig").skipRejectedEpisodeSource(p.source_url[0..p.source_url_len]);
+}
+
 pub const MediaPlayer = struct {
     /// Distinguishes a queued action from a later allocation at the same address.
     lifetime_id: u64 = 0,
@@ -3833,9 +3841,10 @@ pub fn updateTorrentBackgroundTasks() void {
                             var lb: [128]u8 = undefined;
                             const msg = std.fmt.bufPrint(&lb, "Blocked: this torrent contains {d} executable file(s), possible malware. Nothing was opened.", .{exec_count}) catch "Blocked: this torrent contains executable files";
                             logs.pushLog("error", "opal", msg, true);
-                            state.showToastTyped(msg, .err);
                             p.selected_file_idx = -2;
                             p.is_loading = false;
+                            // An episode moves on to its next source at once.
+                            if (!skipRejectedEpisodeTorrent(p)) state.showToastTyped(msg, .err);
                             continue;
                         }
 
@@ -3859,9 +3868,9 @@ pub fn updateTorrentBackgroundTasks() void {
                             else
                                 "No playable media found in this torrent";
                             logs.pushLog("error", "opal", msg, true);
-                            state.showToast(msg);
                             p.selected_file_idx = -2; // terminal: won't re-enter (-1 gate)
                             p.is_loading = false;
+                            if (!skipRejectedEpisodeTorrent(p)) state.showToast(msg);
                             continue;
                         }
 
@@ -3892,9 +3901,9 @@ pub fn updateTorrentBackgroundTasks() void {
                         if (@import("../core/media_ext.zig").torrentFileRefusal(std.mem.sliceTo(&g_name, 0))) |why| {
                             c.mpv.torrent_set_file_priority(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, 0);
                             logs.pushLog("error", "opal", why, true);
-                            state.showToastTyped(why, .err);
                             p.selected_file_idx = -2; // terminal: won't re-enter (-1 gate)
                             p.is_loading = false;
+                            if (!skipRejectedEpisodeTorrent(p)) state.showToastTyped(why, .err);
                             break;
                         }
                     }

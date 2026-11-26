@@ -136,6 +136,8 @@ fn inspect(ses: c.mpv.TorrentSession, id: i32, files: c_int) bool {
         ensureLoadedLocked();
         if (blocklist.add(std.mem.sliceTo(&hash_buf, 0))) saveLocked();
         lock.unlock();
+        // Rows for this torrent leave every result list now, not on the next search.
+        @import("resolver.zig").dropRejectedRows();
     }
 
     var msg: [384]u8 = undefined;

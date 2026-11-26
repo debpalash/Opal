@@ -1025,6 +1025,34 @@ pub fn searchTorrentsPrivate(query: []const u8, out: []ResolvedItem) usize {
     return sink.count;
 }
 
+/// Malware-shaped torrent rows (an executable or archive posing as media, a
+/// payload-sized "1080p", a blocklisted info-hash) never enter any result list,
+/// so nothing can show, rank, auto-play or queue them.
+pub fn rowRejected(item: *const ResolvedItem) bool {
+    const url = item.url[0..@min(item.url_len, item.url.len)];
+    const magnet = std.mem.startsWith(u8, url, "magnet:?");
+    const transport = item.source == .torrent or item.source == .stremio or magnet;
+    if (@import("torrent_risk_pure.zig").rowRejected(transport, item.name[0..@min(item.name_len, item.name.len)], url, @floatFromInt(item.size_bytes))) return true;
+    return magnet and @import("torrent_guard.zig").isBlockedMagnet(url);
+}
+
+/// Drop rows whose torrent was blocklisted after they were listed: the guard
+/// found an executable in its file list. Watchdog thread; takes results_mutex.
+pub fn dropRejectedRows() void {
+    results_mutex.lock();
+    defer results_mutex.unlock();
+    var kept: usize = 0;
+    for (0..result_count) |i| {
+        if (rowRejected(&results[i])) continue;
+        if (kept != i) results[kept] = results[i];
+        kept += 1;
+    }
+    if (kept == result_count) return;
+    result_count = kept;
+    results_revision +%= 1;
+    state.wakeUi();
+}
+
 fn pushResult(item: ResolvedItem) bool {
     if (thread_sink) |s| {
         // Private buffer, single owner: no lock, and no contention with the UI
@@ -1072,6 +1100,7 @@ fn pushInto(
     // Filter out error/garbage results at the source
     const name = item.name[0..@min(item.name_len, 256)];
     if (isErrorResult(name)) return false;
+    if (rowRejected(&item)) return false;
 
     var scored_item = item;
     const match_info = computeMatchAgainst(scored_item, query);
@@ -1630,6 +1659,8 @@ fn deserializeInto(bytes: []const u8) usize {
             const hi = r.u32v() orelse break;
             it.opds_connection_identity = @as(u64, lo) | (@as(u64, hi) << 32);
         }
+        // A cache written before a fake was caught must not bring it back.
+        if (rowRejected(&it)) continue;
         results[count] = it;
         count += 1;
     }
