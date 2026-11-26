@@ -6,7 +6,7 @@ tokens. These checks prove each surface routes through it instead of keeping
 its own copy, and run the browser fixtures for the web half.
 
 See tests/features/harness.py for the shared @test decorator + _src()."""
-import shutil
+import re, shutil
 import subprocess
 
 from .harness import *  # noqa: F401,F403
@@ -91,7 +91,8 @@ def test_web_identity_reader():
         return "skip", "static checks pass; Node is unavailable for the browser fixtures"
     result = subprocess.run(["node", "--test", "--test-name-pattern=Shared identity", "tests/test_web_lifecycle.mjs"],
                             cwd=PROJECT_DIR, capture_output=True, text=True, timeout=60)
-    if result.returncode or "# pass 5" not in result.stdout:
+    # Node's test runner prints "# pass 5" (TAP) or "ℹ pass 5" (spec, Node 23+).
+    if result.returncode or not re.search(r"^(?:#|ℹ) pass 5$", result.stdout, re.M):
         return "fail", (result.stderr + result.stdout)[-1800:]
     return "pass", "identity.js validates server cards; 5 browser fixtures (verbs, keys, targets, tokens, late drama list)"
 
