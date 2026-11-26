@@ -510,11 +510,16 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
     // Keep incremental results, but put the multi-process Python scraper under
     // a monotonic deadline and a POSIX process group / Windows Job. Advancing
     // the generation wakes a stale worker even while its pipe read is blocked.
+    // With the DPI bypass running, the engines tunnel through it too (null env
+    // inherits ours, i.e. a direct search).
+    var engine_env = @import("dpi_bypass.zig").engineEnv(allocator);
+    defer if (engine_env) |*m| m.deinit();
     var process = bounded_process.StreamProcess.init(argv.items, .{
         .timeout_ms = 180 * 1000,
         .terminate_grace_ms = 500,
         .max_output_bytes = 64 * 1024 * 1024,
         .cwd = state.resourceRoot(),
+        .env_map = if (engine_env) |*m| m else null,
         .stderr_behavior = .Inherit,
         .cancel_epoch = .{ .epoch64 = .{ .value = &search_generation, .expected = my_gen } },
         .cancel_flag = &search_abort,

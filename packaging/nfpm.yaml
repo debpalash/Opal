@@ -60,6 +60,8 @@ overrides:
       - libsdl2-2.0-0
       - libtorrent-rasterbar2.0
       - ffmpeg
+      # torrent search runs `python3 engines/nova2.py`
+      - python3
   archlinux:
     depends:
       - mpv
@@ -68,3 +70,4 @@ overrides:
       - libtorrent-rasterbar
       - curl
       - ffmpeg
+      - python

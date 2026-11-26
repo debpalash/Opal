@@ -175,6 +175,17 @@ pub fn getenv(name: [*:0]const u8) ?[]const u8 {
     return std.mem.span(raw);
 }
 
+/// Copy of the environment spawned children inherit (`Threaded.environ`), for a
+/// caller that needs to ADD variables. `Child.env_map` replaces the child's
+/// environment wholesale, so a map built from scratch would strip PATH/HOME.
+/// Caller owns the map (`deinit()` after spawn).
+pub fn environMap(gpa: std.mem.Allocator) !std.process.Environ.Map {
+    _ = io();
+    // A MockIo-backed test never constructs `threaded`.
+    if (!ready.load(.acquire)) return error.EnvironmentUnavailable;
+    return std.process.Environ.createMap(threaded.environ.process_environ, gpa);
+}
+
 /// Fill `buf` with cryptographically secure random bytes. Returns false if the
 /// platform has no entropy source (callers MUST treat that as fatal for secrets
 /// — never fall back to a timestamp seed).

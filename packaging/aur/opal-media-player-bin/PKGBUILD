@@ -18,12 +18,12 @@ depends=(
     'libtorrent-rasterbar'
     'curl'
     'ffmpeg'
+    'python' # torrent search runs `python3 engines/nova2.py`
 )
 optdepends=(
     'yt-dlp: YouTube playback and downloads'
     'streamlink: live stream resolution'
     'onnxruntime: OCR bubble detection'
-    'python: voice helper scripts (STT/TTS servers)'
 )
 makedepends=('gcc' 'boost' 'pkgconf')
 source=(
@@ -35,8 +35,10 @@ sha256sums=('SKIP' 'SKIP') # filled by updpkgsums at submission time
 build() {
     # The wrapper owns the C++ ABI. Rebuild it against the Arch libtorrent
     # installed at package build time, without rebuilding the Opal binary.
+    # Full RELRO by hand: makepkg's hardening LDFLAGS are not on this line.
     cd "Opal-$pkgver"
     g++ -std=c++17 -O3 -shared -fPIC -Wl,-soname,libtorrent_wrapper.so \
+        -Wl,-z,relro -Wl,-z,now \
         $(pkg-config --cflags libtorrent-rasterbar) src/torrent_wrapper.cpp \
         -o "$srcdir/opal-$pkgver-linux-x86_64/libtorrent_wrapper.so" \
         $(pkg-config --libs libtorrent-rasterbar)

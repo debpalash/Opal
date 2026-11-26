@@ -58,8 +58,12 @@ import helpers
 import novaprinter
 import opal_sources
 
-# enable SOCKS proxy for all plugins by default
-helpers.enable_socks_proxy(True)
+# The SOCKS proxy (qbt_socks_proxy, set by Opal while its DPI bypass runs) is
+# installed per search in run_search, NOT here. enable_socks_proxy() patches the
+# global socket.socket, and engines are imported lazily AFTER this module loads:
+# engines/jackett.py calls enable_proxy(False) at import, which restores the
+# original socket. Patching here was therefore undone by an "all" search before
+# any engine fetched, and every engine connected directly.
 
 THREADED: bool = True
 try:
@@ -219,6 +223,9 @@ def run_search(search_params: tuple[type[Engine], str, Category, EngineModuleNam
     """
 
     engine_class, what, cat, module_name = search_params
+    # After every engine import (see the note by the imports). Idempotent, and a
+    # no-op without qbt_socks_proxy, so a direct search is unchanged.
+    helpers.enable_socks_proxy(True)
     try:
         engine = engine_class()
         # avoid exceptions due to invalid category

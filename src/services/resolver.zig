@@ -2501,6 +2501,10 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
     // lifecycle to the shared streaming guard. The epoch is the generation
     // this worker was spawned for: resolve() advances run_gen synchronously,
     // so a replacement search interrupts even a worker blocked on stdout.
+    // Same DPI-bypass routing as search.zig: universal search spawns its own
+    // nova2, so fixing only the Torrent tab would leave this one going direct.
+    var engine_env = @import("dpi_bypass.zig").engineEnv(alloc);
+    defer if (engine_env) |*m| m.deinit();
     var process = bounded_process.StreamProcess.init(&argv, .{
         .timeout_ms = 180 * 1000,
         .terminate_grace_ms = 500,
@@ -2508,6 +2512,7 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
         // Use the bundled resource root when installed (GUI launches can have
         // "/" as CWD); null in development preserves the project directory.
         .cwd = state.resourceRoot(),
+        .env_map = if (engine_env) |*m| m else null,
         .stderr_behavior = .Ignore,
         .cancel_epoch = .{ .epoch32 = .{
             .value = &run_gen,

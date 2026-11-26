@@ -2,6 +2,8 @@
 See tests/features/harness.py for the shared @test decorator and helpers."""
 from .harness import *  # noqa: F401,F403
 import os  # noqa: F401
+import subprocess
+import sys
 
 
 @test("DPI-bypass sidecar wired end-to-end", "Network")
@@ -54,6 +56,62 @@ def test_dpi_bypass_wiring():
     if bad:
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "sidecar built, spawned, persisted, in Settings, routed via http.zig, bundled"
+
+
+@test("DPI bypass reaches the nova2 torrent engines", "Network")
+def test_dpi_bypass_reaches_engines():
+    # REGRESSION: the sidecar only covered Zig-side curl. nova2 is a child
+    # process doing its own HTTP, and nothing set the `qbt_socks_proxy` its
+    # helpers read, so on an SNI-filtered network "bypass on" changed nothing for
+    # search. Even with the variable set, nova2 patched the socket at module
+    # scope and jackett.py's import-time enable_proxy(False) undid it before any
+    # engine fetched.
+    svc = _src("src/services/dpi_bypass.zig")
+    pure = _src("src/services/dpi_bypass_pure.zig")
+    bp = _src("src/core/bounded_process.zig")
+    search = _src("src/services/search.zig")
+    resolver = _src("src/services/resolver.zig")
+    checks = {
+        "pure builds a socks5h URL": 'socks5h://127.0.0.1:{d}' in pure and "pub fn engineSocksUrl(" in pure,
+        "engineEnv routes through pure": "pure.engineSocksUrl(" in svc and "pure.engine_proxy_env" in svc,
+        "engineEnv gated like proxyArgs": "pub fn engineEnv(" in svc
+            and svc.count("pure.shouldProxy(enabled(), isRunning())") >= 2,
+        "env seeded from inherited environment": "io.environMap(" in svc,
+        "StreamProcess forwards env_map": "self.child.env_map = self.options.env_map" in bp,
+        "Torrent tab passes engine env": "engineEnv(allocator)" in search and ".env_map = if (engine_env)" in search,
+        "universal search passes engine env": "engineEnv(alloc)" in resolver and ".env_map = if (engine_env)" in resolver,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+
+    # Behaviour: with the proxy variable set and jackett imported (as an "all"
+    # search does), an engine's search() must run on the patched socket.
+    probe = (
+        "import sys, socket, importlib\n"
+        "sys.path.insert(0, '.')\n"
+        "import nova2, helpers\n"
+        "importlib.import_module('engines.jackett')\n"
+        "seen = []\n"
+        "class probe:\n"
+        "    url = ''\n"
+        "    name = 'probe'\n"
+        "    supported_categories = {'all': ''}\n"
+        "    def search(self, what, cat='all'):\n"
+        "        seen.append(socket.socket is not helpers._original_socket)\n"
+        "nova2.run_search((probe, 'x', nova2.Category.all, 'opal_proxy_probe'))\n"
+        "print('PATCHED' if seen == [True] else 'DIRECT %r' % seen)\n"
+    )
+    env = dict(os.environ, qbt_socks_proxy="socks5h://127.0.0.1:8881")
+    try:
+        p = subprocess.run([sys.executable, "-I", "-c", probe], cwd=os.path.join(PROJECT_DIR, "engines"),
+                           env=env, capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        return "fail", f"engine proxy probe did not run: {e}"
+    out = p.stdout.strip()
+    if out != "PATCHED":
+        return "fail", f"engine fetched without the SOCKS proxy: {out or p.stderr.strip()[-300:]}"
+    return "pass", "qbt_socks_proxy reaches both nova2 spawns; engines fetch through the proxy"
 
 
 @test("DPI-bypass sidecar: orphans are reaped, never left listening", "Network")

@@ -7,6 +7,7 @@
 //!   2. loopbackAddr() — builds the "127.0.0.1:<port>" string curl / std.http
 //!                       point at (no heap; caller owns the buffer).
 //!   3. shouldProxy()  — the enabled&&running gate for proxyArgs().
+//!   4. engineSocksUrl() — the SOCKS URL handed to the nova2 search engines.
 
 const std = @import("std");
 
@@ -54,6 +55,35 @@ pub fn loopbackAddr(buf: []u8, port: u16) []const u8 {
 /// user enabled the feature AND the sidecar is actually listening.
 pub fn shouldProxy(enabled: bool, running: bool) bool {
     return enabled and running;
+}
+
+/// Environment variable engines/helpers.py `enable_socks_proxy()` reads (the
+/// name is inherited from qBittorrent's nova2, which those engines come from).
+pub const engine_proxy_env = "qbt_socks_proxy";
+
+/// Build the SOCKS URL for the torrent search engines into `buf`.
+///
+/// `socks5h`, not `socks5`: helpers.py keys hostname resolution off exactly that
+/// trailing `h`, making the PROXY resolve names. Networks that filter trackers
+/// by SNI usually poison DNS for the same names, so resolving locally would
+/// defeat the tunnel before it was used. Empty on an undersized buffer.
+pub fn engineSocksUrl(buf: []u8, port: u16) []const u8 {
+    return std.fmt.bufPrint(buf, "socks5h://127.0.0.1:{d}", .{port}) catch buf[0..0];
+}
+
+test "engineSocksUrl: proxy-side DNS (socks5h) on loopback" {
+    // Regression: the DPI bypass only covered Zig-side curl; the nova2 engines
+    // never received a proxy and kept connecting directly. A plain `socks5`
+    // here would also resolve tracker hostnames locally, past the tunnel.
+    var buf: [40]u8 = undefined;
+    try std.testing.expectEqualStrings("socks5h://127.0.0.1:8881", engineSocksUrl(&buf, 8881));
+    try std.testing.expectEqualStrings("socks5h://127.0.0.1:65535", engineSocksUrl(&buf, 65535));
+    var tiny: [8]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 0), engineSocksUrl(&tiny, 8881).len);
+}
+
+test "engine_proxy_env is the variable helpers.py reads" {
+    try std.testing.expectEqualStrings("qbt_socks_proxy", engine_proxy_env);
 }
 
 test "validMode accepts the two CLI modes only" {
