@@ -1331,7 +1331,9 @@ def test_scrubber_paint_layers():
         # REGRESSION: the row pinned max_size_content.h = 26, which clipped its
         # OWN text — the elapsed/total clocks lost their descenders and the
         # hover-time chip was cut off top and bottom. 26 must stay a floor.
-        "row height is a floor": ".min_size_content = .{ .w = 0, .h = 26 }" in scrub,
+        # The mobile bar (#228) swaps in its own touch height; desktop keeps 26.
+        "row height is a floor": (".min_size_content = .{ .w = 0, .h = 26 }" in scrub
+                                  or ".min_size_content = .{ .w = 0, .h = if (mobile_bar) @import(\"mobile_layout_pure.zig\").BAR_HEIGHT else 26 }" in scrub),
         "row height is not capped": ".max_size_content = .{ .w = 0, .h = 26 }" not in scrub,
     }
     missing = [k for k, v in checks.items() if not v]
