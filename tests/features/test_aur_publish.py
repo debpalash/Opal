@@ -87,3 +87,56 @@ def test_aur_key_error_message():
     if missing:
         return "fail", "AUR error messaging incomplete: " + ", ".join(missing)
     return "pass", "clone failure distinguishes an unregistered key from a new package"
+
+
+@test("AUR packages load and can search after install", "Packaging")
+def test_aur_packages_runtime_contract():
+    # Ported from the unmerged packaging-and-search-fixes branch (48da9ac3).
+    # 1. The source package pre-built libtorrent_wrapper.so with a g++ line that
+    #    lacked -Wl,-soname. build.zig skips an up-to-date .so, so that unnamed
+    #    one was linked: DT_NEEDED became the absolute $srcdir path and the
+    #    installed binary could not load once makepkg removed $srcdir.
+    # 2. Every g++ wrapper link bypasses makepkg's hardening LDFLAGS, so namcap
+    #    reported the wrapper as lacking full RELRO.
+    # 3. Torrent search shells out to python3 engines/nova2.py, yet python was
+    #    only an optdepend.
+    import re, shutil, subprocess
+    src_pkg = _read("packaging/aur/opal-media-player/PKGBUILD")
+    bin_pkg = _read("packaging/aur/opal-media-player-bin/PKGBUILD")
+    bld = _read("build.zig")
+    sh = _read("packaging/aur/push-to-aur.sh")
+    nfpm = _read("packaging/nfpm.yaml")
+    if not src_pkg or not bin_pkg:
+        return "fail", "AUR PKGBUILDs missing"
+
+    def code(text):
+        return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+
+    linux_wrapper = next((ln for ln in bld.splitlines()
+                          if "g++" in ln and "libtorrent_wrapper.so" in ln and "-Wl,-soname" in ln), "")
+    deb_deps = nfpm.split("  deb:", 1)[-1].split("  archlinux:", 1)[0]
+    arch_deps = nfpm.split("  archlinux:", 1)[-1]
+    checks = {
+        "source package leaves the wrapper to build.zig": "g++" not in code(src_pkg)
+            and "zig build" in code(src_pkg),
+        "build.zig wrapper has SONAME + full RELRO": "-Wl,-z,relro -Wl,-z,now" in linux_wrapper,
+        "-bin wrapper rebuild has SONAME + full RELRO": "-Wl,-soname,libtorrent_wrapper.so" in bin_pkg
+            and "-Wl,-z,relro -Wl,-z,now" in bin_pkg,
+        "new pkgver resets pkgrel": "s/^pkgrel=.*/pkgrel=1/" in sh,
+        "deb depends on python3": re.search(r"^\s*- python3\s*$", deb_deps, re.M) is not None,
+        "arch nfpm depends on python": re.search(r"^\s*- python\s*$", arch_deps, re.M) is not None,
+    }
+    bad = [k for k, ok in checks.items() if not ok]
+    if bad:
+        return "fail", "AUR runtime contract: " + ", ".join(bad)
+
+    # Evaluate the arrays the way makepkg does rather than grepping them.
+    bash = shutil.which("bash")
+    if bash is None:
+        return "skip", "source contract passes; no bash to evaluate PKGBUILD arrays"
+    for rel in ("packaging/aur/opal-media-player/PKGBUILD", "packaging/aur/opal-media-player-bin/PKGBUILD"):
+        out = subprocess.run([bash, "-c", 'source "$1"; printf "%s\\n" "${depends[@]}"', "_",
+                              _os.path.join(PROJECT_DIR, rel)], capture_output=True, text=True)
+        if out.returncode != 0 or "python" not in out.stdout.split():
+            return "fail", f"{rel}: python is not in depends ({out.stdout.split()!r})"
+    return "pass", "wrapper built once with SONAME + full RELRO; python is a hard dependency"

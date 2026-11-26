@@ -626,8 +626,10 @@ fn buildSupported(b: *std.Build) void {
         // rpath / ldconfig (/usr/local/lib) wherever it's installed. The
         // wrapper's own $ORIGIN runpath also lets a rootless/private bundle put
         // libtorrent beside it; an executable RUNPATH is not transitive through
-        // dependent DSOs.
-        "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ] || [ src/torrent_memory.hpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -Wl,-soname,libtorrent_wrapper.so -Wl,-rpath,'$ORIGIN' $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null || echo -ltorrent-rasterbar); fi";
+        // dependent DSOs. -z relro -z now (full RELRO): this g++ call bypasses
+        // the distro's hardening LDFLAGS, so namcap flagged the wrapper as
+        // lacking full RELRO.
+        "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ] || [ src/torrent_memory.hpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -Wl,-soname,libtorrent_wrapper.so -Wl,-z,relro -Wl,-z,now -Wl,-rpath,'$ORIGIN' $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null || echo -ltorrent-rasterbar); fi";
 
     // Only invoke the host g++ when it can actually produce a wrapper for the
     // target (native builds). Cross-compiling (e.g. windows from macOS for a

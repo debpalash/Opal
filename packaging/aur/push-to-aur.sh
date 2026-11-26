@@ -94,7 +94,11 @@ for pkg in "${PKGS[@]}"; do
   cp "$pkg/PKGBUILD" "$workdir/"
   pushd "$workdir" >/dev/null
   if [[ -n "$release_version" ]]; then
-    sed -i "s/^pkgver=.*/pkgver=$release_version/" PKGBUILD
+    # A new pkgver restarts pkgrel at 1 (Arch packaging rules); a re-publish of
+    # the same version keeps whatever pkgrel the PKGBUILD carries.
+    if [[ "$(sed -n 's/^pkgver=//p' PKGBUILD)" != "$release_version" ]]; then
+      sed -i -e "s/^pkgver=.*/pkgver=$release_version/" -e "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+    fi
   fi
   # Fill sha256sums from the live URLs (now that the tag is public). On an
   # Arch host this Just Works; on the CI Ubuntu runner we skip (sources

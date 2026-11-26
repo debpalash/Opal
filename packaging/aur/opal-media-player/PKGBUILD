@@ -17,6 +17,7 @@ depends=(
     'curl'
     'ffmpeg'
     'libwebp'
+    'python' # torrent search runs `python3 engines/nova2.py`
 )
 makedepends=(
     'zig>=0.17.0'
@@ -28,7 +29,6 @@ optdepends=(
     'yt-dlp: YouTube playback and downloads'
     'streamlink: live stream resolution'
     'onnxruntime: OCR bubble detection'
-    'python: voice helper scripts (STT/TTS servers)'
 )
 source=("Opal-$pkgver.tar.gz::https://github.com/debpalash/Opal/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP') # filled by updpkgsums at submission time
@@ -36,15 +36,14 @@ sha256sums=('SKIP') # filled by updpkgsums at submission time
 build() {
     cd "Opal-$pkgver"
 
-    # 1. C++ torrent wrapper (isolates the libtorrent C++ ABI from Zig)
-    g++ -std=c++17 -O3 -shared -fPIC \
-        src/torrent_wrapper.cpp \
-        -o libtorrent_wrapper.so \
-        $(pkg-config --cflags --libs libtorrent-rasterbar)
-
-    # 2. The app. -fsys=sdl2 links the system SDL2 (Wayland support);
-    #    the binary carries $ORIGIN/../lib/opal in its rpath, matching the
-    #    install layout below. Pin x86_64_v2 so AUR builds stay portable.
+    # build.zig compiles libtorrent_wrapper.so itself (with its SONAME and full
+    # RELRO). Do NOT pre-build it here: a hand-rolled g++ line without
+    # -Wl,-soname made the linker record the absolute $srcdir path as the
+    # exe's DT_NEEDED, and build.zig skips an up-to-date .so, so the installed
+    # binary could not load once makepkg removed $srcdir.
+    # -fsys=sdl2 links the system SDL2 (Wayland support); the binary carries
+    # $ORIGIN/../lib/opal in its rpath, matching the install layout below.
+    # Pin x86_64_v2 so AUR builds stay portable.
     zig build -Doptimize=ReleaseSafe -Dsystem-webp=true -fsys=sdl2 -Dcpu=x86_64_v2
 }
 
