@@ -1,4 +1,4 @@
-# VERSION: 1.00
+# VERSION: 1.01
 # AUTHORS: LightDestory (https://github.com/LightDestory)
 
 
@@ -54,7 +54,7 @@ class torrentdownloads(object):
             )[1:]
             for tr in trs:
                 url_titles = re.search(
-                    r"href=\"(.+?)\".+?>\s?(.+?)</a>.+?<span>([0-9,.]+).+?span>([0-9,.]).+?([0-9\,\.]+ (TB|GB|MB|KB))",
+                    r"href=\"(.+?)\".+?>\s?(.+?)</a>.+?<span>([0-9,.]+).+?span>([0-9,.]+)<.+?([0-9\,\.]+ (TB|GB|MB|KB))",
                     tr,
                 )
                 if url_titles:
