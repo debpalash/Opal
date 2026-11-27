@@ -281,10 +281,9 @@ fn linuxDebugInfoSearchPaths(exe_path: []const u8) std.debug.ElfFile.DebugInfoSe
             .{ path, "" }
         else if (getenv("XDG_CACHE_HOME")) |path|
             .{ path, "/debuginfod_client" }
-        else if (getenv("HOME")) |path|
-            .{ path, "/.cache/debuginfod_client" }
         else
-            null,
+            // paths.homeDir, not a raw HOME read (tests/features/test_windows_portability.py).
+            .{ @import("core/paths.zig").homeDir(), "/.cache/debuginfod_client" },
         .global_debug = &.{"/usr/lib/debug"},
         .exe_dir = std.fs.path.dirname(exe_path) orelse ".",
     };
