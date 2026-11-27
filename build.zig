@@ -2803,6 +2803,10 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_android).step);
     const test_mobile_layout = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/ui/mobile_layout_pure.zig"), .target = target, .optimize = optimize }) });
     test_step.dependOn(&b.addRunArtifact(test_mobile_layout).step);
+    // Live TV recording (#240): due/missed windows, late-start length, ffmpeg
+    // argv (no header injection), local file names, persisted job list.
+    const test_recorder_pure = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/services/recorder_pure.zig"), .target = target, .optimize = optimize }) });
+    test_step.dependOn(&b.addRunArtifact(test_recorder_pure).step);
     const test_apibay = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/services/apibay_pure.zig"), .target = target, .optimize = optimize }) });
     test_step.dependOn(&b.addRunArtifact(test_apibay).step);
     const test_player_chrome = addBoundTest(b, .{ .root_module = b.createModule(.{ .root_source_file = b.path("src/ui/player_chrome_pure.zig"), .target = target, .optimize = optimize }) });

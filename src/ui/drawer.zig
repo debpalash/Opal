@@ -424,7 +424,12 @@ pub fn renderTabContent(tab: state.DrawerTab) void {
     if (@import("profiles_ui.zig").blocksTab(tab)) return;
     // The Live TV programme-guide view is UI code in src/ui; services may not
     // import new UI modules, so the tab gets it injected here.
-    if (tab == .Iptv) @import("../services/iptv.zig").guide_view = @import("live_tv_guide.zig").render;
+    if (tab == .Iptv) {
+        const iptv = @import("../services/iptv.zig");
+        iptv.guide_view = @import("live_tv_guide.zig").render;
+        iptv.recordings_view = @import("recordings_ui.zig").render;
+        iptv.record_channel = @import("recordings_ui.zig").openFor;
+    }
     switch (tab) {
         .Search => search.renderSearchContent(),
         .Downloads => transfers.renderTransfersContent(renderAboveTransfers),
