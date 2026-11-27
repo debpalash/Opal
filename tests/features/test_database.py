@@ -416,3 +416,24 @@ def test_exact_resume_schema_v4():
     if "resolveFileKey" not in hist_src or "pickPosition" not in hist_src:
         return "fail", "history.zig missing path keying / legacy fallback routing"
     return "pass", "v1→v2 migration + path keying + formatDuration wiring OK"
+
+
+@test("Download history names torrents by release title, not info-hash", "Database")
+def test_download_history_title():
+    # REGRESSION: search.zig stored `source[0..64]` as the row name, i.e.
+    # "magnet:?xt=urn:btih:<hash>" with dn= always cut off, and the persisted
+    # link keeps only the hash: 114 of 116 rows on a real install listed in
+    # Downloads as bare hashes.
+    search = _src("src/services/search.zig")
+    pure = _src("src/services/release_name_pure.zig")
+    write = _between(search, "// Save to download history", "} else {")
+    checks = {
+        "pure historyTitle with regression test": "pub fn historyTitle(" in pure
+            and 'test "historyTitle: a magnet\'s dn names the history row, never its hash"' in pure,
+        "torrent add names the row through it": "historyTitle(source, metadata.title" in write,
+        "no hash-prefix name": "addDownloadHistory(source[0..@min(source.len, 64)], source)" not in search,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "history rows take the magnet dn (else the play title); colons kept out of the scheme check"

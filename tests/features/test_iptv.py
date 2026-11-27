@@ -143,7 +143,7 @@ def test_iptv_tab():
         "render dispatch": '.Iptv => @import("../services/iptv.zig").renderContent()' in drawer,
         "grouped under video": ".YouTube, .Iptv => .video" in drawer,
         "rail nav entry": "renderRailTab(.Iptv" in drawer,
-        "shell label": '.Iptv => "Live TV"' in shell,
+        "shell label": ('.Iptv => "Live TV"' in shell or '.Iptv => i18n.t(.nav_live_tv)' in shell),
         "shell icon (exists in pack)": '.Iptv => icons.tvg.lucide.@"monitor-play"' in shell,
         "grouped sidebar source": ".Iptv" in shell and "sidebarSection(" in shell
             and "state.app.browse_source = source" in shell,

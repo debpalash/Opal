@@ -71,7 +71,7 @@ def test_vndb_catalog():
         "nav host page": ".Vndb => {" in st and "app.browse_source = .Vndb;" in st,
         "render dispatch": '.Vndb => @import("../services/vndb.zig").renderContent()' in drawer,
         "rail nav entry": "renderRailTab(.Vndb" in drawer,
-        "shell label": '.Vndb => "Visual Novels"' in shell,
+        "shell label": ('.Vndb => "Visual Novels"' in shell or '.Vndb => i18n.t(.nav_visual_novels)' in shell),
         "shell icon (exists in pack)": '.Vndb => icons.tvg.lucide.@"gamepad-2"' in shell,
         "grouped sidebar source": ".Vndb" in shell and "sidebarSection(" in shell
             and "state.app.browse_source = source" in shell,

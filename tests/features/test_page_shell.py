@@ -205,7 +205,7 @@ def test_podcasts_wired():
         "episode cap fills the array": "PODCAST_FEED_CAP: usize = 8 * 1024 * 1024" in svc,
         "enum variant": "Podcasts," in st and "podcasts: struct" in st,
         "drawer route": '.Podcasts => @import("podcasts_ui.zig").renderContent()' in drawer,
-        "shell label+icon": '.Podcasts => "Podcasts"' in shell and "lucide.podcast" in shell,
+        "shell label+icon": ('.Podcasts => "Podcasts"' in shell or '.Podcasts => i18n.t(.nav_podcasts)' in shell) and "lucide.podcast" in shell,
         "service search→episodes→play": all(
             f"pub fn {fn}" in svc for fn in ("searchPodcasts", "loadEpisodes", "playEpisode")
         ),
@@ -234,7 +234,7 @@ def test_radio_wired():
     checks = {
         "enum variant": "Radio," in st and "radio: struct" in st,
         "drawer route": ".Radio =>" in drawer and "radio.zig" in drawer,
-        "shell label+icon": '.Radio => "Radio"' in shell and "lucide.radio" in shell,
+        "shell label+icon": ('.Radio => "Radio"' in shell or '.Radio => i18n.t(.nav_radio)' in shell) and "lucide.radio" in shell,
         "service search→play": all(
             f"pub fn {fn}" in svc for fn in ("searchRadio", "playStation")
         ),

@@ -185,7 +185,7 @@ def test_responsive_shell_tiers():
         "compact destinations remain reachable": all(route in sh for route in
             (".watching", ".queue", ".history", ".plugins", ".system", ".settings")),
         "sidebar destinations remain keyboard buttons": "renderBottomTabs(" not in sh and "renderSidebar(nav_layout);" in sh
-            and 'const labels = [_][]const u8{ "Home", "All content", "Watching" }' in sh
+            and 'const labels = [_][]const u8{ i18n.t(.nav_home), "All content", i18n.t(.nav_watching) }' in sh
             and "button.processEvents()" in sh and "button.drawFocus()" in sh,
         "lyrics stack below narrow player": "lyrics_below" in sh and ".bottom else .side" in sh,
         "lyrics panel adapts both axes": "LyricsPanelPlacement" in ly and "panel_h" in ly and "panel_w" in ly,
