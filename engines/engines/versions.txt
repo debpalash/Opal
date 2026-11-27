@@ -9,12 +9,12 @@ knaben: 1.2
 limetorrents: 4.15
 nyaa: 1.6
 one337x: 2.7
-rutor: 1.00
+rutor: 1.01
 solidtorrents: 2.10
 therarbg: 1.5
 tokyotoshokan: 2.4
 torlock: 2.28
-torrentdownloads: 1.00
+torrentdownloads: 1.01
 torrentfunk: 1.2
 torrentgalaxy: 1.1
 torrentproject: 1.93

@@ -1,4 +1,4 @@
-# VERSION: 1.00
+# VERSION: 1.01
 # AUTHORS: LightDestory (https://github.com/LightDestory)
 
 
@@ -66,7 +66,7 @@ class rutor(object):
             trs = re.findall(r"<tr class=\"(?:gai|tum)\">.+?</tr>", html)
             for tr in trs:
                 url_titles = re.search(
-                    r"<td>(.+?)</td>.+?(magnet.+?)\">.+?(/torrent.+?)\">\s*(.+?)\s?</a>.+?([0-9\,\.]+ (?:TB|GB|MB|KB)).+?([0-9,.]+)</span>.+?([0-9\,\.])</span>",
+                    r"<td>(.+?)</td>.+?(magnet.+?)\">.+?(/torrent.+?)\">\s*(.+?)\s?</a>.+?([0-9\,\.]+ (?:TB|GB|MB|KB)).+?([0-9,.]+)</span>.+?([0-9\,\.]+)</span>",
                     tr,
                 )
                 if url_titles:
