@@ -262,6 +262,33 @@ fn headlessEntry(_: std.process.Init) !u8 {
 pub const panic = dvui.App.panic;
 pub const std_options: std.Options = .{ .logFn = dvui.App.logFn, .log_level = .warn };
 
+// Zig's startup code gives its default debug I/O a slice of the original envp.
+// SDL's Wayland backend can unset XDG_ACTIVATION_TOKEN, leaving a null inside
+// that slice. Keep Linux debug I/O independent of envp so a later log cannot
+// panic while detecting stderr colors.
+var linux_debug_io: std.Io.Threaded = .init_single_threaded;
+pub const std_options_debug_threaded_io: ?*std.Io.Threaded =
+    if (builtin.os.tag == .linux) null else std.Io.Threaded.global_single_threaded;
+pub const std_options_debug_io: std.Io =
+    if (builtin.os.tag == .linux) linux_debug_io.io() else std.Io.Threaded.global_single_threaded.io();
+pub const std_options_elf_debug_info_search_paths =
+    if (builtin.os.tag == .linux) linuxDebugInfoSearchPaths else null;
+
+fn linuxDebugInfoSearchPaths(exe_path: []const u8) std.debug.ElfFile.DebugInfoSearchPaths {
+    const getenv = @import("core/io_global.zig").getenv;
+    return .{
+        .debuginfod_client = if (getenv("DEBUGINFOD_CACHE_PATH")) |path|
+            .{ path, "" }
+        else if (getenv("XDG_CACHE_HOME")) |path|
+            .{ path, "/debuginfod_client" }
+        else
+            // paths.homeDir, not a raw HOME read (tests/features/test_windows_portability.py).
+            .{ @import("core/paths.zig").homeDir(), "/.cache/debuginfod_client" },
+        .global_debug = &.{"/usr/lib/debug"},
+        .exe_dir = std.fs.path.dirname(exe_path) orelse ".",
+    };
+}
+
 /// Window-independent core initialization. Shared by the windowed entry
 /// (appInit) and the headless server entry (headless.headlessMain). Runs
 /// every startup step that does NOT require a dvui.Window: paths, theme,
