@@ -208,7 +208,12 @@ printf "%b╚══════════════════════�
 build_and_launch
 
 # ── Watch loop (per-watcher) ────────────────────────────────────
-debounce() { sleep "$(awk "BEGIN{printf \"%.3f\", $DEBOUNCE_MS/1000}")"; }
+# Seconds, computed once. Single-quoted awk program and </dev/null on purpose:
+# macOS /bin/bash 3.2 brace-expanded `{printf "%.3f", …}` inside the old
+# double-quoted $(awk "…"), leaving awk a non-BEGIN program that read stdin —
+# the fswatch pipe — so the loop hung after the first change and never rebuilt.
+DEBOUNCE_S=$(awk -v ms="$DEBOUNCE_MS" 'BEGIN { printf "%.3f", ms / 1000 }' </dev/null)
+debounce() { sleep "$DEBOUNCE_S"; }
 
 case "$WATCHER" in
     fswatch)
