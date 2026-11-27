@@ -1915,6 +1915,17 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_playback_load_pure).step);
 
+    // An idle torrent pane: a refused torrent (executable / nothing playable)
+    // shows a terminal state, never "Buffering first video parts..." forever.
+    const test_torrent_pane_pure = addBoundTest(b, .{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/torrent_pane_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_torrent_pane_pure).step);
+
     // A media-version fallback stays armed through demux/decoder setup, is
     // consumed once on a pre-playback failure, and cannot switch mid-stream.
     const test_playback_fallback_pure = addBoundTest(b, .{
