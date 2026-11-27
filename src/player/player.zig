@@ -836,7 +836,8 @@ pub const MediaPlayer = struct {
         else
             null;
         if (!@import("hwdec_feedback_pure.zig").shouldNotify(
-            state.app.hwdec_enabled,
+            // Android always decodes in software (#229): not a fallback.
+            state.app.hwdec_enabled and !@import("builtin").abi.isAndroid(),
             current,
             self.cached_video_width,
             self.cached_video_height,

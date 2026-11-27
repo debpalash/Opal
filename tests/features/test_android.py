@@ -400,7 +400,7 @@ def test_android_sigio_handler():
     return ("fail", f"missing: {missing}") if missing else ("pass", "SIGIO/SIGPIPE caught; Io cancellation no longer kills the app")
 
 
-@test("Android: immersive fullscreen window and mediacodec-copy hwdec", "Android")
+@test("Android: immersive fullscreen window and software decoding", "Android")
 def test_android_fullscreen_and_hwdec():
     # On device: SDLActivity.setWindowStyle(false) re-showed the bars (windowed SDL
     # window), and hwdec=auto picked direct mediacodec -> "Both surface and
@@ -411,12 +411,17 @@ def test_android_fullscreen_and_hwdec():
     pure = _src("src/player/hwdec_feedback_pure.zig")
     checks = {
         "fullscreen SDL window": "SDL_SetWindowFullscreen(@ptrCast(win.backend.impl.window), true)" in a,
-        "android hwdec is copy-back": 'if (android) return "mediacodec-copy";' in pure,
+        # #229: mediacodec-copy blocked forever in MediaCodec.dequeueOutputBuffer
+        # on mpv's core thread; the UI thread then waited on mpv's lock and
+        # Android killed the frozen app. Android decodes in software.
+        "android decodes in software (#229)": 'if (android or !enabled) return "no";' in pure
+            and 'test "Android decodes in software: mediacodec-copy hung the player (#229)"' in pure,
+        "no false fallback notice on android": "state.app.hwdec_enabled and !@import(\"builtin\").abi.isAndroid()" in pl,
         "player init routes through it": "optionValue(state.app.hwdec_enabled, @import(\"builtin\").abi.isAndroid(), true)" in pl,
         "settings toggle routes through it": "optionValue(state.app.hwdec_enabled, @import(\"builtin\").abi.isAndroid(), false)" in st,
     }
     missing = [k for k, v in checks.items() if not v]
-    return ("fail", f"missing: {missing}") if missing else ("pass", "bars hidden by SDL fullscreen; Android decodes via mediacodec-copy")
+    return ("fail", f"missing: {missing}") if missing else ("pass", "bars hidden by SDL fullscreen; Android decodes in software (#229)")
 
 
 @test("Android ships subtitle/OSD fonts for libass", "Android")
