@@ -1151,3 +1151,16 @@ def test_nova2_deadline_gil_backstop():
     if secs > 10 or "Timeout" not in r.stderr:
         return "fail", f"watchdog did not end the stuck search (rc={r.returncode}, {secs:.1f}s)"
     return "pass", f"1s deadline + GIL-holding engine ended in {secs:.1f}s with stacks on stderr"
+
+
+@test("Starter pack only installs reachable sources", "Torrents")
+def test_starter_pack_excludes_dead_sources():
+    # glodls.to (glotorrents) serves a JS challenge to every client and
+    # ilcorsaronero.link returns 522 (checked 2026-11-27, direct and through the
+    # DPI bypass); a new user's first search should not carry dead sources.
+    repo = _src("src/services/plugin_repo.zig")
+    block = _between(repo, "const starter_ids = [_][]const u8{", "};")
+    dead = [d for d in ("glotorrents", "ilcorsaronero") if f'"{d}"' in block]
+    if not block or dead:
+        return "fail", "starter pack installs unreachable sources: " + ", ".join(dead or ["(list not found)"])
+    return "pass", f"{block.count(chr(34)) // 2} starter sources; none of the known-dead engines"

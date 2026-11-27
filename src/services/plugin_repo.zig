@@ -714,16 +714,18 @@ pub fn uninstall(idx: usize) void {
 /// source plugins from the BUNDLED manifest's inline endpoints (no network,
 /// no GitHub fetch). Skips anything already installed. Deliberately excludes
 /// jackett (needs a local server), academictorrents (junk for media queries)
-/// and region-specific trackers. Returns how many were installed.
+/// and region-specific trackers. glotorrents was dropped in 2026-11: glodls.to
+/// answers every client with a JavaScript challenge, so it returned nothing.
+/// Returns how many were installed.
 pub fn installStarterPack() usize {
     loadLocalManifest();
     catalog_mutex.lock();
     defer catalog_mutex.unlock();
     const starter_ids = [_][]const u8{
-        "apibay",      "one337x",       "yts",        "eztv",
-        "bitsearch",   "solidtorrents", "therarbg",   "torrentgalaxy",
-        "torrentscsv", "limetorrents",  "torlock",    "glotorrents",
-        "nyaa",        "torrentio",     "subsplease",
+        "apibay",      "one337x",       "yts",      "eztv",
+        "bitsearch",   "solidtorrents", "therarbg", "torrentgalaxy",
+        "torrentscsv", "limetorrents",  "torlock",  "nyaa",
+        "torrentio",   "subsplease",
     };
     var installed: usize = 0;
     for (plugins[0..plugin_count]) |*pl| {
