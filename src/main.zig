@@ -1059,6 +1059,8 @@ pub fn appDeinit() void {
     search.search_results.deinit(@import("core/alloc.zig").allocator);
 
     // Tear down the DPI-bypass proxy sidecar (no-op if it was never started).
+    // Stop running recordings (ffmpeg keeps what it captured) and reap workers.
+    @import("services/recorder.zig").deinit();
     @import("services/dpi_bypass.zig").stop();
 
     // Kill any spawned child processes that may still be running
@@ -1429,6 +1431,9 @@ fn appFrame() !dvui.App.Result {
     // section / TV detail / scroll they left (once, after config loads), then
     // keep the on-disk snapshot current. Policy: core/ui_restore_pure.zig.
     if (comptime !@import("build_options").headless) @import("ui/ui_restore.zig").tick(cli_arg_count > 0);
+
+    // Live TV recordings: start each one when its window opens (#240).
+    @import("services/recorder.zig").tick();
 
     // Process dropped files. The atomic ready bit makes the idle frame path a
     // single acquire-load instead of a mutex round trip. Snapshot under the

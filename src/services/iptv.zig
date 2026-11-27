@@ -126,6 +126,11 @@ const GUIDE_VIEW: u8 = 3;
 /// The guide view's renderer, injected by ui/drawer.zig (services may not
 /// import new UI modules). UI-thread only.
 pub var guide_view: ?*const fn () void = null;
+/// Live TV recording UI (#240), registered by the UI layer like `guide_view`
+/// (services do not import presentation modules): the schedule panel +
+/// recordings list, and the card's Record action.
+pub var recordings_view: ?*const fn () void = null;
+pub var record_channel: ?*const fn (*const pure.IptvChannel) void = null;
 /// Bumped each time the Guide chip is selected so the view reloads its cards.
 pub var guide_view_epoch: u32 = 0;
 
@@ -943,6 +948,9 @@ pub fn renderContent() void {
         });
     }
 
+    // Record panel + recordings list (scheduling lives in services/recorder.zig).
+    if (recordings_view) |render_recordings| render_recordings();
+
     renderResults();
 }
 
@@ -1291,6 +1299,10 @@ fn renderCard(i: usize, card_w: f32) void {
         media_card.rowText(safeUtf8Buf(now_text, &safe_now), card_w - 30, .accent);
     } else media_card.rowText(if (wrote) safeUtf8Buf(meta_buf[0..mw.end], &safe_meta) else "", card_w - 30, .secondary);
     media_card.spacer();
+    // Record (issue #240): opens the schedule panel above the grid.
+    if (record_channel) |open_record| {
+        if (media_card.iconAction(@src(), icons.tvg.lucide.@"circle-dot", "Record", i, false)) open_record(ch);
+    }
     const faved = isFav(url);
     if (media_card.iconAction(@src(), icons.tvg.lucide.star, if (faved) "Remove favorite" else "Favorite", i, faved)) {
         _ = iptv_store.toggleFavorite(ch);

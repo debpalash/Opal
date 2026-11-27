@@ -449,3 +449,33 @@ def test_iptv_guide_fixture_shape():
     if missing:
         return "fail", "guide fixtures drifted: " + ", ".join(missing)
     return "pass", "generated XMLTV/DST and gzip fixtures agree with the Zig tests"
+
+
+@test("Live TV recording: schedule a channel and a period (#240)", "Video")
+def test_livetv_recording():
+    pure = _src("src/services/recorder_pure.zig")
+    svc = _src("src/services/recorder.zig")
+    ui = _src("src/ui/recordings_ui.zig")
+    iptv = _src("src/services/iptv.zig")
+    main = _src("src/main.zig")
+    build = _src("build.zig")
+    checks = {
+        "pure module registered": 'b.path("src/services/recorder_pure.zig")' in build,
+        "pure tests": all(t in pure for t in (
+            'test "scheduler waits, starts in the window and marks a missed window"',
+            'test "a late start records only the rest of the window"',
+            'test "ffmpeg argv copies the stream for the window and sends channel headers"',
+            'test "job list round-trips; an interrupted recording comes back failed"')),
+        "only network streams recorded": "pub fn isRecordableUrl(" in pure and "isRecordableUrl(url)" in pure,
+        "service routes through pure": all(f in svc for f in ("pure.actionAt(", "pure.recordSeconds(", "pure.ffmpegArgv(", "pure.outcome(", "pure.encode(", "pure.decode(")),
+        "bounded ffmpeg with cancel": "StreamProcess.init(" in svc and ".cancel_flag = &slots[slot].cancel" in svc,
+        "card Record action (UI hooks, no service->ui import)": "record_channel) |open_record|" in iptv
+            and "recordings_view) |render_recordings|" in iptv and "recordings_ui" not in iptv
+            and 'iptv.record_channel = @import("recordings_ui.zig").openFor' in _src("src/ui/drawer.zig"),
+        "EPG programme shortcuts": "epg.nowNextFor(ch, now)" in ui and "This programme:" in ui,
+        "ticked and reaped": 'services/recorder.zig").tick()' in main and 'services/recorder.zig").deinit()' in main,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "channel + period → ffmpeg -c copy to Recordings/; EPG now/next shortcuts; persisted, cancellable"
