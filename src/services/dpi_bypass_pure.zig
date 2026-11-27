@@ -71,6 +71,21 @@ pub fn engineSocksUrl(buf: []u8, port: u16) []const u8 {
     return std.fmt.bufPrint(buf, "socks5h://127.0.0.1:{d}", .{port}) catch buf[0..0];
 }
 
+/// nova2's `--timeout` deadline for one search. Direct, 6 s keeps a dead
+/// scraper from holding the search open. Through the bypass every site pays the
+/// SOCKS hop plus the split/SNI handshake (about 20 s per site was measured), so
+/// the direct deadline ended most proxied engines before their first row.
+pub fn engineTimeoutArg(proxied: bool) []const u8 {
+    return if (proxied) "--timeout=20" else "--timeout=6";
+}
+
+test "engineTimeoutArg: proxied searches get a longer deadline" {
+    // Regression: the 6 s direct deadline also applied through the bypass, so
+    // slow tunneled sites returned nothing.
+    try std.testing.expectEqualStrings("--timeout=6", engineTimeoutArg(false));
+    try std.testing.expectEqualStrings("--timeout=20", engineTimeoutArg(true));
+}
+
 test "engineSocksUrl: proxy-side DNS (socks5h) on loopback" {
     // Regression: the DPI bypass only covered Zig-side curl; the nova2 engines
     // never received a proxy and kept connecting directly. A plain `socks5`

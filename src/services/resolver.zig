@@ -2523,8 +2523,13 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
         logs.pushLog("error", "resolver", @import("../core/pybin.zig").missingHint(), true);
         return;
     };
+    // Same DPI-bypass routing as search.zig: universal search spawns its own
+    // nova2, so fixing only the Torrent tab would leave this one going direct.
+    var engine_env = @import("dpi_bypass.zig").engineEnv(alloc);
+    defer if (engine_env) |*m| m.deinit();
     const argv = [_][]const u8{
-        py, "engines/nova2.py", "--timeout=6", "all", "all", query,
+        py,    "engines/nova2.py", @import("dpi_bypass_pure.zig").engineTimeoutArg(engine_env != null),
+        "all", "all",              query,
     };
     const owned_generation = worker_gen;
 
@@ -2532,10 +2537,6 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
     // lifecycle to the shared streaming guard. The epoch is the generation
     // this worker was spawned for: resolve() advances run_gen synchronously,
     // so a replacement search interrupts even a worker blocked on stdout.
-    // Same DPI-bypass routing as search.zig: universal search spawns its own
-    // nova2, so fixing only the Torrent tab would leave this one going direct.
-    var engine_env = @import("dpi_bypass.zig").engineEnv(alloc);
-    defer if (engine_env) |*m| m.deinit();
     var process = bounded_process.StreamProcess.init(&argv, .{
         .timeout_ms = 180 * 1000,
         .terminate_grace_ms = 500,

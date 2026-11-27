@@ -233,7 +233,10 @@ case "$WATCHER" in
         done
         ;;
     watchexec)
-        # Hand off process management to watchexec.
+        # Hand off process management to watchexec. Same incremental-first
+        # policy as run_build: a bailed incremental build retries plainly.
+        WATCH_BUILD="${ZIG:-zig} build $OPTIMIZE"
+        (( INCREMENTAL )) && WATCH_BUILD="{ $WATCH_BUILD -fincremental || $WATCH_BUILD; }"
         kill_running
         log "watchexec will manage the child process"
         exec watchexec \
@@ -242,6 +245,6 @@ case "$WATCHER" in
             --ignore '*.swp' --ignore '*~' \
             --watch src --watch tools --watch build.zig --watch build.zig.zon \
             --on-busy-update restart --stop-signal SIGTERM \
-            -- bash -c "${ZIG:-zig} build $OPTIMIZE && exec \"\$(./scripts/dev-app.sh 2>/dev/null || echo $BIN)\" ${PASSTHROUGH[*]:-}"
+            -- bash -c "$WATCH_BUILD && exec \"\$(./scripts/dev-app.sh 2>/dev/null || echo $BIN)\" ${PASSTHROUGH[*]:-}"
         ;;
 esac

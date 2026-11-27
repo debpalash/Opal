@@ -627,7 +627,8 @@ def test_ui_restore_wiring():
         "TMDB gallery + episode scroll hooked": all(h in _src("src/services/tmdb.zig") for h in (
             "hook(.tmdb_gallery, gallery_si.", "hook(.tv_episodes, tv_episode_si.")),
         "dev.sh marks dev reloads": "export OPAL_DEV_RELOAD=1" in dev and "OPAL_DEV_RELOAD" in glue,
-        "dev.sh incremental with fallback": "-fincremental" in dev and "is_source_error" in dev and "--no-incremental" in dev,
+        "dev.sh incremental with fallback": "-fincremental" in dev and "is_source_error" in dev and "--no-incremental" in dev
+            and '-- bash -c "$WATCH_BUILD && exec' in dev,
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
