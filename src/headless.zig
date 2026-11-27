@@ -133,6 +133,8 @@ pub fn headlessMain() !void {
         @import("services/profiles.zig").enforce();
         @import("services/agent_tasks.zig").tick();
         @import("services/operator.zig").tick();
+        // Live TV recordings scheduled from the web UI / API (#240).
+        @import("services/recorder.zig").tick();
         @import("services/search.zig").flushPendingTorrentOpen();
         @import("core/state.zig").players_mutex.unlock();
         // Same class of seam: drama's fetch worker stages results under a mutex

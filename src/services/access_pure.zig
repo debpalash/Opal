@@ -273,48 +273,54 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
     // is host administration, including any future /addons/* path.
     if (std.mem.eql(u8, path, "/addons") or std.mem.startsWith(u8, path, "/addons/")) return .administer_host;
     const host_routes = [_][]const u8{
-        "/moments/create",       "/moments/send",       "/moments/delete",
-        "/addons",               "/addons/add",         "/addons/refresh",
-        "/addons/remove",        "/setup/sources",      "/setup/tmdb",
-        "/setup/tvdb",
-        "/settings",             "/settings/toggle",    "/source/add",
-        "/source/config",        "/livetv/sources",     "/rss/manage",
+        "/moments/create",           "/moments/send",               "/moments/delete",
+        "/addons",                   "/addons/add",                 "/addons/refresh",
+        "/addons/remove",            "/setup/sources",              "/setup/tmdb",
+        "/setup/tvdb",               "/settings",                   "/settings/toggle",
+        "/source/add",               "/source/config",              "/livetv/sources",
+        "/rss/manage",
         // Programme guide import makes this host fetch a URL or read a local
         // file; refresh repeats it and clear drops the user's opt-in.
-        "/livetv/guide/import",  "/livetv/guide/refresh", "/livetv/guide/clear",
-        "/local-library/action", "/jellyfin/login",     "/jellyfin/disconnect",
-        "/abs/login",            "/abs/logout",         "/opds/connect",
-        "/opds/disconnect",      "/plex/connect",       "/plex/disconnect",
-        "/suwayomi",             "/sync-accounts",      "/trakt",
-        "/webui",                "/logs/clear",
+                      "/livetv/guide/import",        "/livetv/guide/refresh",
+        "/livetv/guide/clear",
+        // Recording runs ffmpeg against a URL and writes files on this host.
+              "/livetv/recordings/schedule", "/livetv/recordings/cancel",
+        "/livetv/recordings/remove", "/local-library/action",       "/jellyfin/login",
+        "/jellyfin/disconnect",      "/abs/login",                  "/abs/logout",
+        "/opds/connect",             "/opds/disconnect",            "/plex/connect",
+        "/plex/disconnect",          "/suwayomi",                   "/sync-accounts",
+        "/trakt",                    "/webui",                      "/logs/clear",
         // Scheduled agent runs spend the host's agent credit and act on its behalf.
-                "/agent/tasks",
-        "/agent/tasks/add",      "/agent/tasks/remove", "/agent/tasks/run",
+        "/agent/tasks",              "/agent/tasks/add",            "/agent/tasks/remove",
+        "/agent/tasks/run",
         // The operator's jobs and the decisions on its proposals belong to the host user.
-        "/operator",
+                 "/operator",
         // Who is paired, and removing one. A browser token may only unpair itself
         // (see `browser_routes`); listing and revoking others is the host's.
-                    "/browser/links",      "/browser/revoke",
+                          "/browser/links",
+        "/browser/revoke",
         // What agents may read of the shared page, and playing one of its streams by id.
         // Host administration (machine token, admin session); a paired browser holds
         // neither, and a plain web session is not the host.
-        "/browser/context",      "/browser/play",
+                  "/browser/context",            "/browser/play",
         // Fetching a page through the user's browser spends their cookies' reach;
         // the extension's per-origin allow list is the second gate.
-              "/browser/fetch",
+        "/browser/fetch",
         // Cross-device library sync: reads/overwrites the whole progress table,
         // and `pull`/`push` make this host fetch a peer URL.
-        "/library/sync",         "/library/sync/pull",  "/library/sync/push",
+                   "/library/sync",               "/library/sync/pull",
+        "/library/sync/push",
         // Household profiles: switching restarts the host into another
         // person's data; create/delete manage the household. Listing is open.
-        "/profiles/switch",      "/profiles/create",    "/profiles/delete",
-        "/profiles/kid",
+               "/profiles/switch",            "/profiles/create",
+        "/profiles/delete",          "/profiles/kid",
         // Continuum handoff: send/bring make this host call a peer URL.
-        "/handoff/send",         "/handoff/bring",
+                      "/handoff/send",
+        "/handoff/bring",
         // Anti-block scraper proxy: makes this host fetch arbitrary URLs.
-        "/scrape",
+                   "/scrape",
         // HTTP download and magnet add: this host fetches a URL or starts a torrent.
-        "/download/url",
+                            "/download/url",
     };
     for (host_routes) |route| if (std.mem.eql(u8, path, route)) return .administer_host;
     return null;
@@ -389,6 +395,16 @@ test "programme guide import is host-admin; reading the guide and mapping channe
     }
     try std.testing.expect(!allowsRoute(.browser, "/livetv/guide/import", "POST", ""));
     try std.testing.expect(!allowsRoute(.browser, "/livetv/play", "POST", ""));
+}
+
+test "recording live TV is host-admin; listing recordings is open" {
+    for ([_]Principal{ .machine, .admin_session, .session }) |principal| {
+        for ([_][]const u8{ "/livetv/recordings/schedule", "/livetv/recordings/cancel", "/livetv/recordings/remove" }) |route| {
+            try std.testing.expectEqual(principal != .session, allowsRoute(principal, route, "POST", ""));
+        }
+        try std.testing.expect(allowsRoute(principal, "/livetv/recordings", "GET", ""));
+    }
+    try std.testing.expect(!allowsRoute(.browser, "/livetv/recordings/schedule", "POST", ""));
 }
 
 test "household profile management is admin-only, listing is open to sessions" {

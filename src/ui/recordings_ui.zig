@@ -17,6 +17,7 @@ const ipure = @import("../services/iptv_pure.zig");
 var target: ?ipure.IptvChannel = null;
 var start_choice: usize = 0;
 var length_choice: usize = 1;
+var repeat_choice: usize = 0;
 var message: [160]u8 = undefined;
 var message_len: usize = 0;
 
@@ -24,6 +25,8 @@ const START_LABELS = [_][]const u8{ "Now", "In 15 min", "In 30 min", "In 1 h", "
 const START_OFFSETS = [_]i64{ 0, 15 * 60, 30 * 60, 3600, 2 * 3600 };
 const LENGTH_LABELS = [_][]const u8{ "30 min", "1 h", "2 h", "3 h", "4 h" };
 const LENGTH_SECS = [_]u32{ 30 * 60, 3600, 2 * 3600, 3 * 3600, 4 * 3600 };
+const REPEATS = [_]recorder.Repeat{ .none, .daily, .weekly };
+const REPEAT_LABELS = [_][]const u8{ "Once", "Daily", "Weekly" };
 
 pub fn openFor(ch: *const ipure.IptvChannel) void {
     target = ch.*;
@@ -40,7 +43,7 @@ fn scheduleFor(ch: *const ipure.IptvChannel, start_s: i64, duration_s: u32) void
     const url = ch.url[0..@min(ch.url_len, ch.url.len)];
     const ua = ch.user_agent[0..@min(ch.user_agent_len, ch.user_agent.len)];
     const ref = ch.referrer[0..@min(ch.referrer_len, ch.referrer.len)];
-    if (recorder.schedule(name, url, ua, ref, start_s, duration_s)) |_| {
+    if (recorder.schedule(name, url, ua, ref, start_s, duration_s, REPEATS[repeat_choice])) |_| {
         target = null;
     } else |err| setMessage(switch (err) {
         error.InvalidStream => "This channel's stream can't be recorded.",
@@ -97,6 +100,8 @@ fn renderPanel(ch: *const ipure.IptvChannel) void {
     if (components.segment(@src(), &START_LABELS, start_choice)) |i| start_choice = i;
     components.bodyText(@src(), "Length", theme.colors.text_secondary);
     if (components.segment(@src(), &LENGTH_LABELS, length_choice)) |i| length_choice = i;
+    components.bodyText(@src(), "Repeat", theme.colors.text_secondary);
+    if (components.segment(@src(), &REPEAT_LABELS, repeat_choice)) |i| repeat_choice = i;
 
     var dir_buf: [600]u8 = undefined;
     var where: [700]u8 = undefined;
@@ -146,8 +151,11 @@ fn renderList() void {
         var text_buf: [300]u8 = undefined;
         var a: [32]u8 = undefined;
         var b: [16]u8 = undefined;
-        const text = std.fmt.bufPrint(&text_buf, "{s} · {s} · {s} – {s}", .{
-            job.status.label(), job.nameSlice(), epg.dayClock(job.start_s, now, &a), epg.clock(job.endS(), &b),
+        const text = std.fmt.bufPrint(&text_buf, "{s} · {s} · {s} – {s}{s}{s}", .{
+            job.status.label(),                                  job.nameSlice(),
+            epg.dayClock(job.start_s, now, &a),                  epg.clock(job.endS(), &b),
+            if (job.repeat == .none) "" else " · ",
+            if (job.repeat == .none) "" else job.repeat.label(),
         }) catch job.nameSlice();
         dvui.labelNoFmt(@src(), text, .{}, .{
             .id_extra = i,

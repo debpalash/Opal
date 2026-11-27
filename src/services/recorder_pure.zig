@@ -33,9 +33,34 @@ pub const Status = enum {
     }
 };
 
+/// A series: after each run (recorded, failed or missed) the next window is
+/// scheduled. Cancel stops the series.
+pub const Repeat = enum {
+    none,
+    daily,
+    weekly,
+
+    pub fn periodS(self: Repeat) i64 {
+        return switch (self) {
+            .none => 0,
+            .daily => 24 * 3600,
+            .weekly => 7 * 24 * 3600,
+        };
+    }
+
+    pub fn label(self: Repeat) []const u8 {
+        return switch (self) {
+            .none => "Once",
+            .daily => "Daily",
+            .weekly => "Weekly",
+        };
+    }
+};
+
 pub const Job = struct {
     id: u32 = 0,
     status: Status = .scheduled,
+    repeat: Repeat = .none,
     start_s: i64 = 0,
     duration_s: u32 = 0,
     name: [128]u8 = undefined,
@@ -122,10 +147,30 @@ pub fn recordSeconds(job: *const Job, now: i64) u32 {
     return @intCast(std.math.clamp(left, 1, @as(i64, MAX_DURATION_S)));
 }
 
-/// Watchdog for the ffmpeg process: the recording length plus a grace period
-/// for connecting and finalising. ffmpeg's own `-t` is the normal stop.
+/// The next window of a series, or null for a one-off or a cancelled series.
+/// Windows already over at `now` are skipped (Opal was closed through them);
+/// the copy is a fresh scheduled job with `id`, no output file yet.
+pub fn nextOccurrence(job: *const Job, id: u32, now: i64) ?Job {
+    if (job.repeat == .none or job.status == .cancelled or !job.status.finished()) return null;
+    const period = job.repeat.periodS();
+    var start = job.start_s + period;
+    if (start + job.duration_s <= now) {
+        const behind = @divFloor(now - (start + job.duration_s), period) + 1;
+        start += behind * period;
+    }
+    var next = job.*;
+    next.id = id;
+    next.status = .scheduled;
+    next.start_s = start;
+    next.out_len = 0;
+    return next;
+}
+
+/// Hard stop for the ffmpeg process: the window plus a short grace for
+/// connecting and finalising. ffmpeg's `-t` counts media time, so a stalling
+/// live stream would otherwise keep recording past the scheduled end.
 pub fn watchdogMs(record_s: u32) i64 {
-    return (@as(i64, record_s) + 90) * 1000;
+    return (@as(i64, record_s) + 30) * 1000;
 }
 
 /// `<Channel> YYYY-MM-DD HHMM.ts` in local time (`offset_s` = UTC offset).
@@ -178,8 +223,9 @@ pub fn ffmpegArgv(ffmpeg: []const u8, job: *const Job, seconds: u32, out_path: [
             } else |_| {}
         }
     }
-    // Reconnect through brief network drops instead of ending the recording.
-    for ([_][]const u8{ "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10" }) |a| push(argv, &n, a);
+    // Reconnect through brief network drops instead of ending the recording;
+    // a read that stalls 15 s fails over to a reconnect rather than hanging.
+    for ([_][]const u8{ "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10", "-rw_timeout", "15000000" }) |a| push(argv, &n, a);
     push(argv, &n, "-i");
     push(argv, &n, job.urlSlice());
     push(argv, &n, "-t");
@@ -189,12 +235,28 @@ pub fn ffmpegArgv(ffmpeg: []const u8, job: *const Job, seconds: u32, out_path: [
     return argv[0..n];
 }
 
-/// Outcome of a finished ffmpeg run.
-pub fn outcome(cancelled: bool, exit_ok: bool, bytes_written: u64) Status {
+/// Outcome of a finished ffmpeg run. `window_over`: stopped by the hard stop
+/// at the end of the window (a stalling stream), which is the scheduled end.
+pub fn outcome(cancelled: bool, exit_ok: bool, window_over: bool, bytes_written: u64) Status {
     if (bytes_written == 0) return if (cancelled) .cancelled else .failed;
-    // A cancelled recording keeps what it captured: a partial file is useful.
-    if (cancelled) return .done;
+    // A cancelled or window-ended recording keeps what it captured.
+    if (cancelled or window_over) return .done;
     return if (exit_ok) .done else .failed;
+}
+
+/// `{"ffmpeg":bool,"recordings":[{id,status,start,end,repeat,name,file}]}` for
+/// GET /api/livetv/recordings. `file` is the recording's file name only, never
+/// the host's directory.
+pub fn writeListJson(w: *std.Io.Writer, jobs: []const Job, ffmpeg_available: bool) !void {
+    try w.print("{{\"ffmpeg\":{},\"recordings\":[", .{ffmpeg_available});
+    for (jobs, 0..) |*job, i| {
+        if (i > 0) try w.writeAll(",");
+        try w.print("{{\"id\":{d},\"status\":\"{s}\",\"start\":{d},\"end\":{d},\"repeat\":\"{s}\",\"name\":{f},\"file\":{f}}}", .{
+            job.id,                             @tagName(job.status),                                    job.start_s, job.endS(), @tagName(job.repeat),
+            std.json.fmt(job.nameSlice(), .{}), std.json.fmt(std.fs.path.basename(job.outSlice()), .{}),
+        });
+    }
+    try w.writeAll("]}");
 }
 
 // ── Persistence: one job per line, tab-separated, free text last ──
@@ -203,14 +265,14 @@ fn tabFree(s: []const u8) bool {
     return std.mem.indexOfAny(u8, s, "\t\r\n") == null;
 }
 
-/// `id status start duration url ua referrer out name`. Empty if a field
-/// cannot be framed (a tab or newline in it).
+/// `id status start duration repeat url ua referrer out name`. Empty if a
+/// field cannot be framed (a tab or newline in it).
 pub fn encode(job: *const Job, buf: []u8) []const u8 {
     for ([_][]const u8{ job.urlSlice(), job.userAgentSlice(), job.referrerSlice(), job.outSlice(), job.nameSlice() }) |f| {
         if (!tabFree(f)) return "";
     }
-    return std.fmt.bufPrint(buf, "{d}\t{s}\t{d}\t{d}\t{s}\t{s}\t{s}\t{s}\t{s}", .{
-        job.id, @tagName(job.status), job.start_s, job.duration_s, job.urlSlice(), job.userAgentSlice(), job.referrerSlice(), job.outSlice(), job.nameSlice(),
+    return std.fmt.bufPrint(buf, "{d}\t{s}\t{d}\t{d}\t{s}\t{s}\t{s}\t{s}\t{s}\t{s}", .{
+        job.id, @tagName(job.status), job.start_s, job.duration_s, @tagName(job.repeat), job.urlSlice(), job.userAgentSlice(), job.referrerSlice(), job.outSlice(), job.nameSlice(),
     }) catch "";
 }
 
@@ -225,7 +287,13 @@ pub fn decode(line_in: []const u8) ?Job {
     j.status = std.meta.stringToEnum(Status, it.next() orelse return null) orelse return null;
     j.start_s = std.fmt.parseInt(i64, it.next() orelse return null, 10) catch return null;
     j.duration_s = std.fmt.parseInt(u32, it.next() orelse return null, 10) catch return null;
-    if (!copyInto(&j.url, &j.url_len, it.next() orelse return null)) return null;
+    // Lines written before repeats existed go straight to the URL.
+    var field = it.next() orelse return null;
+    if (std.meta.stringToEnum(Repeat, field)) |r| {
+        j.repeat = r;
+        field = it.next() orelse return null;
+    }
+    if (!copyInto(&j.url, &j.url_len, field)) return null;
     if (!copyInto(&j.user_agent, &j.user_agent_len, it.next() orelse return null)) return null;
     if (!copyInto(&j.referrer, &j.referrer_len, it.next() orelse return null)) return null;
     if (!copyInto(&j.out, &j.out_len, it.next() orelse return null)) return null;
@@ -273,7 +341,7 @@ test "a late start records only the rest of the window" {
     const j = sample(now);
     try t.expectEqual(@as(u32, 3600), recordSeconds(&j, now + 600));
     try t.expectEqual(@as(u32, 600), recordSeconds(&j, now + 3600));
-    try t.expectEqual(@as(i64, 3690_000), watchdogMs(3600));
+    try t.expectEqual(@as(i64, 3630_000), watchdogMs(3600));
 }
 
 test "file name is local, dated and path-safe" {
@@ -306,11 +374,14 @@ test "ffmpeg argv copies the stream for the window and sends channel headers" {
 }
 
 test "outcome keeps a cancelled partial recording and fails an empty one" {
-    try t.expectEqual(Status.done, outcome(false, true, 1000));
-    try t.expectEqual(Status.failed, outcome(false, false, 1000));
-    try t.expectEqual(Status.failed, outcome(false, true, 0));
-    try t.expectEqual(Status.done, outcome(true, false, 1000));
-    try t.expectEqual(Status.cancelled, outcome(true, false, 0));
+    try t.expectEqual(Status.done, outcome(false, true, false, 1000));
+    try t.expectEqual(Status.failed, outcome(false, false, false, 1000));
+    try t.expectEqual(Status.failed, outcome(false, true, false, 0));
+    try t.expectEqual(Status.done, outcome(true, false, false, 1000));
+    try t.expectEqual(Status.cancelled, outcome(true, false, false, 0));
+    // A stalling stream stopped at the window end keeps its capture.
+    try t.expectEqual(Status.done, outcome(false, false, true, 1000));
+    try t.expectEqual(Status.failed, outcome(false, false, true, 0));
 }
 
 test "job list round-trips; an interrupted recording comes back failed" {
@@ -330,4 +401,58 @@ test "job list round-trips; an interrupted recording comes back failed" {
     try t.expectEqualStrings("/r/a.ts", back.outSlice());
     try t.expect(decode("garbage") == null);
     try t.expect(decode("1\tscheduled\t0\t600\t/local/file\t\t\t\tx") == null);
+}
+
+test "a series schedules its next window and skips ones missed while closed" {
+    const now: i64 = 1_800_000_000;
+    var j = sample(now); // starts now+600, 1 h
+    j.repeat = .daily;
+    try t.expect(nextOccurrence(&j, 9, now) == null); // still scheduled: no next yet
+    j.status = .done;
+    const next = nextOccurrence(&j, 9, now + 700).?;
+    try t.expectEqual(@as(i64, now + 600 + 86_400), next.start_s);
+    try t.expectEqual(Status.scheduled, next.status);
+    try t.expectEqual(@as(u32, 9), next.id);
+    try t.expectEqual(@as(usize, 0), next.out_len);
+    // Opal closed for three days: the next window is the first one still open.
+    const later = nextOccurrence(&j, 10, now + 3 * 86_400 + 5000).?;
+    try t.expect(later.start_s + later.duration_s > now + 3 * 86_400 + 5000);
+    try t.expectEqual(@as(i64, 0), @mod(later.start_s - j.start_s, 86_400));
+    // Cancel ends the series; a one-off never repeats.
+    j.status = .cancelled;
+    try t.expect(nextOccurrence(&j, 11, now) == null);
+    j.status = .done;
+    j.repeat = .none;
+    try t.expect(nextOccurrence(&j, 11, now) == null);
+}
+
+test "repeat survives the job list; lines from before repeats still load" {
+    const now: i64 = 1_800_000_000;
+    var j = try newJob(4, "Ch", "https://a.test/s", "", "", now, 600, now);
+    j.repeat = .weekly;
+    var buf: [2048]u8 = undefined;
+    try t.expectEqual(Repeat.weekly, decode(encode(&j, &buf)).?.repeat);
+    const old = decode("4\tscheduled\t1800000000\t600\thttps://a.test/s\t\t\t\tCh").?;
+    try t.expectEqual(Repeat.none, old.repeat);
+    try t.expectEqualStrings("https://a.test/s", old.urlSlice());
+}
+
+test "recording list JSON parses, escapes names and hides host paths" {
+    const now: i64 = 1_800_000_000;
+    var a = try newJob(1, "+24 \"News\"", "https://a.test/s", "", "", now, 600, now);
+    a.repeat = .daily;
+    @memcpy(a.out[0..24], "/Users/me/Rec/+24 x.ts\x00\x00");
+    a.out_len = 22;
+    const b = try newJob(2, "Two", "https://a.test/t", "", "", now, 600, now);
+    var buf: [1024]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeListJson(&w, &.{ a, b }, true);
+    const parsed = try std.json.parseFromSlice(std.json.Value, t.allocator, buf[0..w.end], .{});
+    defer parsed.deinit();
+    const list = parsed.value.object.get("recordings").?.array.items;
+    try t.expectEqual(@as(usize, 2), list.len);
+    try t.expectEqualStrings("+24 \"News\"", list[0].object.get("name").?.string);
+    try t.expectEqualStrings("+24 x.ts", list[0].object.get("file").?.string);
+    try t.expectEqualStrings("daily", list[0].object.get("repeat").?.string);
+    try t.expect(std.mem.indexOf(u8, buf[0..w.end], "/Users/") == null);
 }
