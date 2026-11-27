@@ -467,6 +467,10 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
     is_searching.store(true, .release);
     clearResults();
 
+    // With the DPI bypass running, the engines tunnel through it too (null env
+    // inherits ours, i.e. a direct search).
+    var engine_env = @import("dpi_bypass.zig").engineEnv(allocator);
+    defer if (engine_env) |*m| m.deinit();
     var argv = std.ArrayListUnmanaged([]const u8).empty;
     defer argv.deinit(allocator);
     // Resolve a real interpreter rather than hardcoding "python3": on Windows
@@ -490,7 +494,8 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
     // Stream fast engines immediately, then stop the fan-out at a firm bound.
     // Without this, one dead scraper kept the whole search marked busy long
     // after APIBay and other API sources had already returned hundreds of rows.
-    argv.append(allocator, "--timeout=6") catch {
+    // Through the DPI bypass sites are slower, so the deadline is longer.
+    argv.append(allocator, @import("dpi_bypass_pure.zig").engineTimeoutArg(engine_env != null)) catch {
         failSearch(my_gen, "Could not prepare torrent search deadline");
         return;
     };
@@ -510,10 +515,6 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
     // Keep incremental results, but put the multi-process Python scraper under
     // a monotonic deadline and a POSIX process group / Windows Job. Advancing
     // the generation wakes a stale worker even while its pipe read is blocked.
-    // With the DPI bypass running, the engines tunnel through it too (null env
-    // inherits ours, i.e. a direct search).
-    var engine_env = @import("dpi_bypass.zig").engineEnv(allocator);
-    defer if (engine_env) |*m| m.deinit();
     var process = bounded_process.StreamProcess.init(argv.items, .{
         .timeout_ms = 180 * 1000,
         .terminate_grace_ms = 500,
