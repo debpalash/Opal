@@ -59,8 +59,9 @@ output is at the M2 Air's GPU limit (45–55 fps under load); 1080p output holds
 OpenGL renderer cannot share, so decoding uses `videotoolbox-copy`; on a GL
 core context mpv also enables heavier HDR processing and measured no faster.
 
-Windows keeps the software path by default because switching would move the
-whole UI from Direct3D to OpenGL; `OPAL_VIDEO_RENDER=gpu` opts in and
+Linux defaults to software video rendering after a crash in Mesa during mpv
+OpenGL rendering. Windows also defaults to software video rendering to preserve
+SDL’s Direct3D UI renderer. `OPAL_VIDEO_RENDER=gpu` opts in and
 `OPAL_VIDEO_RENDER=sw` forces software anywhere. Any failure (non-OpenGL
 renderer, no shared context, mpv refusing the context) falls back to the
 software path. Frame OCR takes the decoded frame from mpv's
