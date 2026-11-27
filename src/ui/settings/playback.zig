@@ -22,8 +22,12 @@ pub fn renderPlaybackTab() void {
     // ── Video Processing ──
     sectionHeader("Video Processing", "GPU acceleration and image quality", 20, @src());
 
-    // HW Decode — neutral toggle row; applies mpv option on change.
-    {
+    // HW Decode — neutral toggle row; applies mpv option on change. Android
+    // always decodes in software (hwdec_feedback_pure.optionValue, #229), so
+    // the toggle would do nothing there.
+    if (comptime @import("builtin").abi.isAndroid()) {
+        components.bodyText(@src(), "Hardware decoding is off on Android: the player decodes in software.", theme.colors.text_secondary);
+    } else {
         const before = state.app.hwdec_enabled;
         components.toggleRow(@src(), "Hardware Decoding", "GPU video decode (auto)", &state.app.hwdec_enabled);
         if (state.app.hwdec_enabled != before) {

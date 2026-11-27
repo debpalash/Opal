@@ -9,20 +9,22 @@ pub fn shouldNotify(enabled: bool, current: ?[]const u8, width: i64, height: i64
     return std.mem.eql(u8, value, "no");
 }
 
-/// mpv `hwdec` value. Opal renders through libmpv's render API, so on Android
-/// direct `mediacodec` (auto's pick) fails with "Both surface and native_window
-/// are NULL" and nothing plays; `mediacodec-copy` decodes in hardware and copies
-/// frames back. `at_init` keeps desktop's start-up `auto-safe` vs the settings
-/// toggle's `auto` exactly as before.
+/// mpv `hwdec` value. Android always decodes in software. Opal renders through
+/// libmpv's render API, which has no surface, so direct `mediacodec` (auto's
+/// pick) cannot output frames, and `mediacodec-copy` can block forever inside
+/// MediaCodec.dequeueOutputBuffer on mpv's core thread. The UI thread then
+/// waits on mpv's core lock, the app stops responding and Android kills it:
+/// issue #229 ("opening any file quits the app", Android 16), reproduced on an
+/// API 36 emulator, where software decoding played the same file. `at_init`
+/// keeps desktop's start-up `auto-safe` vs the settings toggle's `auto`.
 pub fn optionValue(enabled: bool, android: bool, at_init: bool) [:0]const u8 {
-    if (!enabled) return "no";
-    if (android) return "mediacodec-copy";
+    if (android or !enabled) return "no";
     return if (at_init) "auto-safe" else "auto";
 }
 
-test "Android hwdec uses mediacodec-copy (render API has no surface)" {
-    try std.testing.expectEqualStrings("mediacodec-copy", optionValue(true, true, true));
-    try std.testing.expectEqualStrings("mediacodec-copy", optionValue(true, true, false));
+test "Android decodes in software: mediacodec-copy hung the player (#229)" {
+    try std.testing.expectEqualStrings("no", optionValue(true, true, true));
+    try std.testing.expectEqualStrings("no", optionValue(true, true, false));
     try std.testing.expectEqualStrings("no", optionValue(false, true, true));
     try std.testing.expectEqualStrings("auto-safe", optionValue(true, false, true));
     try std.testing.expectEqualStrings("auto", optionValue(true, false, false));
