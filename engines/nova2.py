@@ -33,6 +33,7 @@
 
 from __future__ import annotations
 
+import faulthandler
 import importlib
 import os
 import pathlib
@@ -241,6 +242,10 @@ def run_search(search_params: tuple[type[Engine], str, Category, EngineModuleNam
         return False
 
 
+# Seconds past --timeout before the GIL-free watchdog ends a stuck search.
+DEADLINE_GRACE_S = 3.0
+
+
 def run_parallel(params, workers: int, deadline: Optional[float], runner=run_search) -> bool:
     """Run search jobs using the pool compatible with the calling host.
 
@@ -256,6 +261,13 @@ def run_parallel(params, workers: int, deadline: Optional[float], runner=run_sea
         # BrokenPipeError and Opal scans zero rows. concurrent.futures is
         # genuinely thread-only (multiprocessing.pool.ThreadPool is not on
         # Python 3.14), and these engines are network-bound.
+        # Hard backstop for the deadline below. wait() runs on this thread and
+        # needs the GIL to wake; an engine stuck inside one long C call (a
+        # backtracking `re` search over a changed page) holds it, so the
+        # os._exit never ran and the search hung for minutes. faulthandler's
+        # watchdog is a C thread that needs no GIL: it prints every stack
+        # (naming the stuck engine) to stderr, then exits.
+        faulthandler.dump_traceback_later(deadline + DEADLINE_GRACE_S, exit=True)
         executor = ThreadPoolExecutor(max_workers=workers,
                                       thread_name_prefix="nova2")
         futures = [executor.submit(runner, p) for p in params]
@@ -271,6 +283,7 @@ def run_parallel(params, workers: int, deadline: Optional[float], runner=run_sea
             sys.stderr.flush()
             os._exit(0)
         executor.shutdown(wait=True)
+        faulthandler.cancel_dump_traceback_later()
         return search_success
 
     with ProcessPool(workers) as pool:
