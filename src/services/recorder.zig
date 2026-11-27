@@ -17,6 +17,7 @@ const Mutex = @import("../core/sync.zig").Mutex;
 
 pub const Job = pure.Job;
 pub const Status = pure.Status;
+pub const Repeat = pure.Repeat;
 
 const Slot = struct {
     used: bool = false,
@@ -89,11 +90,12 @@ pub const ScheduleError = pure.NewJobError || error{Full};
 
 /// Add a recording. `start_s` = when to start (unix seconds; may be now or a
 /// moment in the past for a programme already on air).
-pub fn schedule(name: []const u8, url: []const u8, user_agent: []const u8, referrer: []const u8, start_s: i64, duration_s: u32) ScheduleError!u32 {
+pub fn schedule(name: []const u8, url: []const u8, user_agent: []const u8, referrer: []const u8, start_s: i64, duration_s: u32, repeat: pure.Repeat) ScheduleError!u32 {
     mutex.lock();
     defer mutex.unlock();
     loadLocked();
-    const job = try pure.newJob(next_id, name, url, user_agent, referrer, start_s, duration_s, io.timestamp());
+    var job = try pure.newJob(next_id, name, url, user_agent, referrer, start_s, duration_s, io.timestamp());
+    job.repeat = repeat;
     for (&slots) |*s| {
         if (s.used) continue;
         s.* = .{ .used = true, .job = job };
@@ -103,6 +105,19 @@ pub fn schedule(name: []const u8, url: []const u8, user_agent: []const u8, refer
         return job.id;
     }
     return error.Full;
+}
+
+/// Caller holds `mutex`. A finished job in a series queues its next window as
+/// a new scheduled row (visible, cancellable on its own).
+fn queueNextLocked(job: *const Job, now: i64) void {
+    const next = pure.nextOccurrence(job, next_id, now) orelse return;
+    for (&slots) |*s| {
+        if (s.used) continue;
+        s.* = .{ .used = true, .job = next };
+        next_id += 1;
+        return;
+    }
+    logs.pushLog("warn", "recorder", "Recording list is full: the next window of a series was not scheduled", true);
 }
 
 /// Stop a recording (keeps the captured part) or drop a scheduled one.
@@ -167,6 +182,7 @@ pub fn tick() void {
         switch (pure.actionAt(&s.job, now)) {
             .mark_missed => {
                 s.job.status = .failed;
+                queueNextLocked(&s.job, now);
                 changed = true;
                 logs.pushLog("warn", "recorder", "Missed a scheduled recording: Opal was not running during its window", false);
             },
@@ -215,6 +231,7 @@ fn finishJob(slot: usize, id: u32, status: Status, out: []const u8) void {
     const n = @min(out.len, s.job.out.len);
     @memcpy(s.job.out[0..n], out[0..n]);
     s.job.out_len = n;
+    if (status.finished()) queueNextLocked(&s.job, io.timestamp());
     saveLocked();
 }
 
@@ -259,14 +276,16 @@ fn worker(slot: usize, id: u32) void {
         .cancel_flag = &slots[slot].cancel,
     });
     var exit_ok = false;
+    var window_over = false;
     if (process.start()) |_| {
         const r = process.finish();
         exit_ok = r.ok();
+        window_over = r.timed_out;
     } else |_| {
         logs.pushLog("error", "recorder", "Could not start ffmpeg for a recording (is ffmpeg installed?)", true);
     }
     const bytes: u64 = if (io.cwdStatFile(out)) |st| st.size else |_| 0;
-    const status = pure.outcome(slots[slot].cancel.load(.acquire), exit_ok, bytes);
+    const status = pure.outcome(slots[slot].cancel.load(.acquire), exit_ok, window_over, bytes);
     finishJob(slot, id, status, out);
     logs.pushLog(if (status == .done) "info" else "warn", "recorder", std.fmt.bufPrint(&msg_buf, "Recording {s}: {s}", .{ job.nameSlice(), status.label() }) catch "Recording finished", status != .done);
     state.wakeUi();

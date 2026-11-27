@@ -72,7 +72,73 @@ function renderAi(d){
 // in this browser's own time zone (DST-correct via Date).
 let tvOffset = 0, tvTotal = 0, tvQuery = '', tvView = 'channels';
 let tvGeneration = 0, tvLoading = false;
-function loadTv(){ loadTvGuide(); if (!$('tv-results').children.length) runTv(true); }
+function loadTv(){ loadTvGuide(); loadTvRecordings(); if (!$('tv-results').children.length) runTv(true); }
+
+// ── Recordings (#240) ── scheduled on the Opal host, which runs ffmpeg and
+// saves to its Recordings folder. Listing is open; scheduling, cancelling and
+// removing are host-admin routes (a plain session gets 403).
+const TV_REC_LABEL = {scheduled:'Scheduled', recording:'Recording', done:'Recorded', failed:'Failed', cancelled:'Cancelled'};
+async function loadTvRecordings(){
+  let d;
+  try { d = await api('/livetv/recordings'); } catch { return; }
+  const list = Array.isArray(d?.recordings) ? d.recordings : [];
+  const box = $('tv-recordings');
+  if (!list.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="hint">Recordings</div>` + list.map(r => `
+    <div class="result tv-rec-row">
+      <div class="t">${esc(r.name)}</div>
+      <div class="m">
+        <span class="src">${esc(TV_REC_LABEL[r.status] || r.status)}</span>
+        <span>${esc(tvDayClock(r.start))} – ${esc(tvClock(r.end))}</span>
+        ${r.repeat && r.repeat !== 'none' ? `<span>${r.repeat === 'daily' ? 'Daily' : 'Weekly'}</span>` : ''}
+        ${r.file ? `<span>${esc(r.file)}</span>` : ''}
+        ${r.status === 'scheduled' || r.status === 'recording'
+          ? `<button data-tv-rec-act="cancel" data-id="${r.id}">${r.status === 'recording' ? 'Stop' : 'Cancel'}</button>`
+          : `<button data-tv-rec-act="remove" data-id="${r.id}">Remove</button>`}
+      </div>
+    </div>`).join('');
+  box.querySelectorAll('[data-tv-rec-act]').forEach(button => {
+    button.onclick = async () => {
+      try { await apiFormMutation('/livetv/recordings/' + button.dataset.tvRecAct, {id:button.dataset.id}); }
+      catch (e) { toast(e?.status === 403 ? 'Only the Opal host admin can change recordings' : 'Could not update the recording'); }
+      loadTvRecordings();
+    };
+  });
+}
+
+// Inline "Record" form under a channel row. Guide-aware: the programme on
+// air (rest of it) or the next one; else a start offset and a length.
+function openTvRecordForm(row, channel){
+  const old = row.querySelector('.tv-rec-form');
+  if (old) { old.remove(); return; }
+  const now = Math.floor(Date.now() / 1000);
+  const options = [];
+  if (channel.now) options.push({label:'This programme: ' + channel.now.title, start:now, duration:Math.max(60, channel.now.stop - now)});
+  if (channel.next) options.push({label:'Next: ' + channel.next.title + ' (' + tvDayClock(channel.next.start) + ')', start:channel.next.start, duration:Math.max(60, channel.next.stop - channel.next.start)});
+  [['Now', 0], ['In 15 min', 900], ['In 30 min', 1800], ['In 1 h', 3600], ['In 2 h', 7200]]
+    .forEach(([label, offset]) => options.push({label, start:now + offset, duration:0}));
+  const form = document.createElement('div');
+  form.className = 'm tv-rec-form';
+  form.innerHTML = `
+    <select aria-label="When">${options.map((o, i) => `<option value="${i}">${esc(o.label)}</option>`).join('')}</select>
+    <select aria-label="Length">${[[1800,'30 min'],[3600,'1 h'],[7200,'2 h'],[10800,'3 h'],[14400,'4 h']].map(([v, l]) => `<option value="${v}"${v === 3600 ? ' selected' : ''}>${l}</option>`).join('')}</select>
+    <select aria-label="Repeat"><option value="none">Once</option><option value="daily">Daily</option><option value="weekly">Weekly</option></select>
+    <button class="play">Schedule</button>`;
+  const [when, length, repeat] = form.querySelectorAll('select');
+  const syncLength = () => { length.disabled = options[when.value].duration > 0; };
+  when.onchange = syncLength; syncLength();
+  form.querySelector('button').onclick = async () => {
+    const o = options[when.value];
+    try {
+      await apiFormMutation('/livetv/recordings/schedule', {url:channel.url, start:String(o.start),
+        duration:String(o.duration || Number(length.value)), repeat:repeat.value});
+      form.remove(); toast('Recording scheduled'); loadTvRecordings();
+    } catch (e) {
+      toast(e?.status === 403 ? 'Only the Opal host admin can schedule recordings' : (e?.message || 'Could not schedule the recording'));
+    }
+  };
+  row.appendChild(form);
+}
 $('tv-go').onclick = () => runTv(true);
 $('tv-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runTv(true); $('tv-q').blur(); } });
 $('tv-more').onclick = () => runTv(false);
@@ -163,6 +229,7 @@ function appendTv(chans){
         <button class="tv-fav" aria-pressed="${c.favorite ? 'true' : 'false'}" data-tv-fav="${encodeURIComponent(c.url)}">${c.favorite ? 'Unstar' : 'Star'}</button>
         <button class="tv-details" data-channel="${encodeURIComponent(JSON.stringify(c))}">Details</button>
         <button class="queue-btn" data-tv-queue="${encodeURIComponent(c.url)}" data-name="${esc(c.name)}">Queue</button>
+        <button class="tv-rec" data-channel="${encodeURIComponent(JSON.stringify(c))}">Record</button>
         <button class="play" data-destination-verb="Watch" data-url="${encodeURIComponent(c.url)}" data-name="${esc(c.name)}">${destinationActionLabel('Watch')}</button>
       </div>
       ${tvNowNextHtml(c)}
@@ -189,6 +256,10 @@ function appendTv(chans){
   $('tv-results').querySelectorAll('[data-tv-queue]:not([data-wired])').forEach(button => {
     button.setAttribute('data-wired', '1');
     button.onclick = () => queueMedia(decodeURIComponent(button.dataset.tvQueue), button.dataset.name || '', button);
+  });
+  $('tv-results').querySelectorAll('.tv-rec:not([data-wired])').forEach(button => {
+    button.setAttribute('data-wired', '1');
+    button.onclick = () => openTvRecordForm(button.closest('.result'), JSON.parse(decodeURIComponent(button.dataset.channel)));
   });
   $('tv-results').querySelectorAll('.tv-details:not([data-wired])').forEach(button => {
     button.setAttribute('data-wired', '1');

@@ -479,3 +479,37 @@ def test_livetv_recording():
     if bad:
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "channel + period → ffmpeg -c copy to Recordings/; EPG now/next shortcuts; persisted, cancellable"
+
+
+@test("Live TV recording: repeats, JSON API, headless and web UI (#240 follow-up)", "Video")
+def test_livetv_recording_api_repeat():
+    pure = _src("src/services/recorder_pure.zig")
+    svc = _src("src/services/recorder.zig")
+    api = _src("src/services/remote_livetv_guide_api.zig")
+    access = _src("src/services/access_pure.zig")
+    headless = _src("src/headless.zig")
+    native = _src("src/ui/recordings_ui.zig")
+    web = _src("web/js/discovery.js")
+    html = _src("web/index.html")
+    checks = {
+        "repeat model + tests": "pub const Repeat = enum" in pure and "pub fn nextOccurrence(" in pure
+            and 'test "a series schedules its next window and skips ones missed while closed"' in pure
+            and 'test "repeat survives the job list; lines from before repeats still load"' in pure,
+        "series queues its next window": "queueNextLocked(" in svc and "pure.nextOccurrence(" in svc,
+        "API routes": all(r in api for r in ('"/livetv/recordings"', '"/livetv/recordings/schedule"', '"/livetv/recordings/cancel"'))
+            and "catalogRow(stream, query, body)" in _between(api, "fn scheduleRecording(", "fn recordingAction("),
+        "API JSON is pure, tested, never leaks host paths": "pub fn writeListJson(" in pure
+            and "std.fs.path.basename(job.outSlice())" in pure
+            and 'test "recording list JSON parses, escapes names and hides host paths"' in pure
+            and "writeListJson(&w, jobs[0..n]" in api,
+        "writes are host-admin": '"/livetv/recordings/schedule", "/livetv/recordings/cancel", "/livetv/recordings/remove"' in access
+            and 'test "recording live TV is host-admin; listing recordings is open"' in access,
+        "headless runs the scheduler": 'services/recorder.zig").tick()' in headless,
+        "native repeat choice": "REPEAT_LABELS" in native and "REPEATS[repeat_choice]" in native,
+        "web record form + list": "function openTvRecordForm(" in web and "function loadTvRecordings(" in web
+            and "/livetv/recordings/schedule" in web and 'id="tv-recordings"' in html,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "daily/weekly series; GET/POST /api/livetv/recordings (writes host-admin); headless tick; web Record form"

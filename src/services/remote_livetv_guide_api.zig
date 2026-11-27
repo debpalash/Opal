@@ -11,6 +11,10 @@
 //!   POST /livetv/map                   channel=<name> [chan_id=] guide_id= | key= (remove)
 //!   POST /livetv/favorite              url=<catalog stream url>
 //!   POST /livetv/play                  url=<catalog stream url>
+//!   GET  /livetv/recordings            scheduled / running / finished recordings
+//!   POST /livetv/recordings/schedule   url= start=<unix s> duration=<s> [repeat=none|daily|weekly] (host admin)
+//!   POST /livetv/recordings/cancel     id=   (host admin)
+//!   POST /livetv/recordings/remove     id=   (host admin)
 //!
 //! Import/refresh/clear make the host fetch a URL or read a file, so
 //! access_pure lists them as host-administration routes. Play and favourite
@@ -84,7 +88,88 @@ pub fn handle(stream: std.Io.net.Stream, method: []const u8, path: []const u8, q
         if (wire.requireMethod(stream, method, "POST")) play(stream, query, body);
         return true;
     }
+    if (std.mem.eql(u8, path, "/livetv/recordings")) {
+        if (wire.requireMethod(stream, method, "GET")) listRecordings(stream);
+        return true;
+    }
+    if (std.mem.eql(u8, path, "/livetv/recordings/schedule")) {
+        if (wire.requireMethod(stream, method, "POST")) scheduleRecording(stream, query, body);
+        return true;
+    }
+    if (std.mem.eql(u8, path, "/livetv/recordings/cancel") or std.mem.eql(u8, path, "/livetv/recordings/remove")) {
+        if (wire.requireMethod(stream, method, "POST")) recordingAction(stream, query, body, std.mem.endsWith(u8, path, "/cancel"));
+        return true;
+    }
     return false;
+}
+
+// ── Recordings (#240) ──
+
+/// {"ffmpeg":bool,"recordings":[{id,status,name,start,end,repeat,file}]}.
+/// `file` is the recording's file name, never the host's directory.
+fn listRecordings(stream: std.Io.net.Stream) void {
+    const recorder = @import("recorder.zig");
+    var jobs: [32]recorder.Job = undefined;
+    const n = recorder.snapshot(&jobs);
+    const buf = alloc.alloc(u8, 64 * 1024) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(buf);
+    var w = std.Io.Writer.fixed(buf);
+    @import("recorder_pure.zig").writeListJson(&w, jobs[0..n], recorder.ffmpegAvailable()) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"recording list too large\"}");
+        return;
+    };
+    wire.sendJson(stream, buf[0..w.end]);
+}
+
+fn scheduleRecording(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {
+    const recorder = @import("recorder.zig");
+    const row = catalogRow(stream, query, body) orelse return;
+    var nb: [32]u8 = undefined;
+    const start = std.fmt.parseInt(i64, wire.formParam(body, query, "start", &nb) orelse "", 10) catch io.timestamp();
+    var db: [32]u8 = undefined;
+    const duration = std.fmt.parseInt(u32, wire.formParam(body, query, "duration", &db) orelse "", 10) catch {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"duration (seconds) required\"}");
+        return;
+    };
+    var rb: [16]u8 = undefined;
+    const repeat = std.meta.stringToEnum(recorder.Repeat, wire.formParam(body, query, "repeat", &rb) orelse "none") orelse {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"repeat must be none, daily or weekly\"}");
+        return;
+    };
+    const id = recorder.schedule(
+        row.name[0..row.name_len],
+        row.url[0..row.url_len],
+        row.user_agent[0..row.user_agent_len],
+        row.referrer[0..row.referrer_len],
+        start,
+        duration,
+        repeat,
+    ) catch |err| {
+        wire.sendJsonStatus(stream, "400 Bad Request", switch (err) {
+            error.InvalidStream => "{\"error\":\"this channel's stream cannot be recorded\"}",
+            error.InvalidDuration => "{\"error\":\"duration must be between 60 seconds and 12 hours\"}",
+            error.AlreadyOver => "{\"error\":\"that window has already ended\"}",
+            error.TooLong => "{\"error\":\"channel details are too long to save\"}",
+            error.Full => "{\"error\":\"too many recordings; remove finished ones first\"}",
+        });
+        return;
+    };
+    var out: [64]u8 = undefined;
+    wire.sendJson(stream, std.fmt.bufPrint(&out, "{{\"ok\":true,\"id\":{d}}}", .{id}) catch "{\"ok\":true}");
+}
+
+fn recordingAction(stream: std.Io.net.Stream, query: []const u8, body: []const u8, cancel: bool) void {
+    const recorder = @import("recorder.zig");
+    var ib: [16]u8 = undefined;
+    const id = std.fmt.parseInt(u32, wire.formParam(body, query, "id", &ib) orelse "", 10) catch {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"id required\"}");
+        return;
+    };
+    if (cancel) recorder.cancel(id) else recorder.remove(id);
+    wire.sendJson(stream, "{\"ok\":true}");
 }
 
 /// Live TV / IPTV: page the SQLite channel catalog.
@@ -136,7 +221,7 @@ fn apiLiveTv(stream: std.Io.net.Stream, query: []const u8) void {
     for (rows[0..n], 0..) |ch, i| {
         if (i > 0) w.writeAll(",") catch return;
         const fields = [_]struct { []const u8, []const u8 }{
-            .{ "name", ch.name[0..ch.name_len] },         .{ "url", ch.url[0..ch.url_len] },
+            .{ "name", ch.name[0..ch.name_len] },          .{ "url", ch.url[0..ch.url_len] },
             .{ "quality", ch.quality[0..ch.quality_len] }, .{ "logo", ch.logo[0..ch.logo_len] },
             .{ "country", ch.country[0..ch.country_len] }, .{ "category", ch.category[0..ch.category_len] },
             .{ "chan_id", ch.chan_id[0..ch.chan_id_len] },
