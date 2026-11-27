@@ -34,7 +34,7 @@ const steps = [_]Step{
     .{ .name = "tv_episodes", .enter = enterTvDetail, .ready = seasonsLoaded, .timeout_ms = 25_000 },
     .{ .name = "tv_play", .enter = enterTvPlay, .ready = mediaPlaying, .timeout_ms = 120_000 },
     .{ .name = "find_sources", .enter = enterFindSources, .ready = sourcesFound, .timeout_ms = 45_000 },
-    .{ .name = "movie_torrent", .enter = enterMovieTorrent, .ready = torrentPlaying, .timeout_ms = 90_000 },
+    .{ .name = "movie_torrent", .enter = enterMovieTorrent, .ready = movieTorrentPlaying, .timeout_ms = 90_000 },
     .{ .name = "downloads", .enter = enterDownloads, .ready = always, .timeout_ms = 1_000 },
     .{ .name = "comics", .enter = enterComics, .ready = comicCovers, .timeout_ms = 25_000 },
     .{ .name = "settings", .enter = enterSettings, .ready = always, .timeout_ms = 1_000 },
@@ -155,7 +155,8 @@ fn detail(name: []const u8, buf: []u8) []const u8 {
         var gate_buf: [200]u8 = undefined;
         return std.fmt.bufPrint(buf, "\"{s}\" pos={d:.1} dur={d:.0} ready={} loading={} cache_pause={} torrent={d} {s}url={s} {s}", .{ if (std.mem.eql(u8, name, "vq_play")) t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)] else "Breaking Bad S01E01", p.last_seen_pos, p.cached_duration, p.torrent_is_ready, p.is_loading, p.cached_paused_for_cache, p.current_torrent_id, gateInfo(p, &gate_buf), p.current_url[0..@min(p.current_url_len, 48)], std.mem.sliceTo(&st, 0) }) catch "";
     }
-    if (std.mem.eql(u8, name, "movie_torrent") and movie_pick_len == 0) return "no magnet among the movie's sources";
+    if (std.mem.eql(u8, name, "movie_torrent") and movie_pick_len == 0)
+        return std.fmt.bufPrint(buf, "no magnet for \"{s}\" among the movie's sources", .{movie_title[0..movie_title_len]}) catch "no magnet for the movie among its sources";
     if ((std.mem.eql(u8, name, "player_torrent") or std.mem.eql(u8, name, "movie_torrent")) and state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
         var st: [256]u8 = undefined;
@@ -263,18 +264,24 @@ fn enterFindSources() void {
     const tmdb = @import("../services/tmdb.zig");
     tmdb.closeTvDetail();
     state.app.tmdb.media_filter = .movie;
-    // A movie card's "Find sources" runs the universal search for it.
-    if (firstOfType(false)) |item| tmdb.openOrSearch(item) else {
-        // Same as typing in the omnibox and pressing Enter.
-        @import("../services/search.zig").submitQuery("Night of the Living Dead 1968");
-        state.app.router.navigate(.search);
-    }
+    // A fixed public-domain movie, not the first trending card: a brand-new
+    // trending film often has no torrent release yet (2026-11-27: "The
+    // Bodyguard"), which made movie_torrent fail on the day's catalog rather
+    // than on Opal. Same as typing in the omnibox and pressing Enter.
+    const title = "Night of the Living Dead";
+    movie_title_len = title.len;
+    @memcpy(movie_title[0..title.len], title);
+    @import("../services/search.zig").submitQuery("Night of the Living Dead 1968");
+    state.app.router.navigate(.search);
 }
 fn sourcesFound() bool {
     return @import("../services/resolver.zig").resultCount() > 0;
 }
 /// "Find sources" → play: the best-seeded magnet among the movie's sources,
 /// through the same resolver play path a source row's Play button uses.
+/// The movie find_sources searched for; movie_torrent only plays a release of it.
+var movie_title: [128]u8 = undefined;
+var movie_title_len: usize = 0;
 var movie_pick: [96]u8 = undefined;
 var movie_pick_len: usize = 0;
 var movie_pick_seeds: u16 = 0;
@@ -286,6 +293,11 @@ fn enterMovieTorrent() void {
     for (resolver.results[0..@min(count, resolver.results.len)]) |item| {
         const url = item.url[0..item.url_len];
         if (!std.mem.startsWith(u8, url, "magnet:?")) continue;
+        // A user plays a release of the movie they searched, not whichever
+        // row has the most seeds: "the bodyguard 2026" picked an unrelated
+        // 4 GB "...Brides Bodyguard (Life Selector)" upload that never started.
+        const parsed = @import("../services/release_name_pure.zig").parse(item.name[0..item.name_len]);
+        if (!std.ascii.eqlIgnoreCase(parsed.title[0..parsed.title_len], movie_title[0..movie_title_len])) continue;
         if (best == null or item.seeds > best.?.seeds) best = item;
     }
     resolver.results_mutex.unlock();
@@ -294,6 +306,16 @@ fn enterMovieTorrent() void {
     @memcpy(movie_pick[0..movie_pick_len], item.name[0..movie_pick_len]);
     movie_pick_seeds = item.seeds;
     resolver.playResolvedItem(&item);
+}
+/// find_sources passes on the first result, which is rarely a torrent: the
+/// native APIBay index answers a new query in ~20 s. Keep looking for a
+/// magnet until one arrives instead of failing on the first empty pick.
+fn movieTorrentPlaying() bool {
+    if (movie_pick_len == 0) {
+        enterMovieTorrent();
+        return false;
+    }
+    return torrentPlaying();
 }
 fn torrentPlaying() bool {
     if (state.app.active_player_idx >= state.app.players.items.len) return false;

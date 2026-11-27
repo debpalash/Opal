@@ -1715,3 +1715,23 @@ def test_docker_fetch_retry():
             build = text.find("zig build", build + 1)
         assert build > fetch, rel + " must fetch before the real build"
     return "pass", "Both Docker builds fetch dependencies with 5 retries before compiling"
+
+
+@test("iOS walk survives a slow simulator screenshot and keeps its evidence", "Build")
+def test_ios_walk_screenshot_timeout():
+    # REGRESSION: one `simctl io screenshot` past its 20s timeout raised out of
+    # the step loop, aborting the walk before console.log/report.json were
+    # written — a busy simulator (another tool driving it, first-boot
+    # migration) lost every later step and all of the evidence.
+    src = _src("scripts/ios-uitest.py")
+    loop = _between(src, "if 'OPAL_UITEST_SHOT ' in line:", "if 'OPAL_UITEST_DONE' in line:")
+    fin = _between(src, "    finally:", "    failed = [")
+    checks = {
+        "screenshot timeout caught": "except subprocess.TimeoutExpired" in loop,
+        "console.log written in finally": "(out / 'console.log').write_text" in fin,
+        "report.json written in finally": "(out / 'report.json').write_text" in fin,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "screenshot timeouts warn and continue; transcript + report always written"
