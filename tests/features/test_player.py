@@ -2179,3 +2179,24 @@ def test_gpu_video_path():
     ocr = _src("src/services/frame_ocr.zig")
     assert '"screenshot-raw", "video", "rgba"' in ocr and "p.gpu != null" in ocr, "frame OCR must work without CPU frame buffers"
     return "pass", "OpenGL renderer hint keeps batching; GPU worker publishes finished slots; software path remains the fallback"
+
+
+@test("A load after a finished video starts playing", "Player")
+def test_load_after_eof_unpauses():
+    # REGRESSION: mpv parks paused at EOF (keep-open=always) and loadfile kept
+    # that pause; only provider/audio loads cleared it. On the iOS walk Sintel
+    # downloaded fully but sat at 0:00 behind a Play button for 60 s because a
+    # 12 s clip had just ended.
+    player = _src("src/player/player.zig")
+    pure = _src("src/player/playback_load_pure.zig")
+    loaded = _between(player, "MPV_EVENT_FILE_LOADED) {", "p.youtube_default_retry_pending = false;")
+    checks = {
+        "pure rule + regression test": "pub fn unpauseOnFileLoaded(" in pure
+            and 'test "a load after EOF starts playing; a restored session keeps its pause"' in pure,
+        "FILE_LOADED applies it, sparing restored sessions": "playback_load.unpauseOnFileLoaded(p.restore_session_position != null)" in loaded
+            and '"pause", "no"' in loaded,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "every load clears mpv's EOF pause except a restored session"

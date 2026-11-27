@@ -208,7 +208,12 @@ printf "%b╚══════════════════════�
 build_and_launch
 
 # ── Watch loop (per-watcher) ────────────────────────────────────
-debounce() { sleep "$(awk "BEGIN{printf \"%.3f\", $DEBOUNCE_MS/1000}")"; }
+# Seconds, computed once. Single-quoted awk program and </dev/null on purpose:
+# macOS /bin/bash 3.2 brace-expanded `{printf "%.3f", …}` inside the old
+# double-quoted $(awk "…"), leaving awk a non-BEGIN program that read stdin —
+# the fswatch pipe — so the loop hung after the first change and never rebuilt.
+DEBOUNCE_S=$(awk -v ms="$DEBOUNCE_MS" 'BEGIN { printf "%.3f", ms / 1000 }' </dev/null)
+debounce() { sleep "$DEBOUNCE_S"; }
 
 case "$WATCHER" in
     fswatch)
@@ -233,7 +238,10 @@ case "$WATCHER" in
         done
         ;;
     watchexec)
-        # Hand off process management to watchexec.
+        # Hand off process management to watchexec. Same incremental-first
+        # policy as run_build: a bailed incremental build retries plainly.
+        WATCH_BUILD="${ZIG:-zig} build $OPTIMIZE"
+        (( INCREMENTAL )) && WATCH_BUILD="{ $WATCH_BUILD -fincremental || $WATCH_BUILD; }"
         kill_running
         log "watchexec will manage the child process"
         exec watchexec \
@@ -242,6 +250,6 @@ case "$WATCHER" in
             --ignore '*.swp' --ignore '*~' \
             --watch src --watch tools --watch build.zig --watch build.zig.zon \
             --on-busy-update restart --stop-signal SIGTERM \
-            -- bash -c "${ZIG:-zig} build $OPTIMIZE && exec \"\$(./scripts/dev-app.sh 2>/dev/null || echo $BIN)\" ${PASSTHROUGH[*]:-}"
+            -- bash -c "$WATCH_BUILD && exec \"\$(./scripts/dev-app.sh 2>/dev/null || echo $BIN)\" ${PASSTHROUGH[*]:-}"
         ;;
 esac

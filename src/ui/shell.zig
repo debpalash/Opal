@@ -1170,7 +1170,7 @@ pub fn renderSidebar(layout: sidebar_layout.Layout) void {
         if (sidebarButton("Agents", icons.tvg.lucide.bot, state.app.router.current == .agents, layout.expanded, 8600)) state.app.router.navigate(.agents);
     }
     const routes = [_]Route{ .home, .search, .watching };
-    const labels = [_][]const u8{ "Home", "All content", "Watching" };
+    const labels = [_][]const u8{ i18n.t(.nav_home), "All content", i18n.t(.nav_watching) };
     const glyphs = [_][]const u8{ icons.tvg.lucide.house, icons.tvg.lucide.search, icons.tvg.lucide.tv };
     for (routes, labels, glyphs, 0..) |route, label, glyph, i| {
         if (sidebarButton(label, glyph, if (route == .search) allContentActive() else state.app.router.current == route, layout.expanded, 8610 + i)) {
@@ -1178,7 +1178,7 @@ pub fn renderSidebar(layout: sidebar_layout.Layout) void {
             if (route == .home) @import("home.zig").showOverview();
             state.app.router.navigate(route);
         }
-        if (route == .home and sidebarButton("Browser", iconForTab(.Web), browseSourceActive(.Web), layout.expanded, 8609)) state.navigateToTabNow(.Web);
+        if (route == .home and sidebarButton(i18n.t(.nav_browser), iconForTab(.Web), browseSourceActive(.Web), layout.expanded, 8609)) state.navigateToTabNow(.Web);
     }
     sidebarSection("Watch", &WATCH_SOURCES, layout.expanded, 8700);
     sidebarSection("Listen", &LISTEN_SOURCES, layout.expanded, 8800);
@@ -1340,7 +1340,7 @@ fn browseSourceSelect(dense: bool) ?state.DrawerTab {
         });
         defer choices.deinit();
         const routes = [_]Route{ .agents, .home, .search, .watching };
-        const labels = [_][]const u8{ "Agents", "Home", "All content", "Watching" };
+        const labels = [_][]const u8{ "Agents", i18n.t(.nav_home), "All content", i18n.t(.nav_watching) };
         for (routes, labels, 0..) |route, label, i| {
             if (dvui.menuItemLabel(@src(), label, .{}, .{
                 .id_extra = 8050 + i,
@@ -1354,7 +1354,7 @@ fn browseSourceSelect(dense: bool) ?state.DrawerTab {
                 if (route == .home) @import("home.zig").showOverview();
                 state.app.router.navigate(route);
             }
-            if (route == .home and dvui.menuItemLabel(@src(), "Browser", .{}, .{
+            if (route == .home and dvui.menuItemLabel(@src(), i18n.t(.nav_browser), .{}, .{
                 .id_extra = 8049,
                 .expand = .horizontal,
                 .color_text = @import("color_compat.zig").wrap(if (browseSourceActive(.Web)) theme.colors.accent else theme.colors.text_primary),
@@ -1381,17 +1381,17 @@ fn browseSourceSelect(dense: bool) ?state.DrawerTab {
 fn navigationMenuItem(selected: state.DrawerTab, dense: bool) ?dvui.Rect.Natural {
     const route = state.app.router.current;
     const label = if (route == .browse) tabLabel(selected) else switch (route) {
-        .home => "Home",
+        .home => i18n.t(.nav_home),
         .search => search_mod.currentScope().label(),
-        .watching => "Watching",
-        .downloads => "Downloads",
-        .queue => "Queue",
-        .history => "History",
+        .watching => i18n.t(.nav_watching),
+        .downloads => i18n.t(.nav_downloads),
+        .queue => i18n.t(.nav_queue),
+        .history => i18n.t(.nav_history),
         .player => "Now playing",
         .assistant => "Assistant",
-        .settings => "Settings",
-        .plugins => "Plugins",
-        .system => "Logs",
+        .settings => i18n.t(.nav_settings),
+        .plugins => i18n.t(.nav_plugins),
+        .system => i18n.t(.nav_logs),
         .agents => "Agents",
         .connect => "Connect",
         .browse => unreachable,
@@ -1490,33 +1490,36 @@ fn browseSourceMenuItem(source: state.DrawerTab, id: usize, submenu: bool, activ
     return item.activeRect();
 }
 
+/// Sidebar/header name of a source. Keys whose English text matches exactly go
+/// through i18n, so the native shell follows the UI language like the drawer;
+/// the rest ("Asian Drama", "Assistant", brand names) stay literal.
 fn tabLabel(t: state.DrawerTab) []const u8 {
     return switch (t) {
-        .Search => "Search",
-        .Downloads => "Downloads",
-        .TMDB => "Movies & TV",
+        .Search => i18n.t(.nav_search),
+        .Downloads => i18n.t(.nav_downloads),
+        .TMDB => i18n.t(.nav_movies_tv),
         .YouTube => "YouTube",
-        .Queue => "Queue",
-        .Comics => "Comics",
-        .Novels => "Novels",
-        .Vndb => "Visual Novels",
-        .Web => "Browser",
-        .Anime => "Anime",
+        .Queue => i18n.t(.nav_queue),
+        .Comics => i18n.t(.nav_comics),
+        .Novels => i18n.t(.nav_novels),
+        .Vndb => i18n.t(.nav_visual_novels),
+        .Web => i18n.t(.nav_browser),
+        .Anime => i18n.t(.nav_anime),
         .Drama => "Asian Drama",
-        .Podcasts => "Podcasts",
-        .Radio => "Radio",
-        .Iptv => "Live TV",
-        .Music => "Music",
-        .Wallpapers => "Wallpapers",
-        .History => "History",
+        .Podcasts => i18n.t(.nav_podcasts),
+        .Radio => i18n.t(.nav_radio),
+        .Iptv => i18n.t(.nav_live_tv),
+        .Music => i18n.t(.nav_music),
+        .Wallpapers => i18n.t(.nav_wallpapers),
+        .History => i18n.t(.nav_history),
         .RSS => "RSS",
         .Jellyfin => "Jellyfin",
         .Plex => "Plex",
-        .Audiobooks => "Audiobooks",
+        .Audiobooks => i18n.t(.nav_audiobooks),
         .Opds => "Reading",
-        .Plugins => "Plugins",
-        .Logs => "Logs",
-        .Settings => "Settings",
+        .Plugins => i18n.t(.nav_plugins),
+        .Logs => i18n.t(.nav_logs),
+        .Settings => i18n.t(.nav_settings),
         .AI => "Assistant",
     };
 }

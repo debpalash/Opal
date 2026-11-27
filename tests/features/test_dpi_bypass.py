@@ -80,6 +80,8 @@ def test_dpi_bypass_reaches_engines():
         "StreamProcess forwards env_map": "self.child.env_map = self.options.env_map" in bp,
         "Torrent tab passes engine env": "engineEnv(allocator)" in search and ".env_map = if (engine_env)" in search,
         "universal search passes engine env": "engineEnv(alloc)" in resolver and ".env_map = if (engine_env)" in resolver,
+        "proxied searches get the longer deadline": "pub fn engineTimeoutArg(" in pure
+            and all("engineTimeoutArg(engine_env != null)" in src and '"--timeout=6"' not in src for src in (search, resolver)),
     }
     bad = [k for k, v in checks.items() if not v]
     if bad:

@@ -64,7 +64,7 @@ def test_music():
         "render dispatch": '.Music => @import("../services/music_subsonic.zig").renderContent()' in drawer,
         "grouped under audio": ".Music => .audio" in drawer or "Audiobooks, .Music => .audio" in drawer,
         "rail nav entry": "renderRailTab(.Music" in drawer,
-        "shell label": '.Music => "Music"' in shell,
+        "shell label": ('.Music => "Music"' in shell or '.Music => i18n.t(.nav_music)' in shell),
         "shell icon": ".Music => icons.tvg.lucide.music" in shell,
 
         # ── JioSaavn (public, keyless) as a second source in the Music tab ──

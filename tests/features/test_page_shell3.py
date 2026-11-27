@@ -627,9 +627,42 @@ def test_ui_restore_wiring():
         "TMDB gallery + episode scroll hooked": all(h in _src("src/services/tmdb.zig") for h in (
             "hook(.tmdb_gallery, gallery_si.", "hook(.tv_episodes, tv_episode_si.")),
         "dev.sh marks dev reloads": "export OPAL_DEV_RELOAD=1" in dev and "OPAL_DEV_RELOAD" in glue,
-        "dev.sh incremental with fallback": "-fincremental" in dev and "is_source_error" in dev and "--no-incremental" in dev,
+        "dev.sh incremental with fallback": "-fincremental" in dev and "is_source_error" in dev and "--no-incremental" in dev
+            and '-- bash -c "$WATCH_BUILD && exec' in dev,
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
         return "fail", "UI restore wiring broken: " + ", ".join(missing)
     return "pass", "pure policy tests + capture/restore/scroll hooks + dev.sh reload/incremental wiring"
+
+
+@test("dev.sh debounce never reads the watcher pipe", "Page Shell")
+def test_dev_debounce_returns():
+    # REGRESSION: macOS /bin/bash 3.2 brace-expanded `{printf "%.3f", …}` inside
+    # debounce's double-quoted $(awk "…"); awk got a non-BEGIN program, read
+    # stdin (the fswatch pipe) and blocked, so ./dev.sh never rebuilt after the
+    # first change. Run the shipped lines under /bin/bash with a stdin that
+    # never closes: debounce must return on its own.
+    import shutil
+    dev = _src("dev.sh")
+    lines = [l for l in dev.splitlines() if l.startswith(("DEBOUNCE_S=", "debounce()"))]
+    if len(lines) != 2:
+        return "fail", "dev.sh no longer defines DEBOUNCE_S + debounce() at top level"
+    bash = "/bin/bash" if os.path.exists("/bin/bash") else shutil.which("bash")
+    script = "DEBOUNCE_MS=150\n" + "\n".join(lines) + "\ndebounce\necho DEBOUNCED $DEBOUNCE_S\n"
+    # stdin is a pipe we keep open, exactly like the fswatch pipe.
+    proc = subprocess.Popen([bash, "-c", script], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, text=True)
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        return "fail", "debounce blocked reading an open stdin pipe"
+    finally:
+        proc.stdin.close()
+    out = proc.stdout.read()
+    proc.stdout.close()
+    if "DEBOUNCED 0.150" not in out:
+        return "fail", f"unexpected debounce output: {out!r}"
+    return "pass", f"{bash} debounce returns in 0.15s with the watcher pipe still open"

@@ -159,3 +159,27 @@ def test_addon_index_trust_path():
     if problems:
         return 'fail', '; '.join(problems)
     return 'pass', 'add/install/update reuse the signed path; no trust grants; routes gated'
+
+
+@test("Native page-shell sidebar follows the UI language", "i18n")
+def test_shell_sidebar_localized():
+    # REGRESSION: with LANG unset and Spanish preferred, /api/i18n reported
+    # "es" but the native sidebar stayed English: shell.zig's tabLabel and the
+    # Home/Watching/Browser entries were literals; only the old drawer used i18n.
+    shell = _src("src/ui/shell.zig")
+    en = _src("src/core/locales/en.zig")
+    body = _between(shell, "fn tabLabel(t: state.DrawerTab) []const u8 {", "\n}\n")
+    want = {".TMDB": "nav_movies_tv", ".Downloads": "nav_downloads", ".Comics": "nav_comics",
+            ".Iptv": "nav_live_tv", ".Web": "nav_browser", ".Settings": "nav_settings"}
+    missing = [tab for tab, key in want.items() if f"{tab} => i18n.t(.{key})" not in body]
+    if "i18n.t(.nav_home)" not in shell or "i18n.t(.nav_watching)" not in shell:
+        missing.append("Home/Watching entries")
+    if missing:
+        return "fail", "sidebar labels still literal: " + ", ".join(missing)
+    # English must render exactly as before: every key used keeps its old text.
+    old = {"nav_movies_tv": "Movies & TV", "nav_live_tv": "Live TV", "nav_browser": "Browser",
+           "nav_home": "Home", "nav_watching": "Watching", "nav_visual_novels": "Visual Novels"}
+    drift = [k for k, v in old.items() if f'.{k} = "{v}"' not in en]
+    if drift:
+        return "fail", "English nav text changed: " + ", ".join(drift)
+    return "pass", "tabLabel + Home/Watching/Browser go through i18n; English text unchanged"

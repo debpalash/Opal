@@ -13,6 +13,19 @@ pub const Row = struct {
 };
 
 /// `<base>/q.php?q=<query>&cat=<cat>`; cat 0 = all, 200 = video.
+/// Timeout for one native APIBay query (iOS has no Python engines; this is its
+/// general torrent index). APIBay answers an uncached query slowly server-side:
+/// measured 2026-11-27, DNS+TLS 0.4 s but first byte 20.8 s, then 0.7 s once
+/// cached. At 10 s every new title timed out, so the phone had no torrent
+/// sources. 30 s is the Apple HTTP layer's ceiling.
+pub const FETCH_TIMEOUT_SECS: u32 = 30;
+
+test "native APIBay timeout outlasts an uncached query" {
+    // Regression: 10 s < the measured 20.8 s first byte for a new query.
+    try std.testing.expect(FETCH_TIMEOUT_SECS >= 25);
+    try std.testing.expect(FETCH_TIMEOUT_SECS <= 30); // http_apple clamps to 30
+}
+
 pub fn queryUrl(base: []const u8, query: []const u8, cat: u16, out: []u8) ?[]const u8 {
     var enc: [768]u8 = undefined;
     var n: usize = 0;

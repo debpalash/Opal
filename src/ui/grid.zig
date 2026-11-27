@@ -1518,21 +1518,19 @@ pub fn renderGrid() !void {
                         // empty (no torrent, no media) state gets the library
                         // empty-state with a "Search above" hint.
                         const is_loading_torrent = p.current_torrent_id >= 0;
-                        const placeholder_text = if (is_loading_torrent)
-                            (if (!p.torrent_is_ready)
-                                (if (p.has_metadata) "Buffering first video parts..." else "Loading torrent metadata...")
-                            else
-                                (if (is_audio_only) "Audio stream playing" else "Buffering video stream..."))
-                        else
-                            "Nothing here yet";
+                        const pane_pure = @import("../player/torrent_pane_pure.zig");
+                        const pane = pane_pure.torrentPane(pane_pure.isRefused(p.selected_file_idx), p.torrent_is_ready, p.has_metadata, is_audio_only);
+                        const placeholder_text = if (is_loading_torrent) pane.text else "Nothing here yet";
                         const placeholder_hint: []const u8 = if (is_loading_torrent)
-                            ""
+                            pane.hint
                         else
                             "Search above to find something to watch.";
-                        const placeholder_icon = if (is_loading_torrent)
-                            icons.tvg.lucide.hourglass
+                        const placeholder_icon = if (!is_loading_torrent)
+                            icons.tvg.lucide.library
+                        else if (pane.kind == .refused)
+                            icons.tvg.lucide.@"shield-alert"
                         else
-                            icons.tvg.lucide.library;
+                            icons.tvg.lucide.hourglass;
 
                         // Transparent overlay captures clicks to select this pane
                         // without painting over the centered empty-state widget.
