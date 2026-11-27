@@ -523,6 +523,21 @@ test "constructor parks EOF without implicitly repeating every file" {
 
 /// A provider's play intent survives an early resume seek. Only file readiness
 /// consumes it; a nullable seek position is not a playback-intent latch.
+/// Whether a freshly loaded file should be unpaused. mpv parks paused at EOF
+/// (keep-open=always) and a later loadfile inherits that pause, so after a
+/// video ended the next torrent or video opened frozen at 0:00 behind a Play
+/// button, its data fully downloaded (iOS walk 2026-11-27: Sintel opened
+/// right after a 12 s clip finished). Every load starts playing except a
+/// restored session, which re-applies its own saved pause state.
+pub fn unpauseOnFileLoaded(restoring_session: bool) bool {
+    return !restoring_session;
+}
+
+test "a load after EOF starts playing; a restored session keeps its pause" {
+    try std.testing.expect(unpauseOnFileLoaded(false));
+    try std.testing.expect(!unpauseOnFileLoaded(true));
+}
+
 pub const ProviderStartIntent = struct {
     pending: bool = false,
 
