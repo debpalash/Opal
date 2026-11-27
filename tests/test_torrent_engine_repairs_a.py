@@ -4,6 +4,7 @@ Network-free: every fixture below is a fragment captured from the live provider
 on 2026-11-18 (trimmed, not invented), fed through the shipped engine code.
 """
 import html
+import time
 import importlib
 import json
 from pathlib import Path
@@ -72,6 +73,34 @@ class TorrentEngineRepairsA(unittest.TestCase):
         page = html.unescape(BITSEARCH_CARD).replace('torrent-result-card bg-white', 'bg-white')
         rows, _ = self.run_engine('bitsearch', [page], 'dune')
         self.assertEqual(len(rows), 1)
+
+    # ── bitsearch: swarm counts moved into a nested <span data-swarm-field> ──
+    # The old single 8-group lazy regex stopped matching and backtracked for
+    # minutes per card while holding the GIL, so nova2's --timeout never fired
+    # and every torrent search hung.
+    def swarm_card(self):
+        page = html.unescape(BITSEARCH_CARD)
+        for field, count in (('seeders', '1050'), ('leechers', '372')):
+            page = page.replace(f'<span class="font-medium">{count}</span>',
+                                f'<span class="font-medium"><span data-swarm-id="616c" data-swarm-field="{field}">{count}</span></span>')
+        return page
+
+    def test_bitsearch_reads_nested_swarm_spans(self):
+        rows, _ = self.run_engine('bitsearch', [self.swarm_card()], 'dune')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]['seeds'], rows[0]['leech']), ('1050', '372'))
+        rows, _ = self.run_engine('solidtorrents', [self.swarm_card()], 'dune')
+        self.assertEqual((rows[0]['seeds'], rows[0]['leech']), (1050, 372))
+
+    def test_bitsearch_unparseable_cards_return_quickly(self):
+        # Cards missing fields must be skipped in linear time, not backtracked.
+        card = self.swarm_card().replace('href="magnet:', 'href="nomagnet:')
+        page = ' '.join((card * 20).split())
+        module = importlib.import_module('engines.bitsearch')
+        parser = module.bitsearch.HTMLParser('https://bitsearch.eu/')
+        started = time.monotonic()
+        self.assertEqual(parser._HTMLParser__findTorrents(page), [])
+        self.assertLess(time.monotonic() - started, 1.0)
 
     # ── solidtorrents: domain 301s to BitSearch; old parser matched nothing ──
     def test_solidtorrents_reads_bitsearch_markup_sorted_by_seeders(self):

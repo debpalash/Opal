@@ -13,6 +13,7 @@ from .harness import *  # noqa: F401,F403
 import os  # noqa: F401
 import subprocess  # noqa: F401
 import sys  # noqa: F401
+import time  # noqa: F401
 
 ENGINES_DIR = os.path.join(PROJECT_DIR, "engines", "engines")
 VERSIONS_TXT = os.path.join(ENGINES_DIR, "versions.txt")
@@ -1104,3 +1105,49 @@ def test_torrent_restart_intent_contract():
     if "tr=" in _between(pure, "pub fn canonicalIdentity", 'test "identity strips'):
         return "fail", "canonical durable identity appears to retain tracker parameters"
     return "pass", "restart rejoins canonical v1/v2 swarms without persisting private magnet fields"
+
+
+@test("Engine parser repairs: captured-page fixtures parse in bounded time", "Torrents")
+def test_engine_parser_repairs():
+    # REGRESSION: bitsearch's single 8-group lazy regex stopped matching after a
+    # swarm-stats markup change and backtracked for minutes while holding the
+    # GIL, so nova2's --timeout deadline never fired and torrent search hung.
+    # These unittest modules existed but nothing ran them.
+    mods = ["tests.test_torrent_engine_repairs_a", "tests.test_torrent_engine_repairs_b"]
+    try:
+        r = subprocess.run([sys.executable, "-m", "unittest", *mods], cwd=PROJECT_DIR,
+                           capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return "fail", "engine parser fixtures did not finish in 60s (regex backtracking?)"
+    if r.returncode:
+        return "fail", r.stderr[-1500:]
+    ran = next((l for l in r.stderr.splitlines() if l.startswith("Ran ")), "ran")
+    return "pass", f"{ran.lower()} offline (bitsearch nested swarm spans, unparseable cards return fast)"
+
+
+@test("nova2 deadline holds even when an engine holds the GIL", "Torrents")
+def test_nova2_deadline_gil_backstop():
+    # REGRESSION: wait(timeout=deadline) needs the GIL to wake; an engine stuck in
+    # one long C call (bitsearch's backtracking regex) held it, so the deadline
+    # never fired and nova2 ran for minutes. A GIL-free faulthandler watchdog now
+    # ends the process at deadline + DEADLINE_GRACE_S.
+    nova = _src("engines/nova2.py")
+    if "faulthandler.dump_traceback_later(deadline + DEADLINE_GRACE_S, exit=True)" not in nova \
+            or "faulthandler.cancel_dump_traceback_later()" not in nova:
+        return "fail", "run_parallel lacks the armed/disarmed faulthandler backstop"
+    probe = (
+        "import sys, re\n"
+        "sys.path.insert(0, 'engines')\n"
+        "import nova2\n"
+        "nova2.run_parallel(range(1), 1, 1.0, lambda _: re.search(r'(a+)+$', 'a' * 40 + 'b'))\n"
+    )
+    started = time.monotonic()
+    try:
+        r = subprocess.run([sys.executable, "-I", "-c", probe], cwd=PROJECT_DIR,
+                           capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return "fail", "a GIL-holding engine kept nova2 alive past 30s with a 1s deadline"
+    secs = time.monotonic() - started
+    if secs > 10 or "Timeout" not in r.stderr:
+        return "fail", f"watchdog did not end the stuck search (rc={r.returncode}, {secs:.1f}s)"
+    return "pass", f"1s deadline + GIL-holding engine ended in {secs:.1f}s with stacks on stderr"

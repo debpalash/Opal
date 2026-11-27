@@ -1,4 +1,4 @@
-# VERSION: 2.9
+# VERSION: 2.10
 # AUTHORS: nKlido
 
 # LICENSING INFORMATION
@@ -42,8 +42,8 @@ class solidtorrents:
     _MAGNET = re.compile(r'href="(magnet:\?[^"]+)"')
     _SIZE = re.compile(r'fa-download"></i>\s*<span>\s*([0-9.,]+\s*[KMGT]?B)\s*</span>')
     _DATE = re.compile(r'fa-calendar"></i>\s*<span>\s*(\d{1,2})/(\d{1,2})/(\d{4})\s*</span>')
-    _SEEDS = re.compile(r'fa-arrow-up"></i>\s*<span[^>]*>\s*([0-9,]+)')
-    _LEECH = re.compile(r'fa-arrow-down"></i>\s*<span[^>]*>\s*([0-9,]+)')
+    _SEEDS = re.compile(r'fa-arrow-up"></i>\s*(?:<span[^>]*>\s*){1,2}([0-9,]+)')
+    _LEECH = re.compile(r'fa-arrow-down"></i>\s*(?:<span[^>]*>\s*){1,2}([0-9,]+)')
 
     def parse(self, page: str) -> int:
         """Print one row per result card; returns the number printed."""
