@@ -2463,7 +2463,7 @@ fn resolveApibayNative(query: []const u8) SourceStatus {
     defer alloc.free(body_buf);
     @import("../core/rate_limit.zig").acquire("apibay", 1.0);
     const body = @import("../core/http.zig").fetch(url, body_buf, .{
-        .timeout_secs = 10,
+        .timeout_secs = ab.FETCH_TIMEOUT_SECS,
         .user_agent = @import("../core/app_meta.zig").user_agent,
     }) orelse return .transport_failed;
     var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return .parse_failed;

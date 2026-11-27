@@ -96,7 +96,13 @@ def main():
                 print(f"{row['status']:4} {row['name']:16} {row['detail']}", flush=True)
             if 'OPAL_UITEST_SHOT ' in line:
                 name = line.split('OPAL_UITEST_SHOT ', 1)[1].split()[0]
-                subprocess.run(['xcrun', 'simctl', 'io', udid, 'screenshot', str(out / f'{name}.png')], capture_output=True, timeout=20)
+                # A screenshot is evidence, not a step result: a simulator busy
+                # enough to stall `simctl io` (another tool driving it, first-boot
+                # migration) used to raise here and abort the whole walk.
+                try:
+                    subprocess.run(['xcrun', 'simctl', 'io', udid, 'screenshot', str(out / f'{name}.png')], capture_output=True, timeout=20)
+                except subprocess.TimeoutExpired:
+                    print(f'warning: screenshot {name} timed out', file=sys.stderr, flush=True)
             if 'OPAL_UITEST_DONE' in line:
                 done = True
                 break
@@ -109,9 +115,10 @@ def main():
             print('warning: simctl terminate timed out', file=sys.stderr)
         if process.poll() is None:
             process.terminate()
-    (out / 'console.log').write_text(''.join(transcript))
+        # Written even when the loop raised, so a crash keeps its evidence.
+        (out / 'console.log').write_text(''.join(transcript))
+        (out / 'report.json').write_text(json.dumps({'complete': done, 'results': results}, indent=2))
     failed = [r for r in results if r['status'] == 'fail']
-    (out / 'report.json').write_text(json.dumps({'complete': done, 'results': results}, indent=2))
     print(f"{len(results) - len(failed)} pass, {len(failed)} fail, complete={done}; screenshots in {out}")
     return 0 if done and not failed else 1
 

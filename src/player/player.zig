@@ -3317,6 +3317,10 @@ pub fn updateTorrentBackgroundTasks() void {
                 p.cached_sub_text_len = 0;
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_FILE_LOADED) {
                 const provider_started = p.provider_start_intent.consume();
+                // Don't inherit the previous file's EOF/keep-open pause. A
+                // restored session re-applies its saved pause in tryResumePosition.
+                if (playback_load.unpauseOnFileLoaded(p.restore_session_position != null))
+                    _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "pause", "no");
                 p.youtube_default_retry_pending = false;
                 p.youtube_quality_fallback_pending = false;
                 p.load_error_len = 0;
