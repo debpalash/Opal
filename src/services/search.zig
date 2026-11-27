@@ -2850,9 +2850,12 @@ fn attachTorrentToPlayerOwned(tid: c_int, source: []const u8, metadata: state.Pe
         // Reveal the player so the user sees the stream start.
         state.gotoPlayer();
 
-        // Save magnet to download history for library persistence
+        // Save to download history for library persistence. The stored link
+        // keeps only the info-hash, so name the row by its release title.
         const hist = @import("history.zig");
-        hist.addDownloadHistory(source[0..@min(source.len, 64)], source);
+        var title_buf: [256]u8 = undefined;
+        const hist_title = @import("release_name_pure.zig").historyTitle(source, metadata.title[0..metadata.title_len], &title_buf);
+        hist.addDownloadHistory(if (hist_title.len > 0) hist_title else source[0..@min(source.len, 64)], source);
     } else {
         logs.pushLog("error", "search", "Failed to add torrent - invalid magnet or already added", true);
         state.showToast("Couldn't add torrent (invalid or duplicate magnet)");

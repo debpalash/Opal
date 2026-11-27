@@ -107,6 +107,43 @@ fn startsWithIgnoreCase(s: []const u8, prefix: []const u8) bool {
     return s.len >= prefix.len and std.ascii.eqlIgnoreCase(s[0..prefix.len], prefix);
 }
 
+/// Name stored for a download-history row. The persisted link keeps only a
+/// magnet's info-hash (watch_history_pure.safeMagnetTarget), so the title has
+/// to come from here: the magnet's `dn=` release name (it matches the files on
+/// disk, so the row merges with them), else `title_hint`, else "". A `:` would
+/// make persistedTarget read "Dune: Part Two" as a URI scheme and keep only
+/// "Dune:", so each becomes " -".
+///
+/// Regression: the history row used to be `source[0..64]`, which for a magnet
+/// is "magnet:?xt=urn:btih:<hash>" with `dn=` always cut off, so every torrent
+/// played from search was listed in Downloads by a bare hash.
+pub fn historyTitle(source: []const u8, title_hint: []const u8, buf: []u8) []const u8 {
+    var dn_buf: [256]u8 = undefined;
+    const dn = if (startsWithIgnoreCase(std.mem.trim(u8, source, " "), "magnet:")) nameFromSource(source, &dn_buf) else "";
+    const raw = std.mem.trim(u8, if (dn.len > 0) dn else title_hint, " ");
+    var n: usize = 0;
+    for (raw) |ch| {
+        const piece: []const u8 = if (ch == ':') " -" else &.{ch};
+        if (n + piece.len > buf.len) break;
+        @memcpy(buf[n .. n + piece.len], piece);
+        n += piece.len;
+    }
+    return buf[0..n];
+}
+
+test "historyTitle: a magnet's dn names the history row, never its hash" {
+    var buf: [256]u8 = undefined;
+    const magnet = "magnet:?xt=urn:btih:0900BD08DAA7058DE4069F521A318F49DE358F55&dn=Stranger.Things.S05E01.1080p.WEB.mkv&tr=udp%3A%2F%2Ft";
+    try std.testing.expectEqualStrings("Stranger.Things.S05E01.1080p.WEB", historyTitle(magnet, "Stranger Things", &buf));
+    // No dn: the caller's title, else nothing (the caller keeps its fallback).
+    try std.testing.expectEqualStrings("Stranger Things", historyTitle("magnet:?xt=urn:btih:0900BD08DAA7058DE4069F521A318F49DE358F55", "Stranger Things", &buf));
+    try std.testing.expectEqualStrings("", historyTitle("magnet:?xt=urn:btih:0900BD08DAA7058DE4069F521A318F49DE358F55", "", &buf));
+    // A colon would be parsed as a URI scheme downstream and truncate the title.
+    try std.testing.expectEqualStrings("Dune - Part Two", historyTitle("magnet:?xt=urn:btih:AB&dn=Dune%3A+Part+Two", "", &buf));
+    // Non-magnet sources only use the hint.
+    try std.testing.expectEqualStrings("Movie", historyTitle("https://x.test/a.torrent", "Movie", &buf));
+}
+
 /// The display-relevant name inside `raw`: a magnet's `dn=`, a URL's last path
 /// segment, or a path's basename — percent-decoded, extension stripped. A
 /// magnet without `dn=` yields "" (an info-hash names nothing).
