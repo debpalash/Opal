@@ -12,16 +12,16 @@ const std = @import("std");
 
 /// Whether to ask SDL for its OpenGL renderer so the GPU path can attach.
 /// `OPAL_VIDEO_RENDER` overrides: `gpu`/`1` forces it, `sw`/`software`/`0`
-/// keeps the software path. Default: on for macOS (verified) and Linux (SDL
-/// already picks OpenGL there); off for Windows, where it would move the whole
-/// UI from Direct3D to OpenGL and has not been verified on hardware.
+/// keeps the software path. macOS defaults to GPU rendering. Linux defaults
+/// to software after a crash in Mesa during mpv OpenGL rendering. Windows
+/// defaults to software to preserve SDL’s Direct3D UI renderer.
 pub fn requested(os: std.Target.Os.Tag, env: ?[]const u8) bool {
     if (env) |raw| {
         const v = std.mem.trim(u8, raw, " \t\r\n");
         if (std.ascii.eqlIgnoreCase(v, "gpu") or std.mem.eql(u8, v, "1")) return true;
         if (std.ascii.eqlIgnoreCase(v, "sw") or std.ascii.eqlIgnoreCase(v, "software") or std.mem.eql(u8, v, "0")) return false;
     }
-    return os == .macos or os == .linux;
+    return os == .macos;
 }
 
 /// The GPU path renders into textures the SDL renderer owns, so it only works
@@ -56,15 +56,17 @@ pub const Slots = struct {
     }
 };
 
-test "GPU video is requested by default on macOS and Linux, overridable" {
+test "GPU video defaults to macOS and can be enabled on Linux and Windows" {
     try std.testing.expect(requested(.macos, null));
-    try std.testing.expect(requested(.linux, null));
+    try std.testing.expect(!requested(.linux, null));
+    try std.testing.expect(requested(.linux, "gpu"));
     try std.testing.expect(!requested(.windows, null));
     try std.testing.expect(requested(.windows, "gpu"));
     try std.testing.expect(!requested(.macos, "sw"));
     try std.testing.expect(!requested(.macos, " Software\n"));
     try std.testing.expect(!requested(.linux, "0"));
     try std.testing.expect(requested(.macos, "unknown"));
+    try std.testing.expect(!requested(.linux, "unknown"));
 }
 
 test "only SDL's desktop OpenGL renderer hosts the GPU path" {
